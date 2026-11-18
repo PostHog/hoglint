@@ -294,6 +294,12 @@ pub struct Link {
     /// What each module-level sequence of names holds (produce.rs `Sequences`). It outlives the
     /// fact rows: the `: items` cover reads it.
     pub sequences: Sequences,
+    /// (module, module it reads by a computed name) (produce.rs `computed_reads`): the `: items`
+    /// cover cannot tell which list such a read registers.
+    pub computed_reads: FxHashSet<(Sid, Sid)>,
+    /// The names bound to a value shaped like a list (produce.rs `lists`): an unread item of a
+    /// core one a registration point registers is a problem of the answer.
+    pub lists: FxHashSet<(Sid, Sid)>,
     /// The bases of the third-party classes the inherit edges reach (`outside_bases`), by class.
     pub outside_bases: FxHashMap<String, Vec<String>>,
     /// Each `[discovery] reference_names` entry with the definition it resolves to, or None when it
@@ -419,7 +425,11 @@ impl Link {
             hand_outs: FxHashMap::default(),
             dataclass_bases: FxHashMap::default(),
             sequences: FxHashMap::default(),
-            class_reads: FxHashSet::default(),
+            read_classes: FxHashSet::default(),
+            declared: FxHashMap::default(),
+            registrable: FxHashMap::default(),
+            computed_reads: FxHashSet::default(),
+            lists: FxHashSet::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
@@ -429,6 +439,8 @@ impl Link {
         let symbols = std::mem::take(&mut producers.symbols);
         let hand_outs = std::mem::take(&mut producers.hand_outs);
         let sequences = std::mem::take(&mut producers.sequences);
+        let computed_reads = std::mem::take(&mut producers.computed_reads);
+        let lists = std::mem::take(&mut producers.lists);
         let outside_bases = Self::outside_bases(&mut core, &edges, &settings.names.builtins);
         let reference_definitions = Self::reference_definitions(&mut core, &config.reference_names);
         edges.kind_names = KIND_NAMES.iter().map(|kind| core.it.intern(kind)).collect();
@@ -451,6 +463,8 @@ impl Link {
             symbols,
             hand_outs,
             sequences,
+            computed_reads,
+            lists,
             outside_bases,
             reference_definitions,
             first_party,

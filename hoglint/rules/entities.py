@@ -370,6 +370,15 @@ class CoveragePrimitive(EntityRule):
         reason = f"cannot read every item of {sequence!r}, so the modules that define them are unknown"
         self.incomplete(f"{module}|{sequence}", module, reason, IncompleteKind.NOT_MODELLED)
 
+    def unread_core_items(self, sequence: str) -> None:
+        """An item the link cannot read, of a list no group owns that a registration point
+        registers: it may hold any product's list, so it blocks every group and the answer."""
+        reason = (
+            f"cannot read every item of {sequence!r}, a list core registers, so the product lists it holds are unknown"
+        )
+        item = IncompleteItem(self.spec.id, f"unread|{sequence}", reason, kind=IncompleteKind.NOT_MODELLED)
+        self.run.incomplete.append(item)
+
     def unknown_selection(self, module: str | None, cover: CoverSpec) -> None:
         reason = f"cannot tell whether `{cover.text}` selects {module}"
         self.incomplete(f"{module}|{cover.text}", module, reason, IncompleteKind.UNKNOWN_LABEL)

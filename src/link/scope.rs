@@ -299,6 +299,24 @@ impl Core {
         })
     }
 
+    /// The import that binds `name` at module level at or before `line`, looked up as an import:
+    /// what a module-level assignment that rebinds the name reads of it (`W = W + [B]` after
+    /// `from x import W`). None when no import binds it there.
+    pub fn import_before(&mut self, scope: &Scope, name: Sid, line: u32) -> Option<Lookup> {
+        let rows = scope.local_bindings.get(&(-1, name))?;
+        let (_, binding) = rows.iter().rev().find(|(at, _)| *at <= line)?;
+        if rows.len() > 1 {
+            self.rec.read(Kind::Lines, scope.module, EMPTY);
+        }
+        let surface = self.binding_surface(*binding);
+        let hit = self.resolve_binding(scope.module, *binding);
+        Some(Lookup {
+            surface,
+            hit,
+            local: false,
+        })
+    }
+
     fn module_lookup(&mut self, scope: &mut Scope, name: Sid, line: u32) -> Option<Lookup> {
         if scope
             .local_bindings

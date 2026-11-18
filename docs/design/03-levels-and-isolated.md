@@ -94,15 +94,18 @@ A repo can drop its hand-kept input lists: `hoglint watched` derives each group'
 - **The item reading** (the architect's pick 1): a registration point that registers a list asks for the module that builds the list and the module that defines each item (`<edge selector>: items`).
   The module that builds the list is where the name core reads is bound, past every re-export (the architect, Nov 18): it decides what core registers, as the items' modules do.
   This lifts limit 4 of the level for derived sets.
-  The link reads what each first-party module-level name is bound to: a list, tuple or set literal, the keys and values of a dict literal, both sides of `+`, `|` and the other operations, `*x` items, `sorted`, `list`, `tuple` or `set` of one, `x.copy()`, both branches of a conditional expression, the items of what a comprehension loops over when its element is its own target (a filter only drops items), another name; `+=` at module level adds items.
-  A class attribute is read the same way where core reads it as `Class.ATTR` and the class body binds it.
+  The link reads what each first-party module-level name is bound to: a list, tuple or set literal, the keys and values of a dict literal, both sides of `+`, `|` and the other operations, `*x` items, `sorted`, `list`, `tuple` or `set` of one, `x.copy()`, `x.values()`, both branches of a conditional expression, the items of what a comprehension loops over when its element is its own target (a filter only drops items), another name, the element a same-length unpacking pairs with it.
+  At module level, `+=`, `x[key] = value` and the methods that change a value in place (`append`, `extend`, `insert`, `update`, `add`) add items; a later binding that reads the name itself (`W = W + [B]`) adds its items, and one that rebinds a name the module imports reads the import (`from .catalog import W` then `W = W + [B]`).
+  A class attribute is read the same way where core reads it as `Class.ATTR` (also `Outer.Inner.ATTR`) and the class body binds it, together with the class-body names it reads; read off an instance (`Class().ATTR`) it is unread.
   Each item name resolves where the module binds it; an item that is itself such a list adds its own items, and its module, which defines that item.
   A call item is its callee's and the list module's.
-  Of a library callee, `itertools.chain` holds the items of each argument, `functools.partial` the function it wraps, `dataclasses.replace` the items of the base and of the overrides; any other library call handed something that holds an item is unread, as the library may hand it on.
-  `getattr(module, "NAME")` with a literal identifier reads as `module.NAME`.
-  An item it cannot read (a subscript, an unresolved name, an attribute of a call), a second binding of the name, a binding in a block, a binding by unpacking, or any other expression is an incomplete item of the list's module, so the list's product cannot be isolated: a name the link cannot read is never a name with no items (Nov 18, the adversarial run on watched).
+  Of a library callee, `itertools.chain` holds the items of each argument, `functools.partial` the function it wraps, `dataclasses.replace` the items of the base and of the overrides; any other library call handed something that can be registered (a class, a function, or a name that holds one) is unread, as the library may hand it on; a constant is no such thing (`os.getenv("Q", DEFAULT)`, `timedelta(seconds=TIMEOUT_S)`, `"-".join([PREFIX, "q"])`).
+  `getattr(module, "NAME")` with a literal identifier reads as `module.NAME`, and `import_module("m").NAME` as `m.NAME`; `getattr(module, NAME)` with a computed name, `vars(module)` and a loaded module read by no attribute are unread.
+  An item it cannot read (a subscript, an unresolved name, an attribute of a call), a second binding of the name that does not read it, a binding in a block, `global name` in a function, an unpacking the link cannot pair, or any other expression is an incomplete item of the list's module, so the list's product cannot be isolated: a name the link cannot read is never a name with no items (Nov 18, the adversarial run on watched).
   A registered name that resolves to nothing inside a module of the graph (a name only the module's `__getattr__` serves) is that module's incomplete item.
+  Names bound to constants hold nothing, however often or wherever they are bound, so they are never unread.
   A registration point that registers a list the cover's selection leaves out (a core module's) carries the cover through to each list it holds, at any depth: `HOP_ALL = [*P_WORKFLOWS]` in a core module registers the items of `P_WORKFLOWS`.
+  An item of such a core list that the link cannot read may hide any product's list and no group owns it, so it is a problem of the whole answer: incomplete, every group blocked (the adversary's recheck, Nov 18).
   The table lives on the link next to the hand-outs and outlives the fact rows; it is no edge, so no table moves.
 - **The declaration reading** (the architect, Nov 18): what a registry's loader reads is registered like a list core imports by name (`<entity selector>: registered`, for the modules the selection keeps).
   In a registry's file the link reads the attribute the registry names (`[registries.<name>] attribute`) as a declaration: as a list's items, except that a call also holds what its arguments name, so the records a declaration builds hold their items (`TEMPORAL = TemporalRegistration(queues=(QueueBinding(workflows=WORKFLOWS),), schedules=(reconcile,))` registers the items of `WORKFLOWS` and `reconcile`).
@@ -125,12 +128,12 @@ A repo can drop its hand-kept input lists: `hoglint watched` derives each group'
 - `compare` lists, as advisory rows, the files a group watches at the base and no longer at the head, both under the head's policy, so a change that narrows a set by moving code shows.
 
 Its limits, in plain words:
-1. A list that code changes after its assignment (`WORKFLOWS.append(x)`) is read as assigned.
+1. A list that a function changes after its assignment (`def f(): WORKFLOWS.append(x)`) is read as assigned; one changed at module level is read with the change, and one changed in a module that imports it (`from x import W` then `W.append(B)`) is read as its own module binds it.
 2. A callable handed to a hook through a parameter or a local variable is not followed, so it is unknown; a wrapper that forwards its parameter to a hook is followed where its callers call it, when the wrapper is a declared hook too.
 3. The modules a registered item's module imports, a callback's own imports past one hop, and the helpers behind a watched file are not watched (the Nov 11 deferral; the owner let them leave selection, Nov 17).
 4. Nothing compares a derived set with an independent list: the same run makes the set and the level's verdict.
 5. A class attribute the class body does not bind (inherited, or set in a method) reads as the class, which defines no list.
-6. An item of a core list that the link cannot read is the core module's unknown, which no group owns; only the lists a core list holds carry the cover through to a product.
+6. An unknown in a core module that a declaration reaches is that module's, which no group owns; one in a core list a registration point registers is a problem of the answer (above).
 7. A worker the preset does not mark as a registration point, and a management command core runs by name (`call_command`), ask for nothing: no cover reads them.
 
 **The linter carries the skip's safety** (owner, Nov 4).

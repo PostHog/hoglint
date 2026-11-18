@@ -111,7 +111,8 @@ impl Cover {
 /// last) and the module that needs it, sorted by path; and in order, what it cannot tell, (what,
 /// cover, source module, surface): "not-run" for a cover whose rule did not run, "unplaced" for
 /// an edge it cannot place, "unknown-selection" for a module an entity cover cannot tell it keeps,
-/// "unread-items" for a sequence with an item it cannot read (the surface is the sequence).
+/// "unread-items" for a sequence with an item it cannot read (the surface is the sequence),
+/// "unread-core-items" for one in a list no group owns that a registration point registers.
 #[derive(Default)]
 pub struct Required {
     pub paths: Vec<(String, u32, Option<String>)>,
@@ -214,10 +215,9 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                             // Only a source the selection keeps registers what a list holds.
                             let env = Env::new(cx, Some(id), src, *dst);
                             if *items
-                                && let Symbol::Inside(module, name) = dst.symbol
+                                && let Registered::List(list) = registered(cx, id, &src, dst)
                                 && parts_truth(rest.src(), &env) == Truth::True
                             {
-                                let list = read_list(cx, id, (module, name));
                                 let mut through = Through {
                                     cx,
                                     rest,
@@ -237,18 +237,15 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                             continue;
                         }
                         if *items {
-                            match dst.symbol {
-                                Symbol::Inside(module, name) => {
-                                    let list = read_list(cx, id, (module, name));
+                            match registered(cx, id, &src, dst) {
+                                Registered::List(list) => {
                                     sequence_files(cx, list, at, &mut found, &mut out);
                                 }
-                                Symbol::Name(surface) if dst.module.is_some() => {
-                                    let module =
-                                        dst.module.map(|module| cx.text(module).to_string());
-                                    let named = cx.text(surface).to_string();
-                                    out.incomplete.push(("unread-items", at, module, named));
+                                Registered::Unread(module, named) => {
+                                    out.incomplete
+                                        .push(("unread-items", at, Some(module), named));
                                 }
-                                _ => {}
+                                Registered::Nothing => {}
                             }
                             continue;
                         }
@@ -373,18 +370,112 @@ fn registered_attribute(cx: Cx, place: u32) -> Option<Sid> {
     cx.link.core.it.get(attribute)
 }
 
+/// What a registration point registers at one destination of an edge (`registered`).
+enum Registered {
+    /// The list the link holds for (module, key), or a name that is no list.
+    List((Sid, Sid)),
+    /// Something the link cannot read, in this module, named so.
+    Unread(String, String),
+    /// Nothing an item cover reads: a module the code names no attribute of.
+    Nothing,
+}
+
+/// What edge `id` registers at destination `dst`:
+/// - a name: the list the link holds for it, or for the class attribute the edge's chain reads
+///   next (`Class.ATTR`, `Outer.Inner.ATTR`); one read off an instance (`Class().ATTR`) is unread,
+///   as what the instance holds can differ;
+/// - a name the link cannot resolve inside a module of the graph (only a module `__getattr__`
+///   serves it, or the code reads it by a computed name, `getattr(module, NAME)`): unread;
+/// - a whole module the source reads by a computed name (`getattr(module, NAME)`, `vars(module)`):
+///   unread;
+/// - a whole module a loader call returns (`import_module("m").ATTR`, the module's path as the
+///   call's first argument): the attribute read next, else, with no attribute, unread.
+fn registered(cx: Cx, id: u32, src: &Endpoint, dst: &Endpoint) -> Registered {
+    match dst.symbol {
+        Symbol::Inside(module, name) => read_list(cx, id, (module, name)),
+        Symbol::Name(surface) if dst.external.is_none() => match dst.module {
+            Some(module) => {
+                Registered::Unread(cx.text(module).to_string(), cx.text(surface).to_string())
+            }
+            None => Registered::Nothing,
+        },
+        Symbol::None => match (src.module, dst.module) {
+            (Some(reader), Some(module)) if cx.link.computed_reads.contains(&(reader, module)) => {
+                let text = cx.text(module).to_string();
+                Registered::Unread(text.clone(), format!("{text}.?"))
+            }
+            (_, Some(module)) => loaded_list(cx, id, module),
+            _ => Registered::Nothing,
+        },
+        _ => Registered::Nothing,
+    }
+}
+
 /// The list edge `id` reads at its origin `name`: the class attribute its chain reads next
-/// (`Class.ATTR`) when the link holds one, else the name.
-fn read_list(cx: Cx, id: u32, name: (Sid, Sid)) -> (Sid, Sid) {
+/// (`Class.ATTR`; nested, `Outer.Inner.ATTR`) when the link holds one, else the name. Read off an
+/// instance (`Class().ATTR`), such an attribute is unread.
+fn read_list(cx: Cx, id: u32, name: (Sid, Sid)) -> Registered {
     let chain = cx.attr(id, cx.link.core.it.get("chain"));
-    let Some(rest) = chain.strip_prefix('.') else {
-        return name;
+    let (instance, path) = match chain.strip_prefix("()") {
+        Some(path) => (true, path),
+        None => (false, chain),
     };
-    let attribute = rest.split(['.', '(', '[']).next().unwrap_or_default();
-    let key = format!("{}.{attribute}", cx.text(name.1));
-    match cx.link.core.it.get(&key) {
-        Some(sid) if cx.link.sequences.contains_key(&(name.0, sid)) => (name.0, sid),
-        _ => name,
+    let Some(rest) = path.strip_prefix('.') else {
+        return Registered::List(name);
+    };
+    let mut key = cx.text(name.1).to_string();
+    let mut found = None;
+    for part in rest.split('.') {
+        let plain = part.split(['(', '[']).next().unwrap_or_default();
+        if plain.is_empty() {
+            break;
+        }
+        key = format!("{key}.{plain}");
+        if let Some(sid) = cx.link.core.it.get(&key)
+            && cx.link.sequences.contains_key(&(name.0, sid))
+        {
+            found = Some(sid);
+        }
+        if plain.len() != part.len() {
+            break;
+        }
+    }
+    match found {
+        Some(_) if instance => {
+            let named = format!("{}.{}(){chain}", cx.text(name.0), cx.text(name.1));
+            Registered::Unread(cx.text(name.0).to_string(), named.replacen("()()", "()", 1))
+        }
+        Some(sid) => Registered::List((name.0, sid)),
+        None => Registered::List(name),
+    }
+}
+
+/// What a dotted-path edge to a whole module registers when the module's path is the first
+/// argument of a loader call (`up` starts `arg:0:...import_module`): the attribute the code reads
+/// off the call next (`import_module("m").WORKFLOWS`), else, read by no attribute, unread. Any
+/// other edge to a whole module registers nothing an item cover reads.
+fn loaded_list(cx: Cx, id: u32, module: Sid) -> Registered {
+    let up = cx.attr(id, cx.link.core.it.get("up"));
+    let mut steps = up.split(' ');
+    let loader = steps
+        .next()
+        .and_then(|step| step.strip_prefix("arg:0:"))
+        .is_some_and(|callee| callee.rsplit('.').next() == Some("import_module"));
+    if !loader {
+        return Registered::Nothing;
+    }
+    let attribute = steps
+        .next()
+        .and_then(|step| step.strip_prefix('.'))
+        .map(|step| step.split(['.', '(', '[']).next().unwrap_or_default())
+        .filter(|name| !name.is_empty());
+    let text = cx.text(module).to_string();
+    match attribute.and_then(|name| cx.link.core.it.get(name)) {
+        Some(name) => Registered::List((module, name)),
+        None => match attribute {
+            Some(name) => Registered::Unread(text.clone(), format!("{text}.{name}")),
+            None => Registered::Unread(text.clone(), text),
+        },
     }
 }
 
@@ -460,6 +551,16 @@ impl Through<'_, '_> {
             let Some(members) = cx.link.sequences.get(&list) else {
                 continue;
             };
+            // An item of a list (not a type alias or a constant) the link cannot read may be a
+            // product's list: no group owns the list, so the unknown is everyone's (a problem of
+            // the answer).
+            if members.contains(&None) && cx.link.lists.contains(&list) {
+                let module = cx.text(list.0).to_string();
+                let named = format!("{module}.{}", cx.text(list.1));
+                self.out
+                    .incomplete
+                    .push(("unread-core-items", self.at, Some(module), named));
+            }
             for member in members.iter().flatten() {
                 let inner = (member.m, member.s);
                 if !cx.link.sequences.contains_key(&inner) || cx.module_at(member.m).is_none() {
