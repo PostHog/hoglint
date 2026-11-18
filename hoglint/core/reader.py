@@ -114,6 +114,15 @@ class BuildReader:
             tracer.note(f"edges-spelled@{tracer.step_name}", key_of(kind, sorted(names)), found, edge_forms)
         return found
 
+    def edges_in(self, kind: str, scopes: Iterable[FileScope]) -> list[Edge]:
+        scopes = list(scopes)
+        found = self.queries.edges_in(kind, scopes)
+        tracer = self.tracer
+        if tracer.frames:
+            key = key_of(kind, sorted(scope.path for scope in scopes))
+            tracer.note(f"edges-in@{tracer.step_name}", key, found, edge_forms)
+        return found
+
     def batch_to(self, kind: str, targets: Collection[EntityId], columns: Sequence[str]) -> EdgeBatch:
         found = self.queries.batch_to(kind, targets, columns)
         tracer = self.tracer

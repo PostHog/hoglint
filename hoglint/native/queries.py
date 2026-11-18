@@ -179,6 +179,16 @@ class NativePackQueries:
     def edges_spelled(self, kind: str, names: Collection[str]) -> list[Edge]:
         return self.edges(self.link.ids_spelled(kind, sorted(names)))
 
+    def edges_in(self, kind: str, scopes: Iterable[FileScope]) -> list[Edge]:
+        """Edges of `kind` whose site is in one of the files, in graph order: the edges of each
+        file's module, kept when their path is the file's. A core edge's module is its file's."""
+        scopes = list(scopes)
+        ids: set[int] = set()
+        for module in {scope.module for scope in scopes}:
+            ids.update(array("I", self.link.ids_from(kind, module)))
+        paths = {scope.path for scope in scopes}
+        return [edge for edge in self.edges(array("I", sorted(ids)).tobytes()) if edge.site.path in paths]
+
     def batch_to(self, kind: str, targets: Collection[EntityId], columns: Sequence[str]) -> EdgeBatch:
         """The link's edges by target, core and pack, as columns with no Edge in between."""
         graph: Any = self.graph

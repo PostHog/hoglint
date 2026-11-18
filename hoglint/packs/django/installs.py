@@ -35,14 +35,15 @@ found only by origin makes an edge only when it resolves to a hook.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
-from hoglint.core.harness import FileItems, failure_edge
+from hoglint.core.harness import FileItems, each_item, failure_edge
 from hoglint.core.memo import ItemOutput, Output, PerFileRead
 from hoglint.core.sites import FileScope, Lookup
 from hoglint.core.symbols import Hit
-from hoglint.model import NO_LITERAL, UNKNOWN_ATTRS, Context, Edge, EntityId, Resolution, Site
+from hoglint.model import LANGUAGE_PYTHON, NO_LITERAL, UNKNOWN_ATTRS, Context, Edge, EntityId, Resolution, Site
 from hoglint.native.queries import Words, entities_named
 from hoglint.packs.django.signals import CONNECT, SignalValues, handing_hook
 from hoglint.plugins import PackReader, Refinement
@@ -82,6 +83,22 @@ class Handed:
     def text(self, module: str) -> str:
         names = {f"{module}.{qualname}" for qualname in self.local} | {str(entity) for entity in self.imported}
         return ",".join(sorted(names))
+
+    def add(self, other: Handed) -> None:
+        self.local |= other.local
+        self.imported |= other.imported
+
+    def data(self) -> list[Any] | None:
+        """The callables as an item's data; None when there are none."""
+        if not self.local and not self.imported:
+            return None
+        imported = sorted([entity.module, entity.symbol] for entity in self.imported)
+        return [sorted(self.local), imported]
+
+    @staticmethod
+    def restore(data: list[Any]) -> Handed:
+        local, imported = data
+        return Handed(set(local), {EntityId(LANGUAGE_PYTHON, module, symbol) for module, symbol in imported})
 
 
 def local_def(scope: FileScope, name: str, at_scope: int) -> str | None:
@@ -350,13 +367,16 @@ class InstallsProducer:
 
     def callback_imports(self, scope: FileScope, handed: Handed) -> list[Refinement]:
         """The file's import edges that run when a handed callable runs: each import in the body of
-        a callable the file defines, and the import that binds a callable the file imports."""
+        a callable the file defines, and the import that binds a callable the file imports. An
+        import counts when its surface ends in the last name of a module the file imports."""
         found: dict[int, str] = {}
         if handed.local:
             names = {module.rpartition(".")[2] for module in self.reader.imported_modules(scope)}
-            for edge in self.reader.edges_spelled(IMPORT, names) if names else ():
+            for edge in self.reader.edges_in(IMPORT, [scope]) if names else ():
+                if edge.surface.rpartition(".")[2] not in names:
+                    continue
                 inside = any(edge.site.scope.startswith(f"{qualname}.") for qualname in handed.local)
-                if edge.site.path == scope.path and (edge.site.scope in handed.local or inside):
+                if edge.site.scope in handed.local or inside:
                     found.setdefault(edge.handle, "body")
         if handed.imported:
             for edge in self.reader.edges_to(IMPORT, sorted(handed.imported, key=str)):
@@ -420,18 +440,27 @@ class InstallsProducer:
     def failure(scope: FileScope, error: Exception) -> Edge:
         return failure_edge("installs", INSTALLS_PRODUCER, scope.site(-1, 0, 0), scope.base_contexts, error)
 
-    def file_edges(self, scope: FileScope, rows: list[list], calls: list[list], aliases: Aliases) -> list[Output]:
+    def file_edges(
+        self, scope: FileScope, rows: list[list], calls: list[list], aliases: Aliases, handed: Handed
+    ) -> list[Edge]:
+        """The file's `installs` edges. The callables its hook calls hand on go into `handed` once
+        every edge is made, so a file that fails hands on none."""
         if aliases.names:
             rows = scope.record.get("callees", [])
-        handed = Handed()
-        edges = self.call_edges(scope, rows, calls, aliases, handed) + self.decorator_edges(scope, aliases, handed)
-        return [*edges, *self.callback_imports(scope, handed)]
+        found = Handed()
+        edges = self.call_edges(scope, rows, calls, aliases, found) + self.decorator_edges(scope, aliases, found)
+        handed.add(found)
+        return edges
 
 
 class InstallsItems(FileItems):
     """`django.installs` as one item per file. The connect helpers and the hooks bound or applied
     under another name are asked of the whole graph once. Each item reads its own file's part of
-    the aliases, and every helper: a new one can make an edge in any file."""
+    the aliases, and every helper: a new one can make an edge in any file.
+
+    An item keeps the callables its file hands on as its data. The step refines their import
+    edges after the items (`finish`): a refinement names an edge by its handle in this run, so no
+    item could store it."""
 
     ALIASES = "django.installs.aliases"
     HELPERS = "django.installs.helpers"
@@ -447,6 +476,7 @@ class InstallsItems(FileItems):
         self.helpers = PerFileRead(producer.reader.tracer, self.HELPERS, {}, list, helpers)
         self.callees: dict[str, list[list]] = {}
         self.calls: dict[str, list[list]] = {}
+        self.handed: dict[str, Handed] = {}
 
     @staticmethod
     def form(aliases: Aliases) -> object:
@@ -466,4 +496,18 @@ class InstallsItems(FileItems):
         aliases = self.aliases.read(scope.path)
         rows = self.callees.get(scope.path, [])
         calls = self.calls.get(scope.path, [])
-        return self.each_file(scope, lambda one: self.producer.file_edges(one, rows, calls, aliases))
+        handed = Handed()
+        made = self.each_file(scope, lambda one: self.producer.file_edges(one, rows, calls, aliases, handed))
+        return ItemOutput(made.outputs, handed.data())
+
+    def take(self, key: str, data: Any) -> None:
+        if data is not None:
+            self.handed[key] = Handed.restore(data)
+
+    def callback_imports(self, scope: FileScope) -> list[Refinement]:
+        return self.producer.callback_imports(scope, self.handed[scope.path])
+
+    def finish(self) -> Iterable[Output]:
+        """The import edges each file's handed callables run, in file order."""
+        scopes = [self.files[key] for key in self.handed]
+        return each_item(scopes, self.callback_imports, self.producer.failure)

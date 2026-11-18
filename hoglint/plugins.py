@@ -110,6 +110,10 @@ class PackReader(Protocol):
 
     def edges_spelled(self, kind: str, names: Collection[str]) -> list[Edge]: ...
 
+    def edges_in(self, kind: str, scopes: Iterable[FileScope]) -> list[Edge]:
+        """Edges of `kind` whose site is in one of the files, in graph order."""
+        ...
+
     def batch_to(self, kind: str, targets: Collection[EntityId], columns: Sequence[str]) -> EdgeBatch: ...
 
     def calls_named(
