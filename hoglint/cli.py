@@ -364,6 +364,8 @@ def finding_line(finding: Finding) -> str:
     return f"{finding.rule}  {' '.join(finding.identity)}\n    {finding.message}  {where(finding)}{owners}"
 
 
+# Who judges what compare's head check lets through because the base has it already.
+BASE_JUDGES = "`hoglint check` of the base reports them; the ledger catches up there."
 # What `--write-ledger` tells the reader of lines it does not add without the switch.
 RECORD_GROWTH_WAY_OUT = (
     "new debt needs a person: fix the findings, or stop and tell the person; a person who accepts "
@@ -1415,12 +1417,23 @@ class Commands:
         owners = ReadTimeOwners(head.config, scans.head.modules, head.files_root or head.root)
         today = self.runner.today or datetime.date.today()
         policy = Policy.of(head.config, CONFIG_FILE)
-        attributed = Attributed(report.labels, "the base")
+        inherited = self.base_inherited(scans, same_policy)
+        attributed = Attributed(report.labels, "the base", inherited, "at the base", BASE_JUDGES)
         head_view = dataclasses.replace(view, rerun=f"hoglint compare --base {ref}")
-        code = report.exit_code(head.result.failed(), bool(head.result.blocking_incomplete()))
+        head_report = CheckReport(scans.head, owners, today, policy, head_view, attributed=attributed)
+        code = report.exit_code(head_report.failed(), bool(head.result.blocking_incomplete()))
         sys.stdout.write(report.render_all() if view.all else report.render(code, head_view.rerun))
-        sys.stdout.write(CheckReport(scans.head, owners, today, policy, head_view, attributed=attributed).render())
+        sys.stdout.write(head_report.render())
         return code
+
+    def base_inherited(self, scans: Scans, same_policy: bool) -> Inherited | None:
+        """The head's new findings and ledger lines that the base has already, judged against the
+        base's own ledger: only when the base ran under this engine and the head's policy. A
+        change of either is judged against the head's ledger alone, as in the hook."""
+        base = scans.base
+        if base is None or not same_policy or base.envelope.engine != self.engine.id:
+            return None
+        return Inherited.of(Standing.of(scans.head), Standing.of(base))
 
     def unwatched(
         self, head: Run, head_tree: str, base_root: Path, base_tree: str, base_head: RunResult | None

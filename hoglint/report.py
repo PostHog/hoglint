@@ -56,7 +56,7 @@ ROWS_SHOWN = 5
 GROUPS_SHOWN = 10
 NOTES_SHOWN = 3
 PAGE = "What the hook checks and what to do: hoglint help hook."
-CARRIED = "Already {where} and not in step with the ledger: {parts}. CI judges them; the ledger catches up there."
+CARRIED = "Already {where} and not in step with the ledger: {parts}. {then}"
 SHRINK = "run `hoglint ledger shrink`, then stage {ledger}. It removes stale lines and never adds one."
 WRITE_MOVES = (
     "run `hoglint check --write-ledger`, then stage {ledger}. It records the new places and removes stale lines. "
@@ -113,12 +113,14 @@ class Attributed:
     """Incomplete items labelled against a baseline summary; `against` names the baseline.
     `inherited` names the new findings and ledger lines that HEAD has already, for a staged run
     judged against HEAD (see `Inherited`); None for a run judged against its ledger alone. `where`
-    names the commits they come from: HEAD, or the parents of a merge."""
+    names the commits they come from (HEAD, the parents of a merge, compare's base), and `then`
+    who judges them instead."""
 
     labels: Labels
     against: str
     inherited: Inherited | None = None
     where: str = "at HEAD"
+    then: str = "CI judges them; the ledger catches up there."
 
     @property
     def inherited_keys(self) -> frozenset[LineKey]:
@@ -294,17 +296,21 @@ class CheckReport:
 
     def exit_code(self) -> int:
         """`check` without `--changed`: 2 for a blocking incomplete result, 1 when the run failed."""
-        summary = self.summary
         if self.attributed is not None and self.attributed.blocking:
             return 2
-        if any(item.cause in BLOCKING_CAUSES for item in summary.incomplete):
+        if any(item.cause in BLOCKING_CAUSES for item in self.summary.incomplete):
             return 2
+        return 1 if self.failed() else 0
+
+    def failed(self) -> bool:
+        """A new finding, a ledger out of step with the scan, an exception that fails, a failed
+        claim or ledger growth, without what the baseline has already."""
+        summary = self.summary
         equality = self.equality()
         unequal = equality is not None and not equality.equal
         exceptions_failed = summary.exceptions.stale or summary.exceptions.problems
         claims_failed = summary.failed_claims() or summary.claim_errors
-        failed = self.violations() or unequal or exceptions_failed or claims_failed or self.grown
-        return 1 if failed else 0
+        return bool(self.violations() or unequal or exceptions_failed or claims_failed or self.grown)
 
     # ── words ──
 
@@ -509,8 +515,9 @@ class CheckReport:
         lines = len(self.inherited.lines) if self.inherited is not None else 0
         parts = [plural(findings, "finding")] if findings else []
         parts += [plural(lines, "ledger line")] if lines else []
-        where = self.attributed.where if self.attributed is not None else "at HEAD"
-        return [CARRIED.format(where=where, parts=", ".join(parts))] if parts else []
+        if self.attributed is None or not parts:
+            return []
+        return [CARRIED.format(where=self.attributed.where, parts=", ".join(parts), then=self.attributed.then)]
 
     # ── views ──
 

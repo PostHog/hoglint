@@ -25,6 +25,7 @@ An adversarial review showed that relabels in `hoglint.toml` can launder policy 
     The hook (`check --index`) judges a commit, not HEAD (owner, Nov 18): a new finding that HEAD has as often, and a line that is out of step at HEAD at the same counts, do not block it; CI judges them.
     A commit that changes the policy is judged against the ledger alone.
     A commit that finishes a merge is judged against each parent whose policy it keeps, and what any of them has does not block it; unknowns are judged against every parent.
+    `compare` judges its head check against the base the same way, when the base ran under the head's engine and policy (owner, Nov 18); plain `check` stays strict against the ledger: it is master's drift alarm.
   - **Growth.**
     Per growth key, against the merge base.
     Growth from code fails.

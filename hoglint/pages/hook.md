@@ -76,7 +76,8 @@ It is slower than the next checks, and it says so in one line:
 ## Where the full check runs
 
 CI runs `hoglint compare --base <merge base>` as a required check.
-It does what the hook does, and also:
+It does what the hook does, against the base instead of HEAD: what the base has already does not fail the change, and `hoglint check` of the base reports it.
+It also:
 
 - It blocks new debt that the code adds against the merge base.
 - It lets new debt through when a complete exception in the change allows it. A complete exception has a reason, owners, a scope, a review date and a match. It lists that debt under "needs a person's review". The owners of the exceptions file review it.

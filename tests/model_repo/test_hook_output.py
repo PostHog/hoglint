@@ -6,7 +6,8 @@ use, and moved to another product, each with `check --write-ledger` and the hook
 Four commits sit on a HEAD that carries debt the ledger lacks: a finding or two stale lines, which
 the hook lets through and names, under a clean change, a new finding or a new stale line. Two
 commits finish a merge whose other side carries such debt and records a finding in the ledger, as
-is and with a new finding.
+is and with a new finding. Two changes go to compare against a base that carries such debt, as is
+and with a new finding.
 The 64-finding hook output stays under a harness's cap, and what a reader must see comes first.
 Rewrite the golden files with `HOGLINT_REFRESH_GENERATED=1` and read the diff."""
 
@@ -190,10 +191,15 @@ def third_finding(repo: Path) -> None:
 PAGE_LINE = "public-surface\tproducts.catalog.backend.logic.limits.PAGE_SIZE\tposthog.api.page_badge\timport\t1\n"
 
 
-def other_side(repo: Path) -> None:
-    """Debt the ledger lacks (a finding, two stale lines), and a finding the ledger records."""
+def debt(repo: Path) -> None:
+    """Debt the ledger lacks: a finding and two stale lines."""
     one_finding(repo)
     stale_ledger_line(repo)
+
+
+def other_side(repo: Path) -> None:
+    """Debt the ledger lacks, and a finding the ledger records."""
+    debt(repo)
     another_finding(repo)
     with (repo / "hoglint.ledger").open("a") as ledger:
         ledger.write(PAGE_LINE)
@@ -279,6 +285,8 @@ SCENARIOS: dict[str, Callable[[Path], None]] = {
     "head-finding-stale-line": stale_ledger_line,
     "merge-debt-clean": merge_only,
     "merge-debt-new-finding": third_finding,
+    "base-debt-clean": clean,
+    "base-debt-new-finding": another_finding,
 }
 # The scenarios whose HEAD commits a change first, with debt the ledger lacks, by that change.
 AT_HEAD: dict[str, Callable[[Path], None]] = {
@@ -292,8 +300,10 @@ MERGED: dict[str, Callable[[Path], None]] = {
     "merge-debt-clean": other_side,
     "merge-debt-new-finding": other_side,
 }
+# The scenarios whose compare base commits a change first, with debt the ledger lacks.
+AT_BASE: dict[str, Callable[[Path], None]] = {"base-debt-clean": debt, "base-debt-new-finding": debt}
 # The scenarios whose compare output is held too.
-COMPARED = ("sixty-findings", "exception-complete")
+COMPARED = ("sixty-findings", "exception-complete", *AT_BASE)
 # The scenarios that move a module: `check --write-ledger` without a person's switch, then the
 # hook again with the ledger it wrote staged.
 MOVES = ("move-in-product", "move-with-new-use", "move-across-products")
@@ -330,6 +340,11 @@ def outputs(base: Path) -> dict[str, str]:
                 AT_HEAD[name](repo)
                 git(repo, "add", "-A")
                 git(repo, "commit", "-qm", "debt at HEAD")
+            if name in AT_BASE:
+                AT_BASE[name](repo)
+                git(repo, "add", "-A")
+                git(repo, "commit", "-qm", "debt at the base")
+                git(repo, "branch", "-f", "base")
             if name in MERGED:
                 git(repo, "checkout", "-qb", "side")
                 MERGED[name](repo)
