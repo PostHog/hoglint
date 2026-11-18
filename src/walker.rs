@@ -7,7 +7,7 @@ use crate::facts::{
     Assign, Branch, DottedStr, Import, Ref, Site, Tag, TextKey, UseKey, WatchedCall, WatchedKey,
 };
 use crate::loops::{Sequences, literal_elements, rebinds};
-use crate::path::{Frame, climb, listed};
+use crate::path::{Frame, climb, computed_read, listed};
 use crate::source::LineIndex;
 use crate::strings::{is_dotted_path, is_identifier, is_symbolic, leading_attrs, tag_names};
 use crate::value::{
@@ -1027,11 +1027,17 @@ impl<'a, 'w> Walker<'a, 'w> {
             if !self.wants(Kind::Uses) {
                 return;
             }
+            // `getattr(alias, NAME)` and `vars(alias)` read an attribute no one can name: `.?`.
+            let attrs = if chain.is_empty() && computed_read(&self.path) {
+                ".?"
+            } else {
+                leading_attrs(&chain)
+            };
             let key = UseKey {
                 scope: at.scope,
                 header: at.header,
                 root: id.to_string(),
-                attrs: leading_attrs(&chain).to_string(),
+                attrs: attrs.to_string(),
             };
             count(&mut self.out.uses, key, l, c);
             return;
