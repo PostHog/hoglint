@@ -537,6 +537,8 @@ class NativeRuleContext(RuleContext):
                 rule.unread_items(module, surface, "it is bound more than once")
             elif what == "unread-rebound":
                 rule.unread_items(module, surface, "it is bound again by a form the reading cannot read")
+            elif what == "unread-lazy":
+                rule.unread_items(module, surface, "the module does not bind it, and its `__getattr__` may serve it")
             elif what == "unread-core-items":
                 rule.unread_core_items(surface)
             elif what == "computed-load":

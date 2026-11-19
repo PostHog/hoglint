@@ -25,6 +25,21 @@ use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
 
+/// The hooks a record's construction invokes with the value it stores (`bare_record`).
+const RECORD_HOOKS: [&str; 5] = [
+    "__setattr__",
+    "__getattribute__",
+    "__getattr__",
+    "__set_name__",
+    "__set__",
+];
+
+/// The library bases whose metaclass has no `__set__` (`plain_metaclass`).
+const PLAIN_BASES: [&str; 4] = ["builtins.object", "object", "abc.ABC", "typing.Generic"];
+
+/// How deep `plain_metaclass` follows first-party bases.
+const MAX_BASE_DEPTH: usize = 32;
+
 pub const KIND_NAMES: [&str; 10] = [
     "import",
     "reference",
@@ -1297,6 +1312,13 @@ pub struct Producers<'p> {
     /// The names a module binds by an import only and binds again by a form the reading cannot
     /// read (`rebound_imports`), by (module, name).
     pub rebound_imports: FxHashSet<(Sid, Sid)>,
+    /// The names stored into each module from any file and scope (`stores`: `m.name = v`,
+    /// `setattr(m, "name", v)`, `m.__dict__["name"] = v`), by module; `*` for a computed name.
+    /// Each is a binding of that name in the module.
+    pub foreign: FxHashMap<Sid, FxHashSet<Sid>>,
+    /// The attributes stored on each class the graph defines, from any file and scope
+    /// (`stores`), by class; `*` for a computed name.
+    pub class_stores: FxHashMap<Ent, FxHashSet<Sid>>,
 }
 
 /// What each module-level sequence of names holds, by (module, name): per item, the entity its
@@ -1357,6 +1379,7 @@ impl Producers<'_> {
         self.each(Self::imports);
         self.each(Self::references);
         self.read_classes();
+        self.each(Self::stores);
         self.each(Self::sequences);
         let read = std::mem::take(&mut self.declared);
         let attributes = std::mem::take(&mut self.attributes);
@@ -1702,6 +1725,7 @@ impl Producers<'_> {
             }
         }
         let links = self.escape_touches(owner, record, &mut out);
+        self.foreign_rebinds(owner, &mut out);
         self.import_rebinds(owner, record, &mut out);
         self.loader_namespace(owner, record, &mut out);
         self.aliases(&mut out, links);
@@ -1745,6 +1769,24 @@ impl Producers<'_> {
             let scope = escape.scope;
             let (keys, touch): (Vec<Sid>, Touch) = if text == "*" {
                 (out.keys().copied().collect(), Touch::Other)
+            } else if text.starts_with('@') {
+                // A store into a module or a class (`stores`), read before any file.
+                continue;
+            } else if let Some((name, relied)) = text.split_once('?') {
+                // A read that relied on these names' bindings: a binding of one from another
+                // file or through a module object makes it an escape.
+                let module = self.scopes[owner].module;
+                let stored = self.foreign.get(&module);
+                let rebound = relied.split(',').any(|dep| {
+                    stored.is_some_and(|names| {
+                        (names.iter())
+                            .any(|n| matches!(self.core.it.s(*n), "*") || self.core.it.s(*n) == dep)
+                    })
+                });
+                if !rebound {
+                    continue;
+                }
+                (self.escape_keys(owner, scope, name, out), Touch::Escaped)
             } else if let Some(name) = text.strip_prefix('=') {
                 for key in self.escape_keys(owner, scope, name, out) {
                     if let Some(entry) = out.get_mut(&key) {
@@ -1897,48 +1939,212 @@ impl Producers<'_> {
     }
 
     /// T3's class: bare, so building a record runs no code but its constructor's body (limit 1):
-    /// no base, no class keyword (no metaclass), and each decorator `dataclasses.dataclass` (with
-    /// any arguments) or a first-party function (a function body, limit 1). A `__new__` it
-    /// defines is a constructor body too. Anything else escapes.
+    /// no base, no class keyword (no metaclass), each decorator `dataclasses.dataclass` (with any
+    /// arguments), no hook the construction invokes with the value (`__setattr__`,
+    /// `__getattribute__`, `__getattr__`, `__set_name__`, defined or assigned in the body, or a
+    /// default whose class has `__set__`: each default must be `inert_default`), and no store
+    /// on the class from any file (`class_stores`). A `__new__` it defines is a constructor body
+    /// too. Anything else escapes.
     fn bare_record(&mut self, class: Ent) -> bool {
+        let Some((owner, idx)) = self.def_of(class.m, class.s, HitKind::Class) else {
+            return false;
+        };
+        if self.class_stores.contains_key(&class) {
+            return false;
+        }
+        let facts = self.core.facts.clone();
+        let file = self.scopes[owner].file as usize;
+        let record = &facts.files[file];
+        let node = &record.defs[idx as usize];
+        if !node.bases.is_empty() || node.keywords {
+            return false;
+        }
+        let dataclass = node.dec.iter().all(|decorator| {
+            let callee = match decorator {
+                V::Call(callee, ..) => &**callee,
+                decorator => decorator,
+            };
+            let names = self.named(owner, callee, node.s, node.l);
+            names.is_some_and(|(surface, target)| {
+                surface == "dataclasses.dataclass" || target == "dataclasses.dataclass"
+            })
+        });
+        if !dataclass {
+            return false;
+        }
+        let it = &self.core.it;
+        let hook = |name: Sid| RECORD_HOOKS.contains(&it.s(name));
+        let defines_hook = (record.defs.iter()).any(|def| def.s == idx as i32 && hook(def.n));
+        let assigns_hook = (record.assigns.iter())
+            .filter(|row| row.s == idx as i32)
+            .any(|row| (row.targets.iter()).any(|t| matches!(t, V::Chain(n) if hook(*n))));
+        if defines_hook || assigns_hook {
+            return false;
+        }
+        let mut text = AssignText::new(facts.clone(), file);
+        let defaults: Vec<usize> = (record.assigns.iter().enumerate())
+            .filter(|(_, row)| row.s == idx as i32 && row.value.is_some())
+            .map(|(at, _)| at)
+            .collect();
+        defaults.into_iter().all(|at| {
+            let row = &record.assigns[at];
+            let value = row.value.as_ref().expect("a default");
+            self.inert_default(owner, value, row.s, row.l, Some((&mut text, at)))
+        })
+    }
+
+    /// The surface text a value names where `owner` reads it, and the text of what it resolves
+    /// to (empty when nothing).
+    fn named(&mut self, owner: usize, value: &V, at: i32, line: u32) -> Option<(String, String)> {
+        let core = &mut *self.core;
+        let found = core.value_lookup(
+            &self.settings.names,
+            &mut self.scopes[owner],
+            value,
+            at,
+            line,
+        )?;
+        let resolved = core.classify_lookup(found);
+        let target = resolved.target.map(|target| core.ent_sid(target));
+        let surface = core.it.s(found.surface).to_string();
+        let target = target.map(|t| core.it.s(t).to_string()).unwrap_or_default();
+        Some((surface, target))
+    }
+
+    /// What a value names where `owner` reads it, when it hits a definition: the kind and where.
+    fn named_hit(&mut self, owner: usize, value: &V, at: i32, line: u32) -> Option<(HitKind, Ent)> {
+        let core = &mut *self.core;
+        let found = core.value_lookup(
+            &self.settings.names,
+            &mut self.scopes[owner],
+            value,
+            at,
+            line,
+        )?;
+        let hit = found.hit?;
+        Some((core.kind(hit), core.origin(hit)))
+    }
+
+    /// Whether a class-body default of a record class is no data descriptor, so the generated
+    /// `__init__` stores the value with no first-party code: a literal, a display, a function,
+    /// a class whose metaclass is `type` or `abc.ABCMeta` (`plain_metaclass`), or
+    /// `dataclasses.field(...)` whose `default=` is one of these (read from the record's text,
+    /// `text` and the row).
+    fn inert_default(
+        &mut self,
+        owner: usize,
+        value: &V,
+        at: i32,
+        line: u32,
+        text: Option<(&mut AssignText, usize)>,
+    ) -> bool {
+        match value {
+            V::Str(..)
+            | V::Scalar
+            | V::Null
+            | V::Tuple(_)
+            | V::List(_)
+            | V::Set(_)
+            | V::Dict(_) => true,
+            V::Opaque(what) => matches!(
+                self.core.it.s(*what),
+                "..." | "longstr" | "badstr" | "JoinedStr"
+            ),
+            V::Chain(_) => match self.named_hit(owner, value, at, line) {
+                Some((HitKind::Def, _)) => true,
+                Some((HitKind::Class, class)) if self.defined_class(class) => {
+                    self.plain_metaclass(class, 0)
+                }
+                // A builtin (`object`, `int`, `len`) is a class or a function: no `__set__`.
+                _ => self
+                    .named(owner, value, at, line)
+                    .is_some_and(|(surface, target)| {
+                        surface.starts_with("builtins.") || target.starts_with("builtins.")
+                    }),
+            },
+            V::Call(callee, ..) => {
+                let field = self
+                    .named(owner, callee, at, line)
+                    .is_some_and(|(surface, target)| {
+                        surface == "dataclasses.field" || target == "dataclasses.field"
+                    });
+                let Some((text, row)) = text.filter(|_| field) else {
+                    return false;
+                };
+                let Some(J::Object(call)) = text.value(row).cloned() else {
+                    return false;
+                };
+                if call
+                    .get("args")
+                    .and_then(J::as_array)
+                    .is_some_and(|a| !a.is_empty())
+                {
+                    return false;
+                }
+                let keywords = call
+                    .get("kw")
+                    .and_then(J::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                keywords.iter().all(|pair| {
+                    let Some([name, value]) = pair.as_array().map(Vec::as_slice) else {
+                        return false;
+                    };
+                    match name.as_str() {
+                        Some("default") => {
+                            let value = value_tree(&mut self.core.it, value);
+                            self.inert_default(owner, &value, at, line, None)
+                        }
+                        Some(_) => true,
+                        None => false,
+                    }
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the graph defines a class (its def is in an analyzed file).
+    fn defined_class(&mut self, class: Ent) -> bool {
+        self.def_of(class.m, class.s, HitKind::Class).is_some()
+    }
+
+    /// Whether a class's metaclass has no `__set__`: no class keyword on it or on any of its
+    /// first-party bases, and every other base `object`, `abc.ABC` or `typing.Generic`.
+    fn plain_metaclass(&mut self, class: Ent, depth: usize) -> bool {
+        if depth > MAX_BASE_DEPTH {
+            return false;
+        }
         let Some((owner, idx)) = self.def_of(class.m, class.s, HitKind::Class) else {
             return false;
         };
         let facts = self.core.facts.clone();
         let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
-        if !node.bases.is_empty() || node.keywords {
+        if node.keywords {
             return false;
         }
-        node.dec.iter().all(|decorator| {
-            let callee = match decorator {
-                V::Call(callee, ..) => &**callee,
-                decorator => decorator,
-            };
-            let core = &mut *self.core;
-            let Some(found) = core.value_lookup(
-                &self.settings.names,
-                &mut self.scopes[owner],
-                callee,
-                node.s,
-                node.l,
-            ) else {
-                return false;
-            };
-            let resolved = core.classify_lookup(found);
-            let target = resolved.target.map(|target| core.ent_sid(target));
-            let dataclass = core.it.s(found.surface) == "dataclasses.dataclass"
-                || target.is_some_and(|target| core.it.s(target) == "dataclasses.dataclass");
-            let function = resolved.res == Res::Resolved
-                && found.hit.is_some_and(|hit| core.kind(hit) == HitKind::Def);
-            dataclass || function
+        node.bases.iter().all(|base| {
+            if let Some((HitKind::Class, base_class)) = self.named_hit(owner, base, node.s, node.l)
+                && self
+                    .def_of(base_class.m, base_class.s, HitKind::Class)
+                    .is_some()
+            {
+                return self.plain_metaclass(base_class, depth + 1);
+            }
+            self.named(owner, base, node.s, node.l)
+                .is_some_and(|(surface, target)| {
+                    PLAIN_BASES.contains(&surface.as_str())
+                        || PLAIN_BASES.contains(&target.as_str())
+                })
         })
     }
 
     /// T4's record: one built by a bare record class (`bare_record`) whose body defines no
-    /// function but `__init__`, `__post_init__` and `__new__`, and binds no attribute to a call
-    /// but `field(...)`, so `dataclasses.replace` reads its fields with no first-party code (no
-    /// `__getattr__`, `__getattribute__`, property or descriptor). The record is the name a
-    /// binding row of `rows` binds to a call; one copied by `replace` itself is not judged again.
+    /// function but `__init__`, `__post_init__` and `__new__`, assigns no dunder, and binds no
+    /// attribute to a call but `field(...)`, so `dataclasses.replace` reads its fields with no
+    /// first-party code (no `__getattr__`, `__getattribute__`, property or descriptor); a store
+    /// on the class from any file makes it not bare. The record is the name a binding row of
+    /// `rows` binds to a call; one copied by `replace` itself is not judged again.
     fn plain_record(&mut self, owner: usize, rows: &[Touching]) -> bool {
         let mut binds = rows.iter().filter(|touching| touching.touch == Touch::Bind);
         let (Some(bind), None) = (binds.next(), binds.next()) else {
@@ -1970,14 +2176,108 @@ impl Producers<'_> {
                     "__init__" | "__post_init__" | "__new__"
                 )
             });
+        let it = &self.core.it;
+        let dunder = |name: Sid| {
+            let name = it.s(name);
+            name.len() > 4 && name.starts_with("__") && name.ends_with("__")
+        };
         let fields = (record.assigns.iter())
             .filter(|row| row.s == idx as i32)
-            .all(|row| match &row.value {
-                Some(V::Call(callee, ..)) => matches!(&**callee, V::Chain(name)
-                    if matches!(self.core.it.s(*name), "field" | "dataclasses.field")),
-                _ => true,
+            .all(|row| {
+                let plain_target = !(row.targets.iter())
+                    .any(|target| matches!(target, V::Chain(name) if dunder(*name)));
+                let plain_value = match &row.value {
+                    Some(V::Call(callee, ..)) => matches!(&**callee, V::Chain(name)
+                        if matches!(it.s(*name), "field" | "dataclasses.field")),
+                    _ => true,
+                };
+                plain_target && plain_value
             });
         methods && fields
+    }
+
+    /// The `@` rows of a file, the walker's stores into what a dotted name reaches, from any
+    /// scope: one into a module is a binding of that name in it, whichever file makes it
+    /// (`foreign`); one into a class the graph defines changes the class (`class_stores`). A
+    /// dotted name that resolves to neither (a local, an instance, a library) is no store the
+    /// reading reads.
+    fn stores(&mut self, owner: usize) {
+        let facts = self.core.facts.clone();
+        let record = &facts.files[self.scopes[owner].file as usize];
+        if !record.ok() {
+            return;
+        }
+        for escape in &record.escapes {
+            let text = self.core.it.s(escape.name);
+            let Some((base, attribute)) = text.strip_prefix('@').and_then(|t| t.rsplit_once('.'))
+            else {
+                continue;
+            };
+            let (base, attribute) = (base.to_string(), attribute.to_string());
+            let chain = self.core.it.intern(&base);
+            let attribute = self.core.it.intern(&attribute);
+            let core = &mut *self.core;
+            let names = &self.settings.names;
+            let (found, rest) = core.chain_lookup(
+                names,
+                &mut self.scopes[owner],
+                chain,
+                escape.scope,
+                escape.line,
+            );
+            let Some(hit) = found.hit.filter(|_| rest.is_empty()) else {
+                continue;
+            };
+            let origin = core.origin(hit);
+            match core.kind(hit) {
+                HitKind::Module => {
+                    self.foreign.entry(origin.m).or_default().insert(attribute);
+                }
+                HitKind::Class => {
+                    self.class_stores
+                        .entry(origin)
+                        .or_default()
+                        .insert(attribute);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// A name of this module some file stores into it (`foreign`), or an attribute of a class
+    /// it defines some file stores on the class (`class_stores`): bound again by a form the
+    /// reading does not read, `Other` (as `=name`).
+    fn foreign_rebinds(&mut self, owner: usize, out: &mut Touches) {
+        let module = self.scopes[owner].module;
+        let it = &self.core.it;
+        let any = |names: &FxHashSet<Sid>, name: &str| {
+            names
+                .iter()
+                .any(|n| matches!(it.s(*n), "*") || it.s(*n) == name)
+        };
+        for (key, (_, rows)) in out.iter_mut() {
+            let text = it.s(*key);
+            let stored = match text.rsplit_once('.') {
+                None => self
+                    .foreign
+                    .get(&module)
+                    .is_some_and(|names| any(names, text)),
+                Some((class, attribute)) => it.get(class).is_some_and(|class| {
+                    let class = Ent {
+                        m: module,
+                        s: class,
+                    };
+                    (self.class_stores.get(&class)).is_some_and(|names| any(names, attribute))
+                }),
+            };
+            if stored {
+                rows.push(Touching {
+                    at: usize::MAX,
+                    row: &REBOUND,
+                    touch: Touch::Other,
+                });
+            }
+        }
     }
 
     /// An import at module level after a name's first binding that may bind the name binds it
@@ -2325,7 +2625,16 @@ impl Producers<'_> {
         if let Some(attribute) = declared
             && !touches.contains_key(&attribute)
         {
-            self.imported_declaration(owner, module, attribute);
+            // A module `__getattr__` may serve the attribute the file does not bind (a lazy
+            // export): the declaration is unread, never empty.
+            let lazy = (record.defs.iter())
+                .any(|def| def.s == -1 && self.core.it.s(def.n) == "__getattr__");
+            if lazy {
+                self.sequences.insert((module, attribute), vec![None]);
+                self.unread_causes.insert((module, attribute), "lazy");
+            } else {
+                self.imported_declaration(owner, module, attribute);
+            }
         }
         self.rebound_imports(owner, record, &touches);
         let mut text = AssignText::new(facts.clone(), file);

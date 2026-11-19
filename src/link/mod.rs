@@ -450,6 +450,8 @@ impl Link {
             computed_loads: Vec::new(),
             unread_causes: FxHashMap::default(),
             rebound_imports: FxHashSet::default(),
+            foreign: FxHashMap::default(),
+            class_stores: FxHashMap::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);

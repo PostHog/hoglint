@@ -113,7 +113,8 @@ impl Cover {
 /// an edge it cannot place, "unknown-selection" for a module an entity cover cannot tell it keeps,
 /// "unread-items" for a sequence with an item it cannot read (the surface is the sequence),
 /// "unread-bound" and "unread-rebound" for one bound more than once, or bound again by a form the
-/// reading cannot read,
+/// reading cannot read, "unread-lazy" for a registry's attribute its file does not bind but a
+/// module `__getattr__` may serve,
 /// "unread-core-items" for one in a list no group owns that a registration point registers,
 /// "computed-load" for a module a registration point names by a value the link cannot read
 /// exactly (the surface is that place, in words).
@@ -635,6 +636,7 @@ fn sequence_files(
                 let what = match cx.link.unread_causes.get(&list) {
                     Some(&"bound") => "unread-bound",
                     Some(&"rebound") => "unread-rebound",
+                    Some(&"lazy") => "unread-lazy",
                     _ => "unread-items",
                 };
                 out.incomplete.push((what, at, module, named));
