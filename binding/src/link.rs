@@ -1,6 +1,6 @@
 //! Building a link, the snapshot's records, and edges as tuples.
 
-use crate::blobs::{Blob, BlobRequest, configs, load};
+use crate::blobs::{Blob, BlobRequest, Watch, configs, load};
 use crate::{HitTuple, Pair, ids_bytes, ids_from};
 use hoglint_facts::link::facts::decode_lines;
 use hoglint_facts::link::intern::{Interner, Sid};
@@ -837,12 +837,13 @@ pub(crate) fn link_blobs(
         .map_err(|e| PyValueError::new_err(format!("link config: {e}")))?;
     let spec: serde_json::Value = serde_json::from_str(extract)
         .map_err(|e| PyValueError::new_err(format!("extract options: {e}")))?;
-    let watch = (
-        strings(&spec, "watch_callees"),
-        strings(&spec, "watch_prefixes"),
-        strings(&spec, "watch_keys"),
-        strings(&spec, "watch_hooks"),
-    );
+    let watch = Watch {
+        callees: strings(&spec, "watch_callees"),
+        prefixes: strings(&spec, "watch_prefixes"),
+        keys: strings(&spec, "watch_keys"),
+        hooks: strings(&spec, "watch_hooks"),
+        aliased: strings(&spec, "watch_aliased"),
+    };
     let (full, lite) = configs(
         strings(&spec, "first_party"),
         &strings(&spec, "kinds"),

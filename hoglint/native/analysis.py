@@ -57,7 +57,11 @@ class NativeAnalysis:
 
     def needs(self) -> FactNeeds:
         config = self.options.config
-        core = FactNeeds(kinds=core_fact_kinds(config), watch_callees=frozenset(config.watched_callee_names()))
+        core = FactNeeds(
+            kinds=core_fact_kinds(config),
+            watch_callees=frozenset(config.watched_callee_names()),
+            watch_aliased=frozenset(config.dynamic_loaders),
+        )
         return core | (self.options.needs if self.options.needs is not None else registered_needs())
 
     def threads(self) -> int:
@@ -94,6 +98,7 @@ class NativeAnalysis:
                 "watch_prefixes": sorted(needs.watch_prefixes),
                 "watch_keys": sorted(needs.watch_keys),
                 "watch_hooks": sorted(needs.watch_hooks),
+                "watch_aliased": sorted(needs.watch_aliased),
                 "lite_kinds": list(LITE_KINDS),
             }
         )

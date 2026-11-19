@@ -50,6 +50,8 @@ class FactNeeds:
     - watch_keys: string dict keys whose entries get a `watched` row.
     - watch_hooks: hook names: their calls, also through an import alias, get a `calls` row in
       which a call argument keeps its callee.
+    - watch_aliased: full names of callees whose calls get a `calls` row through any import
+      alias too (the loaders).
     """
 
     kinds: frozenset[str] = frozenset()
@@ -57,6 +59,7 @@ class FactNeeds:
     watch_prefixes: frozenset[str] = frozenset()
     watch_keys: frozenset[str] = frozenset()
     watch_hooks: frozenset[str] = frozenset()
+    watch_aliased: frozenset[str] = frozenset()
 
     def __or__(self, other: FactNeeds) -> FactNeeds:
         return FactNeeds(
@@ -65,6 +68,7 @@ class FactNeeds:
             self.watch_prefixes | other.watch_prefixes,
             self.watch_keys | other.watch_keys,
             self.watch_hooks | other.watch_hooks,
+            self.watch_aliased | other.watch_aliased,
         )
 
 

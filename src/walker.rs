@@ -1,14 +1,14 @@
 //! One traversal of a parsed module that collects every row list of an L1 record.
 
 use crate::config::{ExtractConfig, Kind};
-use crate::defs::{Bound, DefNode, DefTable};
+use crate::defs::{Bound, DefNode, DefTable, Patched, patched_names};
 use crate::facts::flags::{BLOCK, CLASS, FUNC, IF, TC_ELSE, TRY, TYPE_ONLY};
 use crate::facts::{
     Assign, Branch, Computed, DottedStr, Import, Ref, Site, Tag, TextKey, UseKey, WatchedCall,
     WatchedKey,
 };
 use crate::loops::{Sequences, literal_elements, rebinds};
-use crate::path::{Frame, climb, computed_read, listed};
+use crate::path::{Frame, climb, computed_read, getattr_literal, listed};
 use crate::source::LineIndex;
 use crate::strings::{is_dotted_path, is_identifier, is_symbolic, leading_attrs, tag_names};
 use crate::value::{
@@ -66,96 +66,55 @@ fn name_id(expr: &Expr) -> &str {
 /// to a name's items (`emit_mutation`).
 const MUTATORS: [&str; 5] = ["append", "extend", "insert", "update", "add"];
 
-/// Builtins that read a value they are handed and change nothing: copies, counts, tests and
-/// formatting.
-const READING_BUILTINS: [&str; 24] = [
-    "list",
-    "tuple",
-    "set",
-    "frozenset",
-    "sorted",
-    "reversed",
-    "len",
-    "iter",
-    "enumerate",
-    "zip",
-    "map",
-    "filter",
-    "any",
-    "all",
-    "sum",
-    "min",
-    "max",
-    "isinstance",
-    "issubclass",
-    "print",
-    "repr",
-    "str",
-    "bool",
-    "id",
-];
+/// What a value may be, relative to the module-level or class-body name a use starts from, as
+/// the use reading follows it up (`Walker::follow`). A value that is an item of the name, or
+/// holds nothing of it, ends the reading: it is read.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Carried {
+    /// The name's value itself.
+    Same,
+    /// A new value that may hold it: a container, an iterator over it, a copy of a holder, a
+    /// record, an instance of a class whose body binds it.
+    Holds,
+    /// A value that may be it or may hold it: an element or an item taken out of a holder.
+    Either,
+}
 
-/// The standard library's functions that read a value they are handed and change nothing, by the
-/// full name an import resolves them to.
-const READING_STDLIB: [&str; 4] = [
-    "itertools.chain",
-    "itertools.chain.from_iterable",
-    "copy.copy",
-    "copy.deepcopy",
-];
-
-/// Methods of a list, set or dict that read it, or only take items out of it.
-const READING_METHODS: [&str; 13] = [
-    "copy", "values", "keys", "items", "get", "index", "count", "remove", "pop", "clear",
-    "discard", "sort", "reverse",
-];
-
-/// Escape steps (`climb`) that read the value they hold and hand nothing on: a statement of the
-/// bare value, a test, an index, formatting, a type position, a decorator.
-const READING_STEPS: [&str; 16] = [
-    "expr",
-    "if-test",
-    "while-test",
-    "assert",
-    "assert-msg",
-    "ifexp:test",
-    "comp:if",
-    "case",
-    "case-guard",
-    "match",
-    "annotation",
-    "returns",
-    "except",
-    "slice",
-    "slice-part",
-    "decorator",
-];
-
-/// Prefixes of escape steps that read the value they hold: comparisons, unary operators,
-/// formatting, class bases and type positions.
-const READING_PREFIXES: [&str; 7] = [
-    "cmp:",
-    "unary:",
-    "fstr",
-    "tstr",
-    "base:",
-    "param-ann:",
-    "typealias:",
-];
-
-/// Where the escape steps of a load take the value (`Walker::place`).
-enum Place<'s> {
-    /// They read it: it is neither changed nor handed on as the same object.
+/// One step of the use reading (`Walker::follow`).
+enum Step {
+    /// Nothing of the value goes on.
     Read,
-    /// They bind it, itself or inside a list, tuple, set, dict or `or`, to module-level or
-    /// class-body names: the link reads those names as aliases of it.
-    Held,
-    /// They hand it to record constructors (`record_callee`) whose result module-level or
-    /// class-body names hold: in a registry's file, the link reads those names as aliases.
-    Record(&'s str),
-    /// Anything else: it escapes.
+    /// The value escapes.
+    Escape,
+    /// The value goes on as this.
+    Next(Carried),
+}
+
+/// Where a use takes the value it starts from (`Walker::follow`).
+enum Outcome {
+    /// Nothing of it goes on.
+    Read,
+    /// Bound to module-level or class-body names (comma-separated), as itself or as a holder of
+    /// it, through record constructors when `records` names any.
+    Bound {
+        targets: String,
+        carried: Carried,
+        records: Vec<String>,
+    },
+    /// It escapes.
     Escape,
 }
+
+/// Where the value sits in a call (`Walker::argument`).
+#[derive(Clone, Copy)]
+enum Position<'a> {
+    Arg(usize),
+    Keyword(Option<&'a str>),
+}
+
+/// The modules whose objects the use reading tracks: they load modules or reach a module's
+/// names. One handed to anything but a plain attribute read escapes.
+const TRACKED_MODULES: [&str; 4] = ["sys", "importlib", "importlib.util", "builtins"];
 
 /// Where a node sits: its scope, the def whose header holds it (-1 = none), and the flags of
 /// the enclosing statements.
@@ -261,6 +220,16 @@ pub struct Walker<'a, 'w> {
     loops: Vec<LoopValues<'a>>,
     /// The variables of the loops, comprehensions and lambdas around the code being walked.
     elements: Vec<ElementOf<'a>>,
+    /// The names, by scope, a binding the walk has passed makes a holder of another name's
+    /// value (`_L = [W]`, `_M = list(_L)`, a record, a class whose body binds it): their uses
+    /// start as holders.
+    holders: HashMap<(i64, String), Carried>,
+    /// The module-level names every binding of which is a plain value: no call in it.
+    plain: HashSet<&'a str>,
+    /// What the file patches (`patched_names`).
+    patched: Patched<'a>,
+    /// Whether the file star-imports a first-party module, which may bind any bare name.
+    star_first_party: bool,
     /// The names each function declares `global`, by its scope (`emit_global`).
     globals: HashMap<i64, HashSet<String>>,
     config: &'w ExtractConfig,
@@ -294,6 +263,10 @@ impl<'a, 'w> Walker<'a, 'w> {
             sequences,
             loops: Vec::new(),
             elements: Vec::new(),
+            holders: HashMap::new(),
+            plain: HashSet::new(),
+            patched: Patched::default(),
+            star_first_party: false,
             globals: HashMap::new(),
             config,
             exprs: config.kinds.any(&EXPRESSION_KINDS),
@@ -304,6 +277,9 @@ impl<'a, 'w> Walker<'a, 'w> {
     }
 
     pub fn run(mut self, suite: &'a [Stmt]) -> Walk {
+        if self.wants_any(&[Kind::Escapes, Kind::Computed]) {
+            self.survey(suite);
+        }
         let module = At {
             scope: -1,
             header: -1,
@@ -311,6 +287,48 @@ impl<'a, 'w> Walker<'a, 'w> {
         };
         self.body(suite, module);
         self.out
+    }
+
+    /// What the use reading needs to know of the whole file before it walks: the names module
+    /// level and class bodies bind only to plain values, what the file patches, and a
+    /// first-party star import.
+    fn survey(&mut self, suite: &'a [Stmt]) {
+        let mut verdicts: HashMap<&'a str, bool> = HashMap::new();
+        self.survey_body(suite, &mut verdicts);
+        self.plain = (verdicts.into_iter())
+            .filter(|(name, plain)| *plain && !self.bound.contains_key(name))
+            .map(|(name, _)| name)
+            .collect();
+        self.patched = patched_names(suite);
+    }
+
+    /// The plain verdict of each name a body binds (`survey`), class bodies in it too.
+    fn survey_body(&mut self, suite: &'a [Stmt], verdicts: &mut HashMap<&'a str, bool>) {
+        for stmt in suite {
+            let (targets, value): (Vec<&'a Expr>, Option<&'a Expr>) = match stmt {
+                Stmt::Assign(a) => (a.targets.iter().collect(), Some(&a.value)),
+                Stmt::AnnAssign(a) => (vec![&a.target], a.value.as_deref()),
+                Stmt::ImportFrom(i) => {
+                    let module = i.module.as_ref().map(|m| m.as_str()).unwrap_or("");
+                    let star = i.names.iter().any(|alias| alias.name.as_str() == "*");
+                    if star && (i.level > 0 || self.config.is_first_party(module)) {
+                        self.star_first_party = true;
+                    }
+                    continue;
+                }
+                Stmt::ClassDef(class) => {
+                    self.survey_body(&class.body, verdicts);
+                    continue;
+                }
+                _ => continue,
+            };
+            for target in targets {
+                if let Expr::Name(name) = target {
+                    let plain = value.is_some_and(plain_value);
+                    *verdicts.entry(name.id.as_str()).or_insert(true) &= plain;
+                }
+            }
+        }
     }
 
     fn wants(&self, kind: Kind) -> bool {
@@ -495,8 +513,14 @@ impl<'a, 'w> Walker<'a, 'w> {
 
     fn stmt(&mut self, stmt: &'a Stmt, at: At) {
         match stmt {
-            Stmt::FunctionDef(f) => self.visit_def(DefNode::Func(f), at),
-            Stmt::ClassDef(c) => self.visit_def(DefNode::Class(c), at),
+            Stmt::FunctionDef(f) => {
+                self.definition(&f.name, at);
+                self.visit_def(DefNode::Func(f), at)
+            }
+            Stmt::ClassDef(c) => {
+                self.definition(&c.name, at);
+                self.visit_def(DefNode::Class(c), at)
+            }
             Stmt::Import(i) => {
                 for alias in &i.names {
                     self.push_import(alias, at, Some(alias.name.as_str()), 0, None);
@@ -618,13 +642,17 @@ impl<'a, 'w> Walker<'a, 'w> {
                 for handler in &t.handlers {
                     let ast::ExceptHandler::ExceptHandler(handler) = handler;
                     self.opt_child(Frame::Terminal("except"), handler.type_.as_deref(), inner);
+                    if let Some(name) = &handler.name {
+                        let pos = self.lines.pos(name.range.start());
+                        self.emit_rebinding(name.as_str(), pos, inner, false);
+                    }
                     self.body(&handler.body, inner);
                 }
                 self.body(&t.orelse, inner);
                 self.body(&t.finalbody, inner);
             }
             Stmt::Match(m) => {
-                self.child(Frame::Terminal("match"), &m.subject, at);
+                self.child(Frame::Subject(m), &m.subject, at);
                 let case_at = Self::inner(at, BLOCK);
                 for case in &m.cases {
                     self.pattern(&case.pattern, case_at);
@@ -645,6 +673,15 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
+    /// A `def` or `class` binds its name, decorated or not: a rebinding when the file also
+    /// assigns the name somewhere (`emit_rebinding`).
+    fn definition(&mut self, name: &ast::Identifier, at: At) {
+        if self.stored.contains(name.as_str()) {
+            let pos = self.lines.pos(name.range.start());
+            self.emit_rebinding(name.as_str(), pos, at, false);
+        }
+    }
+
     fn pattern(&mut self, pattern: &'a Pattern, at: At) {
         match pattern {
             Pattern::MatchValue(p) => self.child(Frame::Terminal("case"), &p.value, at),
@@ -654,6 +691,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 }
             }
             Pattern::MatchMapping(p) => {
+                self.capture(p.rest.as_ref(), at);
                 for key in &p.keys {
                     self.child(Frame::Terminal("case"), key, at);
                 }
@@ -671,6 +709,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 }
             }
             Pattern::MatchAs(p) => {
+                self.capture(p.name.as_ref(), at);
                 if let Some(sub) = &p.pattern {
                     self.pattern(sub, at);
                 }
@@ -680,7 +719,16 @@ impl<'a, 'w> Walker<'a, 'w> {
                     self.pattern(sub, at);
                 }
             }
-            Pattern::MatchSingleton(_) | Pattern::MatchStar(_) => {}
+            Pattern::MatchStar(p) => self.capture(p.name.as_ref(), at),
+            Pattern::MatchSingleton(_) => {}
+        }
+    }
+
+    /// A name a capture pattern binds (`case W:`, `*rest`, `**rest`).
+    fn capture(&mut self, name: Option<&ast::Identifier>, at: At) {
+        if let Some(name) = name {
+            let pos = self.lines.pos(name.range.start());
+            self.emit_rebinding(name.as_str(), pos, at, false);
         }
     }
 
@@ -913,78 +961,512 @@ impl<'a, 'w> Walker<'a, 'w> {
         });
     }
 
-    /// The `escapes` rows of a name node at module level or in a class body:
-    /// - a load of a name no import binds that is not a read (`escape_of`);
-    /// - a store or a delete of a name by a form that writes no `assigns` row (a `for` or `with`
-    ///   target, a walrus, `del`): `=name`, bound again by a form the reading does not read;
-    /// - in a function, a store of a name it declares `global` that is no assignment, sited at
-    ///   module level.
+    /// The `escapes` rows of a name node at module level or in a class body (`emit_rebinding`
+    /// for a store or a delete). A load of a name no import binds is followed up through the
+    /// expression and the statement around it (`follow`): read, bound to names as an alias or a
+    /// holder (`name~TARGETS`, `name^TARGETS`, `name>TARGETS@CALLEES` through record
+    /// constructors; a class this file defines so too, as a holder of what its body binds), or
+    /// escaped (`name`; `name.*` for a class, or when handed to `setattr` or `delattr`). A use in
+    /// an `if TYPE_CHECKING:` branch never runs, so it is none.
     fn emit_use(&mut self, name: &ast::ExprName, at: At) {
         if !self.wants(Kind::Escapes) {
             return;
         }
         let id = name.id.as_str();
-        let (chain, up) = climb(&self.path);
-        let steps: Vec<&str> = up.split(' ').filter(|step| !step.is_empty()).collect();
-        let first = steps.first().copied().unwrap_or_default();
+        let pos = self.lines.pos(name.range.start());
         if name.ctx != ExprContext::Load {
-            let assigned = steps.iter().any(|step| {
-                matches!(
-                    *step,
-                    "assign-target"
-                        | "annassign-target"
-                        | "augassign-target"
-                        | "typealias-target"
-                        | "comp:target"
-                )
-            });
-            if self.emits_assign(at.scope) {
-                if !assigned {
-                    self.emit_escape(name, at, &format!("={id}"));
-                }
+            let (_, up) = climb(&self.path);
+            let steps: Vec<&str> = up.split(' ').collect();
+            if steps.contains(&"comp:target") {
                 return;
             }
-            let global = at.scope != -1
-                && self
-                    .globals
-                    .get(&at.scope)
-                    .is_some_and(|names| names.contains(id));
-            let assigned = matches!(
-                first,
-                "assign-target" | "annassign-target" | "augassign-target"
-            );
-            if global && !assigned {
-                let module = At { scope: -1, ..at };
-                self.emit_escape(name, module, id);
+            let assignment = steps.iter().any(|step| {
+                matches!(
+                    *step,
+                    "assign-target" | "annassign-target" | "augassign-target" | "typealias-target"
+                )
+            });
+            self.emit_rebinding(id, pos, at, assignment);
+            return;
+        }
+        if at.flags & TYPE_ONLY != 0 || !self.emits_assign(at.scope) || self.bound.contains_key(id)
+        {
+            return;
+        }
+        let (reached, used) = self.class_attribute(id);
+        let frames = &self.path[..self.path.len() - used];
+        let class = used == 0 && self.class_in(-1, id).is_some();
+        let handed = matches!(frames.last(), Some(Frame::Arg(call, 0))
+            if matches!(callee_text(call).as_str(), "setattr" | "delattr"));
+        let start =
+            (self.holders.get(&(at.scope, reached.clone())).copied()).unwrap_or(Carried::Same);
+        let outcome = self.follow(frames, start, at, !reached.contains('.'));
+        let row = match outcome {
+            Outcome::Read => return,
+            Outcome::Escape if handed || class => format!("{reached}.*"),
+            _ if handed => format!("{reached}.*"),
+            Outcome::Escape => reached,
+            Outcome::Bound {
+                targets,
+                carried,
+                records,
+            } => {
+                let held = if records.is_empty() {
+                    carried
+                } else {
+                    Carried::Holds
+                };
+                if held != Carried::Same {
+                    for target in targets.split(',') {
+                        self.holders.insert((at.scope, target.to_string()), held);
+                    }
+                }
+                self.class_holds(at.scope);
+                match (records.is_empty(), carried) {
+                    (false, _) => format!("{reached}>{targets}@{}", records.join(",")),
+                    (true, Carried::Holds) => format!("{reached}^{targets}"),
+                    (true, Carried::Same | Carried::Either) => format!("{reached}~{targets}"),
+                }
             }
+        };
+        self.emit_escape(name, at, &row);
+    }
+
+    /// A class body that binds another name's value makes the class a holder: an instance or the
+    /// class handed on reaches it.
+    fn class_holds(&mut self, scope: i64) {
+        if scope < 0 {
             return;
         }
-        if !self.emits_assign(at.scope) || self.bound.contains_key(id) {
+        let entry = &self.defs.entries[scope as usize];
+        if let DefNode::Class(class) = entry.node {
+            let holder = (entry.parent, class.name.to_string());
+            self.holders.insert(holder, Carried::Holds);
+        }
+    }
+
+    /// A binding of `id` that writes no `assigns` row, or that binds the module's name from a
+    /// class body or a function (`global`): an `=id` escape where the name lives, so the reading
+    /// takes the name as bound to something it cannot read. Any form counts (the Language
+    /// Reference's list, "Binding of names"): a target of any statement, `except ... as`, a
+    /// capture pattern, `class`, `def`, a walrus, `del`. An assignment at module level or in a
+    /// class body writes a row, and one in a function with `global` writes a module-level row
+    /// (`emit_global`); one in a class body with `global` binds the module's name.
+    fn emit_rebinding(&mut self, id: &str, pos: (i64, i64), at: At, assignment: bool) {
+        if !self.wants(Kind::Escapes) {
             return;
         }
-        if let Some(escaped) = self.escape_of(id, &chain, &steps, at) {
-            self.emit_escape(name, at, &escaped);
+        let global =
+            at.scope != -1 && (self.globals.get(&at.scope)).is_some_and(|names| names.contains(id));
+        let row_scope = self.emits_assign(at.scope);
+        let site = match (global, row_scope) {
+            (true, true) => At { scope: -1, ..at },
+            (true, false) if !assignment => At { scope: -1, ..at },
+            (false, true) if !assignment => at,
+            _ => return,
+        };
+        self.out.escapes.push(Tag {
+            site: site.site(pos),
+            name: format!("={id}"),
+        });
+    }
+
+    /// The name a use of a class this file defines reaches through its attributes
+    /// (`Reg.WORKFLOWS`, `Outer.Inner.ATTR`), also read off an instance (`Reg().WORKFLOWS`), and
+    /// how many parent frames that takes; the name itself and 0 for anything else.
+    fn class_attribute(&self, id: &str) -> (String, usize) {
+        let path = &self.path;
+        let mut name = id.to_string();
+        let mut used = 0;
+        let mut class = self.class_in(-1, id);
+        while let Some(index) = class {
+            let mut at = path.len() - used;
+            if at > 0 && matches!(path[at - 1], Frame::CallFunc) {
+                at -= 1;
+            }
+            let Some(attribute) = at.checked_sub(1).and_then(|i| attribute_of(path[i])) else {
+                break;
+            };
+            if at >= 2 && matches!(path[at - 2], Frame::CallFunc) {
+                break;
+            }
+            name = format!("{name}.{attribute}");
+            used = path.len() - (at - 1);
+            class = self.class_in(index, attribute);
+        }
+        (name, used)
+    }
+
+    /// Follows a value up through the parent frames of a use (innermost last), from what it
+    /// starts as (`start`), and says where it goes. Each step the reading understands maps what
+    /// the value may be (`Carried`); the first one it does not understand escapes. `bare`: the
+    /// use is a module-level or class-body name with no dot, whose changes the walk writes as
+    /// rows (`W.append(B)`, `W[k] = v` at module level).
+    fn follow(&self, frames: &[Frame<'a>], start: Carried, at: At, bare: bool) -> Outcome {
+        let mut carried = start;
+        let mut records: Vec<String> = Vec::new();
+        let mut first = true;
+        let mut i = frames.len();
+        while i > 0 {
+            i -= 1;
+            let outer = i.checked_sub(1).map(|j| frames[j]);
+            let attribute = attribute_of(frames[i]);
+            let step = match frames[i] {
+                _ if attribute.is_some() && !matches!(outer, Some(Frame::CallFunc)) => {
+                    // An attribute read hands a bound method or a field on.
+                    Step::Escape
+                }
+                _ if attribute.is_some() => {
+                    i -= 1;
+                    let before = i.checked_sub(1).map(|j| frames[j]);
+                    let statement = first
+                        && bare
+                        && at.scope == -1
+                        && matches!(before, Some(Frame::Terminal("expr")));
+                    method(carried, attribute.unwrap_or_default(), statement)
+                }
+                Frame::Attr(_) => Step::Escape,
+                Frame::CallFunc => match carried {
+                    Carried::Same => Step::Read,
+                    Carried::Holds => Step::Next(Carried::Holds),
+                    Carried::Either => Step::Escape,
+                },
+                Frame::SubValue => element(outer, carried, first && bare && at.scope == -1),
+                Frame::Arg(call, index) => {
+                    self.argument(call, Position::Arg(index), carried, &mut records)
+                }
+                Frame::Kw(call, name) => {
+                    self.argument(call, Position::Keyword(name), carried, &mut records)
+                }
+                Frame::Op("bool:", _) => Step::Next(carried),
+                Frame::Op(..) => Step::Read,
+                Frame::Operand(prefix, op, node) => self.operand(prefix, op, node, carried),
+                Frame::Step(text) => step(text, carried),
+                Frame::DictVal(_) => Step::Next(Carried::Holds),
+                Frame::Walrus(_) => Step::Escape,
+                Frame::Subject(statement) => {
+                    let cases = statement.cases.iter();
+                    if cases
+                        .map(|case| &case.pattern)
+                        .all(|pattern| self.plain_pattern(pattern))
+                    {
+                        Step::Read
+                    } else {
+                        Step::Escape
+                    }
+                }
+                Frame::Terminal(text) => terminal(text, carried),
+                Frame::AssignValue(targets) => return bound(targets, carried, records),
+                Frame::AnnAssignValue(target) => {
+                    return bound(std::slice::from_ref(target), carried, records);
+                }
+                Frame::AugAssignValue(_, target) => match carried {
+                    // `X += W` adds W's items; `X += [W]` makes X hold W.
+                    Carried::Same => Step::Read,
+                    Carried::Holds | Carried::Either => {
+                        return bound(std::slice::from_ref(target), Carried::Holds, records);
+                    }
+                },
+                Frame::Base(_) => Step::Read,
+                // `type T = W`, a class keyword, a default and a parameter's annotation hand W on.
+                Frame::TypeAliasValue(_)
+                | Frame::ClassKw(_)
+                | Frame::ParamDefault(_)
+                | Frame::ParamAnn(_) => Step::Escape,
+            };
+            match step {
+                Step::Read => return Outcome::Read,
+                Step::Escape => return Outcome::Escape,
+                Step::Next(next) => carried = next,
+            }
+            first = false;
+        }
+        Outcome::Read
+    }
+
+    /// The value handed to a call at `position`. `"...".format(W)` formats it. A reader
+    /// (`reader`) maps it by position; a record constructor (`record_callee`) holds it, for the
+    /// link to confirm the record is a class; any other call escapes.
+    fn argument(
+        &self,
+        call: &ast::ExprCall,
+        position: Position<'a>,
+        carried: Carried,
+        records: &mut Vec<String>,
+    ) -> Step {
+        if let Expr::Attribute(method) = &*call.func
+            && method.attr.as_str() == "format"
+            && is_text_literal(&method.value)
+        {
+            return Step::Read;
+        }
+        if matches!(position, Position::Keyword(None)) {
+            // `f(**W)` hands W's items on; a holder's may be W.
+            return match carried {
+                Carried::Same => Step::Read,
+                Carried::Holds | Carried::Either => Step::Escape,
+            };
+        }
+        let callee = callee_text(call);
+        if let Some(full) = self.resolve(&callee)
+            && let Some(step) = self.reader(&full, call, position, carried)
+        {
+            return step;
+        }
+        if self.record_callee(&callee) {
+            records.push(callee);
+            return Step::Next(Carried::Holds);
+        }
+        Step::Escape
+    }
+
+    /// What a builtin or standard-library reader gives for the value at `position`, by the
+    /// callee's full name (`resolve`); None for any other callee.
+    /// - a copy (`list`, `tuple`, `set`, `frozenset`, `sorted`, `copy.copy`): of the value its
+    ///   items (read), of a holder a holder;
+    /// - a count, a test, formatting or serialising (`len`, `bool`, `any`, `all`, `repr`,
+    ///   `str`, `id`, `hash`, `print`, `json.dumps`, `pprint`, `collections.Counter`,
+    ///   `dict.fromkeys`, `copy.deepcopy`): read; `isinstance` and `issubclass` only with plain
+    ///   classes (`plain_operand`);
+    /// - an iterator (`iter`, `reversed`, `enumerate`, `zip`, `map`, `filter`, `itertools.*`): a
+    ///   holder;
+    /// - `min`, `max`, `sum`, `next` of the value alone: an item, of a holder possibly the value;
+    ///   with a second positional argument, a `default=` or a start, the result may be any
+    ///   argument, so it carries what the argument carries.
+    fn reader(
+        &self,
+        full: &str,
+        call: &ast::ExprCall,
+        position: Position<'a>,
+        carried: Carried,
+    ) -> Option<Step> {
+        let positional = call.arguments.args.len();
+        let first = matches!(position, Position::Arg(0));
+        let item = match carried {
+            Carried::Same => Step::Read,
+            Carried::Holds | Carried::Either => Step::Next(Carried::Either),
+        };
+        let copy = match carried {
+            Carried::Same => Step::Read,
+            Carried::Holds | Carried::Either => Step::Next(Carried::Holds),
+        };
+        let start = (call.arguments.keywords.iter()).any(|keyword| {
+            keyword
+                .arg
+                .as_ref()
+                .is_some_and(|arg| arg.as_str() == "start")
+        });
+        Some(match full {
+            "builtins.list" | "builtins.tuple" | "builtins.set" | "builtins.frozenset"
+            | "builtins.sorted" | "builtins.dict" | "copy.copy"
+                if first =>
+            {
+                copy
+            }
+            "copy.deepcopy"
+            | "builtins.len"
+            | "builtins.bool"
+            | "builtins.any"
+            | "builtins.all"
+            | "builtins.repr"
+            | "builtins.str"
+            | "builtins.id"
+            | "builtins.hash"
+            | "json.dumps"
+            | "pprint.pformat"
+            | "collections.Counter"
+            | "builtins.dict.fromkeys"
+                if first =>
+            {
+                Step::Read
+            }
+            "builtins.print" | "pprint.pprint" if matches!(position, Position::Arg(_)) => {
+                Step::Read
+            }
+            "builtins.isinstance" | "builtins.issubclass" if first => {
+                let classes = call.arguments.args.iter().skip(1);
+                let keywords = call.arguments.keywords.iter().map(|k| &k.value);
+                if classes
+                    .chain(keywords)
+                    .all(|c| self.plain_operand(c, false))
+                {
+                    Step::Read
+                } else {
+                    Step::Escape
+                }
+            }
+            "builtins.iter" | "builtins.reversed" | "builtins.enumerate" | "builtins.zip"
+            | "builtins.map" | "builtins.filter" => Step::Next(Carried::Holds),
+            full if full.starts_with("itertools.") => Step::Next(Carried::Holds),
+            "builtins.min" | "builtins.max" => match position {
+                Position::Keyword(Some("default")) => Step::Next(carried),
+                Position::Keyword(_) => Step::Escape,
+                Position::Arg(0) if positional == 1 => item,
+                Position::Arg(_) => Step::Next(carried),
+            },
+            "builtins.sum" => match position {
+                Position::Arg(0) if positional == 1 && !start => item,
+                _ => Step::Next(carried),
+            },
+            "builtins.next" => match position {
+                Position::Arg(0) => item,
+                _ => Step::Next(carried),
+            },
+            _ => return None,
+        })
+    }
+
+    /// The value as an operand of a binary operation, a comparison or a subscript's index. Any
+    /// operand that is not plain (`plain_operand`) may run first-party code with it (a dunder),
+    /// so it escapes. `"..." % W` formats; an operation on the value makes a new one, and on a
+    /// holder (`[W] + X`) a holder.
+    fn operand(&self, prefix: &str, op: &str, node: &Expr, carried: Carried) -> Step {
+        if let Expr::BinOp(binary) = node
+            && op == "%"
+            && is_text_literal(&binary.left)
+        {
+            return Step::Read;
+        }
+        let operands: Vec<&Expr> = match node {
+            Expr::BinOp(binary) => vec![&binary.left, &binary.right],
+            Expr::Compare(compare) => compare.operands.iter().collect(),
+            Expr::Subscript(subscript) => vec![&subscript.value],
+            _ => Vec::new(),
+        };
+        // `in` compares each element of a container with the value itself.
+        let membership = matches!(node, Expr::Compare(compare)
+            if compare.ops.iter().any(|op| matches!(op, ast::CmpOp::In | ast::CmpOp::NotIn)));
+        if !operands
+            .into_iter()
+            .all(|operand| self.plain_operand(operand, membership))
+        {
+            return Step::Escape;
+        }
+        match (prefix, carried) {
+            ("bin:", Carried::Holds | Carried::Either) => Step::Next(Carried::Holds),
+            _ => Step::Read,
+        }
+    }
+
+    /// Whether an operand runs no first-party code when a value meets it: a literal, a builtin or
+    /// a name an import from outside the first party binds (and attributes of it), a name the
+    /// module or a class body binds only to plain values (`plain`) and such a class attribute, a
+    /// loop's variable over a module-level name (an item), a subscript of such, a call of a
+    /// builtin on such, and a display. A display's elements meet only the value's items, so any
+    /// name may be one; under `in` (`membership`) they meet the value itself and must be plain.
+    fn plain_operand(&self, expr: &Expr, membership: bool) -> bool {
+        let element = |e: &Expr| {
+            self.plain_operand(e, membership)
+                || (!membership && matches!(e, Expr::Name(_) | Expr::Attribute(_)))
+        };
+        match expr {
+            Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::NumberLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+            | Expr::FString(_) => true,
+            Expr::List(l) => l.elts.iter().all(element),
+            Expr::Tuple(t) => t.elts.iter().all(element),
+            Expr::Set(s) => s.elts.iter().all(element),
+            Expr::Dict(d) => (d.items.iter())
+                .all(|item| item.key.as_ref().is_none_or(element) && element(&item.value)),
+            Expr::Starred(s) => self.plain_operand(&s.value, membership),
+            Expr::Subscript(s) => self.plain_operand(&s.value, membership),
+            Expr::UnaryOp(u) => self.plain_operand(&u.operand, membership),
+            Expr::Name(name) => {
+                let id = name.id.as_str();
+                self.plain.contains(id)
+                    || self.outside(id)
+                    || (self.elements.iter())
+                        .any(|e| e.variable == id && matches!(e.from, Element::Of(_)))
+            }
+            Expr::Attribute(attribute) => match &*attribute.value {
+                Expr::Name(head) if self.outside(head.id.as_str()) => true,
+                Expr::Name(head) => {
+                    self.class_in(-1, head.id.as_str()).is_some()
+                        && self.plain.contains(attribute.attr.as_str())
+                }
+                _ => false,
+            },
+            Expr::Call(call) => {
+                let builtin = self.resolve(&callee_text(call));
+                builtin.is_some_and(|full| full.starts_with("builtins."))
+                    && call
+                        .arguments
+                        .args
+                        .iter()
+                        .all(|a| self.plain_operand(a, membership))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a match pattern compares the subject with plain values only (`plain_operand`): a
+    /// class pattern's class and a value pattern's value may run first-party code with it.
+    fn plain_pattern(&self, pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::MatchValue(p) => self.plain_operand(&p.value, false),
+            Pattern::MatchSingleton(_) | Pattern::MatchStar(_) => true,
+            Pattern::MatchSequence(p) => p.patterns.iter().all(|p| self.plain_pattern(p)),
+            Pattern::MatchMapping(p) => {
+                p.keys.iter().all(|key| self.plain_operand(key, false))
+                    && p.patterns.iter().all(|p| self.plain_pattern(p))
+            }
+            Pattern::MatchClass(p) => {
+                self.plain_operand(&p.cls, false)
+                    && p.arguments.patterns.iter().all(|p| self.plain_pattern(p))
+                    && (p.arguments.keywords.iter()).all(|k| self.plain_pattern(&k.pattern))
+            }
+            Pattern::MatchAs(p) => p.pattern.as_deref().is_none_or(|p| self.plain_pattern(p)),
+            Pattern::MatchOr(p) => p.patterns.iter().all(|p| self.plain_pattern(p)),
+        }
+    }
+
+    /// Whether a name resolves outside the first party: a builtin, or what an import from a
+    /// module that is not first-party binds.
+    fn outside(&self, name: &str) -> bool {
+        match self.bound.get(name) {
+            Some(binding) => !binding.first_party && self.resolve(name).is_some(),
+            None => self
+                .resolve(name)
+                .is_some_and(|full| full.starts_with("builtins.")),
         }
     }
 
     /// The full name a dotted name of the code stands for: through the import that binds its
     /// head (`import sys as s`: `s.modules` is `sys.modules`), or a builtin's (`builtins.len`)
-    /// when the file binds the head nowhere; None for a name the file binds itself or a relative
-    /// import.
+    /// when the file binds the head nowhere. None when the binding is not unique or not still
+    /// valid: the file binds the head itself too (`class copy`, `def copy`), patches an attribute
+    /// of it (`copy.copy = f`), patches builtins (`builtins.sorted = f`, `__builtins__`), or
+    /// star-imports a first-party module that may bind a bare name; or for a relative import.
     fn resolve(&self, dotted: &str) -> Option<String> {
         let (head, rest) = match dotted.split_once('.') {
             Some((head, rest)) => (head, Some(rest)),
             None => (dotted, None),
         };
+        if self.binds_name(head) || self.patched.heads.contains(head) {
+            return None;
+        }
         let base = match self.bound.get(head) {
             Some(binding) => binding.origin()?,
-            None if self.binds_name(head) => return None,
+            None if self.star_first_party || self.builtins_patched() => return None,
             None => format!("builtins.{head}"),
         };
         Some(match rest {
             Some(rest) => format!("{base}.{rest}"),
             None => base,
         })
+    }
+
+    /// Whether the file patches builtins: it uses `__builtins__`, or stores an attribute of a
+    /// name an import binds to `builtins`.
+    fn builtins_patched(&self) -> bool {
+        self.patched.builtins
+            || (self.patched.heads.iter()).any(|head| {
+                self.bound.get(head).and_then(|b| b.origin()).as_deref() == Some("builtins")
+            })
     }
 
     /// Whether the file binds a name itself anywhere: a store, a def or a class.
@@ -996,31 +1478,23 @@ impl<'a, 'w> Walker<'a, 'w> {
             })
     }
 
-    /// Whether a callee, resolved through the imports, is a builtin or a standard library function
-    /// that reads what it is handed (`READING_BUILTINS`, `READING_STDLIB`).
-    fn reading_callee(&self, callee: &str) -> bool {
-        let Some(full) = self.resolve(callee) else {
-            return false;
-        };
-        match full.strip_prefix("builtins.") {
-            Some(builtin) => READING_BUILTINS.contains(&builtin),
-            None => READING_STDLIB.contains(&full.as_str()),
-        }
-    }
-
-    /// Whether a callee builds a record: a first-party class an import binds
-    /// (`QueueBinding(...)`, `registration.QueueBinding(...)`), or `dataclasses.replace`.
+    /// Whether a callee may build a record: a capitalised first-party name an import binds
+    /// (`QueueBinding(...)`, `registration.QueueBinding(...)`), or `dataclasses.replace`. The link
+    /// confirms the name is a class (`escapes` rows name the callees).
     fn record_callee(&self, callee: &str) -> bool {
         if self.resolve(callee).as_deref() == Some("dataclasses.replace") {
             return true;
         }
         let head = callee.split('.').next().unwrap_or_default();
         let last = callee.rsplit('.').next().unwrap_or_default();
+        // A unique, still-valid binding: no other binding or patch of the head in the file. A
+        // relative import is first-party too, though `resolve` gives it no full name.
         let first_party = self
             .bound
             .get(head)
             .is_some_and(|binding| binding.first_party);
-        first_party && last.starts_with(|c: char| c.is_ascii_uppercase())
+        let valid = !self.binds_name(head) && !self.patched.heads.contains(head);
+        first_party && valid && last.starts_with(|c: char| c.is_ascii_uppercase())
     }
 
     /// The def index of the class named `name` directly in the scope `parent` (-1: the module).
@@ -1031,135 +1505,6 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             _ => None,
         })
-    }
-
-    /// Where the escape steps of a bare value (innermost first) take it: a read only when it can
-    /// neither change the value nor hand the same object on (an allow-list). It is read as an
-    /// iteration source, unpacked into a new container (`[*W]`), by a reading callee
-    /// (`reading_callee`), a test, a comparison, formatting or a type position. Inside a list,
-    /// tuple, set, dict or `or`, bound to names, it is held: the link reads the names as aliases.
-    /// Handed to any other call whose result such a binding holds, it is a record. Anything else
-    /// escapes: a conditional's branch, a comprehension's element, `return`, a lambda, a walrus,
-    /// a class keyword, a default, a `with`.
-    fn place<'s>(&self, steps: &[&'s str]) -> Place<'s> {
-        let mut holding = false;
-        let mut called = false;
-        let mut records = true;
-        for &step in steps {
-            let unpacks = step == "star" || step == "dict:**" || step.starts_with("kw:**:");
-            if unpacks || step.starts_with("bin:") {
-                if !holding && !called {
-                    return Place::Read;
-                }
-                continue;
-            }
-            if step.starts_with("elt:") || step.starts_with("dict:") || step.starts_with("bool:") {
-                holding = true;
-                continue;
-            }
-            if let Some(call) = step
-                .strip_prefix("arg:")
-                .or_else(|| step.strip_prefix("kw:"))
-            {
-                let callee = call.split_once(':').map_or("", |(_, callee)| callee);
-                if !holding && !called && self.reading_callee(callee) {
-                    return Place::Read;
-                }
-                records &= self.record_callee(callee);
-                called = true;
-                holding = true;
-                continue;
-            }
-            if matches!(step, "for-iter" | "comp:iter") || step.starts_with("augassign:") {
-                return if holding || called {
-                    Place::Escape
-                } else {
-                    Place::Read
-                };
-            }
-            let targets = step
-                .strip_prefix("assign:")
-                .or_else(|| step.strip_prefix("annassign:"));
-            if let Some(targets) = targets {
-                let names = targets
-                    .split(',')
-                    .all(|target| target == "()" || is_identifier(target));
-                return match (names, called, records) {
-                    (false, _, _) | (true, true, false) => Place::Escape,
-                    (true, false, _) => Place::Held,
-                    (true, true, true) => Place::Record(targets),
-                };
-            }
-            let reads = READING_STEPS.contains(&step)
-                || READING_PREFIXES
-                    .iter()
-                    .any(|prefix| step.starts_with(prefix));
-            return if reads && !called {
-                Place::Read
-            } else {
-                Place::Escape
-            };
-        }
-        if called { Place::Escape } else { Place::Read }
-    }
-
-    /// The escape a load of `id` at module level or in a class body makes, or None for a read
-    /// (`place`): `id`, or `id>NAMES` for records bound to NAMES; `id.*` when handed to `setattr`
-    /// or `delattr`. Of its chain: a call (`Class()`) and an element (`W[0]`) read; a subscript
-    /// store at module level is a change the reading reads; a reading method reads, and a
-    /// changing one (`append`) is a change the reading reads as a module-level statement on a
-    /// bare name; an
-    /// attribute of a class this file defines is a name of its own (`Reg.WORKFLOWS`); any other
-    /// attribute (`W.append` unbound) and anything past an element or a method escapes.
-    fn escape_of(&self, id: &str, chain: &str, steps: &[&str], at: At) -> Option<String> {
-        let first = steps.first().copied().unwrap_or_default();
-        let module_level = at.scope == -1;
-        if chain.is_empty() {
-            let callee = first.strip_prefix("arg:0:").unwrap_or_default();
-            if matches!(callee, "setattr" | "delattr") {
-                return Some(format!("{id}.*"));
-            }
-            return match self.place(steps) {
-                Place::Read | Place::Held => None,
-                Place::Record(holder) => Some(format!("{id}>{holder}")),
-                Place::Escape => Some(id.to_string()),
-            };
-        }
-        if chain.starts_with("()") {
-            return None;
-        }
-        if let Some(rest) = chain.strip_prefix("[]") {
-            let store = matches!(first, "assign-target" | "annassign-target");
-            let changes = first == "augassign-target" || (store && !module_level);
-            return (!rest.is_empty() || changes).then(|| id.to_string());
-        }
-        let attrs = chain.strip_prefix('.')?;
-        let attribute = attrs.split(['.', '(', '[']).next().unwrap_or_default();
-        let rest = &attrs[attribute.len()..];
-        let class = self.class_path(id);
-        if class.is_some() && !attribute.is_empty() && !rest.starts_with("()") {
-            let name = format!("{id}.{attribute}");
-            return self.escape_of(&name, rest, steps, at);
-        }
-        match rest {
-            "()" => {
-                // The walk writes a module-level change of a bare name as a row (`emit_mutation`).
-                let statement = module_level && first == "expr" && !id.contains('.');
-                let reads = READING_METHODS.contains(&attribute)
-                    || (statement && MUTATORS.contains(&attribute));
-                (!reads).then(|| id.to_string())
-            }
-            _ => Some(id.to_string()),
-        }
-    }
-
-    /// The def index of the class a dotted name of this file names (`Outer.Inner`), else None.
-    fn class_path(&self, dotted: &str) -> Option<i64> {
-        let mut parent = -1;
-        for part in dotted.split('.') {
-            parent = self.class_in(parent, part)?;
-        }
-        Some(parent)
     }
 
     fn expr(&mut self, expr: &'a Expr, at: At) {
@@ -1204,7 +1549,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 self.child(Frame::Walrus(name_id(&n.target)), &n.value, at);
             }
             Expr::BinOp(b) => {
-                let step = Frame::Op("bin:", binop(b.op));
+                let step = Frame::Operand("bin:", binop(b.op), expr);
                 self.child(step, &b.left, at);
                 self.child(step, &b.right, at);
             }
@@ -1259,9 +1604,9 @@ impl<'a, 'w> Walker<'a, 'w> {
             Expr::Yield(y) => self.opt_child(Frame::Step("yield"), y.value.as_deref(), at),
             Expr::YieldFrom(y) => self.child(Frame::Step("yieldfrom"), &y.value, at),
             Expr::Compare(c) => {
-                self.child(Frame::Step("cmp:left"), &c.operands[0], at);
+                self.child(Frame::Operand("cmp:", "left", expr), &c.operands[0], at);
                 for (op, operand) in c.ops.iter().zip(c.operands[1..].iter()) {
-                    self.child(Frame::Op("cmp:", cmpop(*op)), operand, at);
+                    self.child(Frame::Operand("cmp:", cmpop(*op), expr), operand, at);
                 }
             }
             Expr::FString(f) => {
@@ -1279,7 +1624,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             Expr::Attribute(a) => self.child(Frame::Attr(a.attr.as_str()), &a.value, at),
             Expr::Subscript(s) => {
                 self.child(Frame::SubValue, &s.value, at);
-                self.child(Frame::Step("slice"), &s.slice, at);
+                self.child(Frame::Operand("slice", "", expr), &s.slice, at);
             }
             Expr::Starred(s) => self.child(Frame::Step("star"), &s.value, at),
             Expr::Slice(s) => {
@@ -1501,7 +1846,12 @@ impl<'a, 'w> Walker<'a, 'w> {
                     .bound
                     .get(callee.as_str())
                     .is_some_and(|binding| binding.hook_alias));
-        let watched = self.config.is_watched_callee(last);
+        // A loader reached through an import alias (`from importlib import import_module as
+        // load`) is the loader.
+        let aliased = !self.config.watch_aliased.is_empty()
+            && (self.resolve(&callee))
+                .is_some_and(|full| self.config.watch_aliased.contains(&full));
+        let watched = self.config.is_watched_callee(last) || aliased;
         if watched && want_computed {
             self.emit_computed(module_argument(call), "call", at, (l, c));
         }
@@ -1571,19 +1921,25 @@ impl<'a, 'w> Walker<'a, 'w> {
         });
     }
 
-    /// `sys.modules`, resolved through the imports (`import sys as s`, `from sys import
-    /// modules`), read in any way: a `computed` row, as no edge names a key of it, and the `*`
-    /// escape unless it is a subscript by a string literal (it may be this module). A builtin
-    /// loader or `exec`/`eval` read as a value (`load = __import__`) is a `computed` row (`use`):
-    /// the link cannot read what it loads.
+    /// Reads of a module's machinery:
+    /// - `sys.modules` (resolved through the imports and the paths to `sys`: `import sys as s`,
+    ///   `from sys import modules`, `importlib.sys`, `os.sys`, `__import__("sys")`) read in a way
+    ///   that may give a module: a `computed` row, as no edge names a key of it, and the `*`
+    ///   escape unless it is a subscript by a string literal (it may be this module). A read
+    ///   that gives only names or a truth value loads nothing (`modules_names_only`);
+    /// - a tracked module (`TRACKED_MODULES`) handed to anything but a plain attribute read
+    ///   (`vars(importlib)`, `importlib.__dict__`, a call): a `computed` row (`use`) and `*`;
+    /// - a builtin loader or `exec`/`eval` read as a value (`load = __import__`): a `computed`
+    ///   row (`use`); `globals`, `locals` or `vars` read as a value, and any use of
+    ///   `__builtins__`: `*` (and a `use` row for `__builtins__`).
     fn emit_module_reads(&mut self, expr: &'a Expr, at: At) {
         if !self.wants_any(&[Kind::Computed, Kind::Escapes]) {
             return;
         }
+        let pos = self.lines.pos(expr.range().start());
         if let Expr::Subscript(s) = expr
             && self.names_modules(&s.value)
         {
-            let pos = self.lines.pos(s.range().start());
             let sequence = self.sequence_of(&s.slice, at.scope).unwrap_or_default();
             self.push_computed(at, pos, "sys.modules", sequence);
             if !s.slice.is_string_literal_expr() {
@@ -1592,38 +1948,125 @@ impl<'a, 'w> Walker<'a, 'w> {
             return;
         }
         let in_subscript = matches!(self.path.last(), Some(Frame::SubValue));
-        if self.names_modules(expr) && !in_subscript {
-            let pos = self.lines.pos(expr.range().start());
-            self.push_computed(at, pos, "sys.modules", String::new());
-            self.emit_everything(pos);
+        let module = self.module_path(expr);
+        if module.as_deref() == Some("sys.modules") {
+            if !in_subscript && !self.modules_names_only() {
+                self.push_computed(at, pos, "sys.modules", String::new());
+                self.emit_everything(pos);
+            }
+            return;
+        }
+        if let Some(module) = module.filter(|module| TRACKED_MODULES.contains(&module.as_str())) {
+            let read = self.path.last().copied().and_then(attribute_of);
+            if read.is_none_or(|attribute| attribute.starts_with("__")) {
+                self.push_computed(at, pos, "use", module);
+                self.emit_everything(pos);
+            }
             return;
         }
         let Expr::Name(name) = expr else {
             return;
         };
-        let called = matches!(self.path.last(), Some(Frame::CallFunc));
-        let builtin = self.resolve(name.id.as_str());
-        let loads = matches!(
-            builtin.as_deref(),
-            Some("builtins.__import__" | "builtins.exec" | "builtins.eval")
-        );
-        if loads && !called && name.ctx == ExprContext::Load {
-            let pos = self.lines.pos(name.range.start());
-            self.push_computed(at, pos, "use", name.id.to_string());
+        if name.ctx != ExprContext::Load {
+            return;
+        }
+        let id = name.id.as_str();
+        if id == "__builtins__" {
+            self.push_computed(at, pos, "use", id.to_string());
+            self.emit_everything(pos);
+            return;
+        }
+        if matches!(self.path.last(), Some(Frame::CallFunc)) {
+            return;
+        }
+        match self.resolve(id).as_deref() {
+            Some("builtins.__import__" | "builtins.exec" | "builtins.eval") => {
+                self.push_computed(at, pos, "use", id.to_string());
+            }
+            Some("builtins.globals" | "builtins.locals" | "builtins.vars") => {
+                self.emit_everything(pos);
+            }
+            _ => {}
         }
     }
 
-    /// Whether an expression is `sys.modules`, resolved through the imports.
-    fn names_modules(&self, expr: &Expr) -> bool {
-        let dotted = match expr {
-            Expr::Name(name) => name.id.to_string(),
-            Expr::Attribute(attribute) => match &*attribute.value {
-                Expr::Name(head) => format!("{}.{}", head.id.as_str(), attribute.attr.as_str()),
-                _ => return false,
+    /// Whether a read of `sys.modules` (the node being walked) gives only names or a truth value:
+    /// `in` or `not in` it, `len` or `bool` of it, a test, iteration over its keys, `.keys()`, and
+    /// `.get("literal")` compared with `None`.
+    fn modules_names_only(&self) -> bool {
+        let path = &self.path;
+        let n = path.len();
+        let frame = |back: usize| n.checked_sub(back).map(|i| path[i]);
+        match frame(1) {
+            Some(Frame::Operand("cmp:", "in" | "notin", _)) => true,
+            Some(Frame::Terminal("if-test" | "while-test" | "assert" | "for-iter")) => true,
+            Some(Frame::Step("comp:iter" | "comp:if" | "ifexp:test")) => true,
+            Some(Frame::Op("unary:", "not")) => true,
+            Some(Frame::Arg(call, 0)) => matches!(
+                self.resolve(&callee_text(call)).as_deref(),
+                Some("builtins.len" | "builtins.bool")
+            ),
+            Some(Frame::Attr("keys")) => matches!(frame(2), Some(Frame::CallFunc)),
+            Some(Frame::Attr("get")) => match (frame(2), frame(3)) {
+                (Some(Frame::CallFunc), Some(Frame::Operand("cmp:", _, Expr::Compare(c)))) => {
+                    let presence =
+                        (c.ops.iter()).all(|op| matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot));
+                    let none = c.operands.iter().any(Expr::is_none_literal_expr);
+                    let literal = c.operands.iter().any(|operand| {
+                        matches!(operand, Expr::Call(call)
+                            if call.arguments.keywords.is_empty()
+                                && matches!(call.arguments.args.as_ref(), [Expr::StringLiteral(_)]))
+                    });
+                    presence && none && literal
+                }
+                _ => false,
             },
-            _ => return false,
+            _ => false,
+        }
+    }
+
+    /// The module or attribute path an expression names: resolved through the imports
+    /// (`resolve`), through `getattr(x, "name")`, and through `__import__("m")` or
+    /// `importlib.import_module("m")` of a literal; the standard library's attribute paths to
+    /// `sys` (`importlib.sys`, `os.sys`) read as `sys`.
+    fn module_path(&self, expr: &Expr) -> Option<String> {
+        let path = match expr {
+            Expr::Name(name) => self.resolve(name.id.as_str())?,
+            Expr::Attribute(attribute) => {
+                let value = self.module_path(&attribute.value)?;
+                format!("{value}.{}", attribute.attr.as_str())
+            }
+            Expr::Call(call) => match getattr_literal(call) {
+                Some(attribute) => {
+                    format!("{}.{attribute}", self.module_path(&call.arguments.args[0])?)
+                }
+                None => {
+                    let callee = self.resolve(&callee_text(call))?;
+                    let loader = matches!(
+                        callee.as_str(),
+                        "builtins.__import__" | "importlib.import_module"
+                    );
+                    match call.arguments.args.first() {
+                        Some(Expr::StringLiteral(literal)) if loader => literal.value.to_string(),
+                        _ => return None,
+                    }
+                }
+            },
+            _ => return None,
         };
-        self.resolve(&dotted).as_deref() == Some("sys.modules")
+        for alias in ["importlib.sys", "os.sys"] {
+            if let Some(rest) = path.strip_prefix(alias)
+                && (rest.is_empty() || rest.starts_with('.'))
+            {
+                return Some(format!("sys{rest}"));
+            }
+        }
+        Some(path)
+    }
+
+    /// Whether an expression is `sys.modules` (`module_path`).
+    fn names_modules(&self, expr: &Expr) -> bool {
+        self.module_path(expr).as_deref() == Some("sys.modules")
     }
 
     fn emit_string(&mut self, lit: &'a ast::ExprStringLiteral, at: At) {
@@ -1805,4 +2248,150 @@ fn module_argument(call: &ast::ExprCall) -> Option<&Expr> {
         .iter()
         .find(|k| k.arg.as_ref().is_some_and(|name| name.as_str() == "name"));
     keyword.map(|k| &k.value)
+}
+
+/// The attribute a parent frame reads of the value: `.name`, or `getattr(value, "name")`.
+fn attribute_of<'f>(frame: Frame<'f>) -> Option<&'f str> {
+    match frame {
+        Frame::Attr(attribute) => Some(attribute),
+        Frame::Arg(call, 0) => getattr_literal(call),
+        _ => None,
+    }
+}
+
+/// A string literal or an f-string.
+fn is_text_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::StringLiteral(_) | Expr::FString(_))
+}
+
+/// Whether a module-level value holds no call, so binding it runs no first-party code: literals,
+/// names, attributes, displays and operations of such.
+fn plain_value(expr: &Expr) -> bool {
+    match expr {
+        Expr::StringLiteral(_)
+        | Expr::BytesLiteral(_)
+        | Expr::NumberLiteral(_)
+        | Expr::BooleanLiteral(_)
+        | Expr::NoneLiteral(_)
+        | Expr::EllipsisLiteral(_)
+        | Expr::Name(_)
+        | Expr::Attribute(_) => true,
+        Expr::List(l) => l.elts.iter().all(plain_value),
+        Expr::Tuple(t) => t.elts.iter().all(plain_value),
+        Expr::Set(s) => s.elts.iter().all(plain_value),
+        Expr::Dict(d) => (d.items.iter())
+            .all(|item| item.key.as_ref().is_none_or(plain_value) && plain_value(&item.value)),
+        Expr::Starred(s) => plain_value(&s.value),
+        Expr::BinOp(b) => plain_value(&b.left) && plain_value(&b.right),
+        Expr::BoolOp(b) => b.values.iter().all(plain_value),
+        Expr::UnaryOp(u) => plain_value(&u.operand),
+        _ => false,
+    }
+}
+
+/// A method called on the value. A changing method (`append`) is read as a module-level
+/// statement on a bare name, which the walk writes as a row. Of the value itself, a reading
+/// method reads (`copy`, `count`, `get`, `pop`, `values`, ...; `remove`, `sort` and the like
+/// only take items out or reorder them). Of a holder, a copy or a view still holds, an item taken
+/// out (`get`, `pop`) may be the value or hold it, and a count reads. Any other method escapes.
+fn method(carried: Carried, attribute: &str, statement: bool) -> Step {
+    if statement && MUTATORS.contains(&attribute) {
+        return Step::Read;
+    }
+    let holder = matches!(carried, Carried::Holds | Carried::Either);
+    match (holder, attribute) {
+        (_, "count" | "index") => Step::Read,
+        (
+            false,
+            "copy" | "values" | "keys" | "items" | "get" | "pop" | "remove" | "clear" | "discard"
+            | "sort" | "reverse",
+        ) => Step::Read,
+        (true, "copy" | "values" | "items") => Step::Next(Carried::Holds),
+        (true, "get" | "pop") => Step::Next(Carried::Either),
+        (true, "keys" | "remove" | "clear" | "discard" | "sort" | "reverse") => Step::Read,
+        _ => Step::Escape,
+    }
+}
+
+/// An element or a slice of the value (`W[0]`, `W[1:]`): of the value itself an item, read; of
+/// a holder, possibly the value or another holder of it. A store into it (`W[k] = v`) is a change the reading reads as a
+/// row on a bare name at module level (`statement`); one into a holder's slot changes the holder
+/// only; any other store (`+=`, a `for` target) escapes.
+fn element(outer: Option<Frame>, carried: Carried, statement: bool) -> Step {
+    match outer {
+        Some(Frame::Terminal("assign-target" | "annassign-target")) => {
+            if carried == Carried::Holds || (carried == Carried::Same && statement) {
+                Step::Read
+            } else {
+                Step::Escape
+            }
+        }
+        Some(Frame::Terminal("del")) => Step::Read,
+        Some(Frame::Terminal(text)) if text.ends_with("-target") => Step::Escape,
+        _ => match carried {
+            Carried::Same => Step::Read,
+            Carried::Holds | Carried::Either => Step::Next(Carried::Either),
+        },
+    }
+}
+
+/// A fixed step: unpacking (`[*W]`, `{**W}`) copies the value's items and a holder's; a display
+/// or a comprehension's element holds it; a conditional's branch may be it; a test, an index's
+/// bound and formatting read; iterating a holder may give the value; anything else (a lambda,
+/// an await, a yield, a walrus) escapes.
+fn step(text: &str, carried: Carried) -> Step {
+    match text {
+        "star" | "dict:**" => match carried {
+            Carried::Same => Step::Read,
+            Carried::Holds | Carried::Either => Step::Next(Carried::Holds),
+        },
+        text if text.starts_with("elt:") || text.starts_with("dict:") => Step::Next(Carried::Holds),
+        "comp:elt" | "comp:key" | "comp:val" => Step::Next(Carried::Holds),
+        "ifexp:body" | "ifexp:else" => Step::Next(carried),
+        "ifexp:test" | "comp:if" | "fstr" | "tstr" | "slice-part" => Step::Read,
+        "comp:iter" => match carried {
+            Carried::Same => Step::Read,
+            Carried::Holds | Carried::Either => Step::Escape,
+        },
+        _ => Step::Escape,
+    }
+}
+
+/// A statement or header slot: a bare statement, a test, an `except` class, a decorator, a
+/// pattern and `del` read; iterating the value gives its items, a holder's may be it; anything
+/// else escapes, annotations and an assert message too (they keep the object).
+fn terminal(text: &str, carried: Carried) -> Step {
+    match text {
+        "expr" | "if-test" | "while-test" | "assert" | "case-guard" | "except" | "decorator"
+        | "case" | "del" => Step::Read,
+        "for-iter" => match carried {
+            Carried::Same => Step::Read,
+            Carried::Holds | Carried::Either => Step::Escape,
+        },
+        _ => Step::Escape,
+    }
+}
+
+/// The binding an assignment makes of the value: names it binds take it as an alias or a holder
+/// (the link reads the row), unpacking the value itself gives items (read), and anything else
+/// escapes (an attribute or a subscript store, a holder unpacked: the link cannot pair it).
+fn bound(targets: &[Expr], carried: Carried, records: Vec<String>) -> Outcome {
+    let names: Option<Vec<&str>> = (targets.iter())
+        .map(|target| match target {
+            Expr::Name(name) => Some(name.id.as_str()),
+            _ => None,
+        })
+        .collect();
+    if let Some(names) = names {
+        return Outcome::Bound {
+            targets: names.join(","),
+            carried,
+            records,
+        };
+    }
+    let unpacked = (targets.iter()).all(|t| matches!(t, Expr::Tuple(_) | Expr::List(_)));
+    if unpacked && carried == Carried::Same && records.is_empty() {
+        return Outcome::Read;
+    }
+    Outcome::Escape
 }

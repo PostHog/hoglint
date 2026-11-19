@@ -317,6 +317,47 @@ pub fn stored_names(suite: &[Stmt]) -> HashSet<&str> {
     collector.names
 }
 
+/// What a file does to names it may resolve through: the heads of every attribute it stores
+/// (`copy.copy = f`, `builtins.sorted = f`) or hands to `setattr`, and whether it uses
+/// `__builtins__` at all. A reader or a loader reached through such a name is no longer the one
+/// its import names.
+#[derive(Default)]
+pub struct Patched<'a> {
+    pub heads: HashSet<&'a str>,
+    pub builtins: bool,
+}
+
+pub fn patched_names(suite: &[Stmt]) -> Patched<'_> {
+    let mut collector = Patched::default();
+    collector.visit_body(suite);
+    collector
+}
+
+impl<'a> Visitor<'a> for Patched<'a> {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Attribute(attribute) if attribute.ctx != ExprContext::Load => {
+                let mut value = &*attribute.value;
+                while let Expr::Attribute(inner) = value {
+                    value = &inner.value;
+                }
+                if let Expr::Name(head) = value {
+                    self.heads.insert(head.id.as_str());
+                }
+            }
+            Expr::Call(call) => {
+                let setattr = matches!(&*call.func, Expr::Name(f) if f.id.as_str() == "setattr");
+                if setattr && let Some(Expr::Name(head)) = call.arguments.args.first() {
+                    self.heads.insert(head.id.as_str());
+                }
+            }
+            Expr::Name(name) if name.id.as_str() == "__builtins__" => self.builtins = true,
+            _ => {}
+        }
+        visitor::walk_expr(self, expr);
+    }
+}
+
 #[derive(Default)]
 struct StoredNames<'a> {
     names: HashSet<&'a str>,

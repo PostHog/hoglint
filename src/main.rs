@@ -170,6 +170,7 @@ impl Options {
         let prefixes = args.list("--watch-prefixes")?;
         let keys = args.list("--watch-keys")?;
         let hooks = args.list("--watch-hooks")?;
+        let aliased = args.list("--watch-aliased")?;
         let kinds = args.kinds("--kinds", "")?;
         let lite_list = args.value("--lite-list")?;
         let lite_kinds = args.kinds("--lite-kinds", DEFAULT_LITE_KINDS)?;
@@ -190,7 +191,8 @@ impl Options {
         let files = read_list(listing)?;
         let config = ExtractConfig::new(first_party)
             .watching(callees, prefixes, keys)
-            .watching_hooks(hooks);
+            .watching_hooks(hooks)
+            .watching_aliased(aliased);
         let lite = match lite_list {
             None => None,
             Some(listing) => {

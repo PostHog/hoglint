@@ -68,15 +68,26 @@ pub struct BlobStats {
     pub drifted: Vec<String>,
 }
 
+/// What the extractor watches (`ExtractConfig`): callees by last name and by prefix, dict keys,
+/// hook names, and full names watched through any import alias.
+pub struct Watch {
+    pub callees: Vec<String>,
+    pub prefixes: Vec<String>,
+    pub keys: Vec<String>,
+    pub hooks: Vec<String>,
+    pub aliased: Vec<String>,
+}
+
 pub fn configs(
     first_party: Vec<String>,
     kinds: &[String],
-    watch: (Vec<String>, Vec<String>, Vec<String>, Vec<String>),
+    watch: Watch,
     lite_kinds: &[String],
 ) -> Result<(ExtractConfig, ExtractConfig), String> {
     let base = ExtractConfig::new(first_party)
-        .watching(watch.0, watch.1, watch.2)
-        .watching_hooks(watch.3);
+        .watching(watch.callees, watch.prefixes, watch.keys)
+        .watching_hooks(watch.hooks)
+        .watching_aliased(watch.aliased);
     let full = base.clone().with_kinds(Kinds::parse(kinds)?);
     let lite = base.with_kinds(Kinds::parse(lite_kinds)?);
     Ok((full, lite))

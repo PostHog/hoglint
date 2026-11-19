@@ -15,6 +15,13 @@ pub enum Frame<'a> {
     Step(&'static str),
     /// A non-terminal operator step: a prefix (`bin:`, `unary:`, `cmp:`, `bool:`) and the operator.
     Op(&'static str, &'static str),
+    /// An operand of a binary operation, a comparison, or the index of a subscript, with the node
+    /// that holds it, so the use reading can see the other operands. It reads as `Op`: `bin:+`,
+    /// `cmp:left`, `cmp:==`, `slice`.
+    Operand(&'static str, &'static str, &'a Expr),
+    /// The subject of a `match` statement, with the statement, so the use reading can see its
+    /// class patterns. It reads as the terminal `match`.
+    Subject(&'a ast::StmtMatch),
     DictVal(&'a str),
     Walrus(&'a str),
     /// A terminal step with fixed text: a statement or header slot.
@@ -54,7 +61,10 @@ impl Frame<'_> {
                 false,
             ),
             Frame::Step(s) => (s.to_string(), false),
-            Frame::Op(prefix, op) => (format!("{prefix}{op}"), false),
+            Frame::Op(prefix, op) | Frame::Operand(prefix, op, _) => {
+                (format!("{prefix}{op}"), false)
+            }
+            Frame::Subject(_) => ("match".to_string(), true),
             Frame::DictVal(k) => (format!("dict:val:{k}"), false),
             Frame::Walrus(n) => (format!("walrus:{n}"), false),
             Frame::Terminal(s) => (s.to_string(), true),
@@ -96,7 +106,7 @@ pub fn listed(up: &str) -> bool {
 /// The attribute a `getattr(x, "name")` call reads of `x`, with or without a default: its
 /// second argument when that is a string literal that is an identifier. The call reads as
 /// `x.name`.
-fn getattr_literal(call: &ast::ExprCall) -> Option<&str> {
+pub fn getattr_literal(call: &ast::ExprCall) -> Option<&str> {
     let Expr::Name(callee) = call.func.as_ref() else {
         return None;
     };

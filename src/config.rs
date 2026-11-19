@@ -136,6 +136,9 @@ pub struct ExtractConfig {
     /// imports one as (`from m import NAME as ALIAS`), gets a `calls` row, in which a call
     /// argument keeps its callee (`{"call": chain, "o": "Call"}`).
     pub watch_hooks: Vec<String>,
+    /// Full names of callees a call reaches through any import alias and still gets a `calls`
+    /// row (`from importlib import import_module as load`): the loaders.
+    pub watch_aliased: Vec<String>,
     pub kinds: Kinds,
 }
 
@@ -148,6 +151,7 @@ impl ExtractConfig {
             watch_prefixes: Vec::new(),
             watch_keys: Vec::new(),
             watch_hooks: Vec::new(),
+            watch_aliased: Vec::new(),
             kinds: Kinds::ALL,
         }
     }
@@ -166,6 +170,11 @@ impl ExtractConfig {
 
     pub fn watching_hooks(mut self, names: Vec<String>) -> Self {
         self.watch_hooks = sorted_unique(names);
+        self
+    }
+
+    pub fn watching_aliased(mut self, names: Vec<String>) -> Self {
+        self.watch_aliased = sorted_unique(names);
         self
     }
 
@@ -205,6 +214,9 @@ impl ExtractConfig {
         // Only when set, so a config without it keeps the id it had.
         if !self.watch_hooks.is_empty() {
             parts.push(format!("hooks:{}", self.watch_hooks.join(",")));
+        }
+        if !self.watch_aliased.is_empty() {
+            parts.push(format!("aliased:{}", self.watch_aliased.join(",")));
         }
         sha256_hex(parts.join("|").as_bytes())[..8].to_string()
     }
