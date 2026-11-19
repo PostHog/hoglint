@@ -26,7 +26,7 @@ pub use config::{
     ENGINE_ID, ExtractConfig, FACTS_ID, Kind, Kinds, NATIVE_ID, SCHEMA_VERSION, sha256_hex,
 };
 pub use encode::record_line;
-pub use extract::extract;
+pub use extract::{extract, inventory};
 pub use facts::{
     Assign, Branch, Count, Def, DefKind, DottedStr, Facts, FileRecord, Import, Param, Ref, Site,
     Status, Tag, TextKey, UseKey, WatchedCall, WatchedKey, flags,

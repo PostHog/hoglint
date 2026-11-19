@@ -9,7 +9,8 @@ pub enum Frame<'a> {
     Attr(&'a str),
     /// The callee of a call, with the call.
     CallFunc(&'a ast::ExprCall),
-    SubValue,
+    /// The value of a subscript, with the subscript.
+    SubValue(&'a ast::ExprSubscript),
     Arg(&'a ast::ExprCall, usize),
     Kw(&'a ast::ExprCall, Option<&'a str>),
     /// A non-terminal step with fixed text.
@@ -52,7 +53,7 @@ impl Frame<'_> {
         match self {
             Frame::Attr(a) => (format!(".{a}"), false),
             Frame::CallFunc(_) => ("()".to_string(), false),
-            Frame::SubValue => ("[]".to_string(), false),
+            Frame::SubValue(_) => ("[]".to_string(), false),
             Frame::Arg(call, i) => (format!("arg:{i}:{}", callee_text(call)), false),
             Frame::Kw(call, name) => (
                 format!("kw:{}:{}", name.unwrap_or("**"), callee_text(call)),
@@ -162,7 +163,7 @@ pub fn climb(path: &[Frame]) -> (String, String) {
                 None => break,
             },
             Frame::CallFunc(_) => chain.push_str("()"),
-            Frame::SubValue => chain.push_str("[]"),
+            Frame::SubValue(_) => chain.push_str("[]"),
             _ => break,
         }
         i -= 1;

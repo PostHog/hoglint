@@ -318,15 +318,18 @@ pub fn stored_names(suite: &[Stmt]) -> HashSet<&str> {
 }
 
 /// What a file does to names it may resolve through: the heads of every attribute it stores or
-/// deletes (`copy.copy = f`, `builtins.sorted = f`, `del copy.copy`), of every `__dict__` it
-/// writes into (`copy.__dict__["copy"] = f`), and of what it hands to `setattr` or `delattr`;
-/// whether it uses `__builtins__` at all; and whether it stores into an object it reaches by
-/// no name (`__import__("copy").copy = f`, `setattr(f(), ...)`), which may be any module. A
-/// reader or a loader reached through such a name, or through any name after the last, is no
-/// longer the one its import names.
+/// deletes (`copy.copy = f`, `builtins.sorted = f`, `del copy.copy`), of every `__dict__` or
+/// `__globals__` it writes into (`copy.__dict__["copy"] = f`), and of what it hands to `setattr`
+/// or `delattr`; the names it stores an item into (`items`: `_d["print"] = f`, where `_d` may be
+/// a module's `__dict__`); whether it uses `__builtins__` at all; and whether it stores into an
+/// object it reaches by no name (`__import__("copy").copy = f`, `setattr(f(), ...)`) or
+/// through `__self__` or `__globals__` (`len.__self__.print = f`, `f.__globals__["x"] = g`),
+/// which may be any module. A reader or a loader reached through such a name, or through any
+/// name after the last, is no longer the one its import names.
 #[derive(Default)]
 pub struct Patched<'a> {
     pub heads: HashSet<&'a str>,
+    pub items: HashSet<&'a str>,
     pub builtins: bool,
 }
 
@@ -343,6 +346,12 @@ impl<'a> Patched<'a> {
     fn store_into(&mut self, mut value: &'a Expr) {
         loop {
             match value {
+                Expr::Attribute(inner)
+                    if matches!(inner.attr.as_str(), "__self__" | "__globals__") =>
+                {
+                    self.builtins = true;
+                    return;
+                }
                 Expr::Attribute(inner) => value = &inner.value,
                 Expr::Subscript(inner) => value = &inner.value,
                 Expr::Name(head) => {
@@ -365,10 +374,17 @@ impl<'a> Visitor<'a> for Patched<'a> {
                 self.store_into(&attribute.value);
             }
             Expr::Subscript(subscript) if subscript.ctx != ExprContext::Load => {
-                if let Expr::Attribute(dict) = &*subscript.value
-                    && dict.attr.as_str() == "__dict__"
-                {
-                    self.store_into(&dict.value);
+                match &*subscript.value {
+                    Expr::Attribute(dict) if dict.attr.as_str() == "__dict__" => {
+                        self.store_into(&dict.value);
+                    }
+                    Expr::Attribute(dict) if dict.attr.as_str() == "__globals__" => {
+                        self.builtins = true;
+                    }
+                    Expr::Name(name) => {
+                        self.items.insert(name.id.as_str());
+                    }
+                    _ => {}
                 }
             }
             Expr::Call(call) => {

@@ -46,6 +46,24 @@ pub fn extract(raw: &[u8], sha256: String, config: &ExtractConfig) -> FileRecord
     }
 }
 
+/// The use reading's inventory of one file's bytes (`Walker::inventory`), for the test against
+/// CPython's symbol table; None when the file does not parse.
+pub fn inventory(raw: &[u8]) -> Option<Vec<(String, String)>> {
+    let text = source_text(raw).ok()?;
+    let parsed = parse_py314(&text, Mode::Module);
+    if parsed.has_syntax_errors() {
+        return None;
+    }
+    let module = parsed.syntax().as_module()?;
+    let config = ExtractConfig::new(Vec::new());
+    let lines = LineIndex::new(&text);
+    let (defs, bound) = DefTable::build(&module.body, &text, &lines, &config);
+    let stored = stored_names(&module.body);
+    let sequences = Sequences::of(&[], &defs);
+    let walker = Walker::new(&text, &lines, &defs, &bound, &stored, &sequences, &config);
+    Some(walker.inventory(&module.body))
+}
+
 struct FileFacts<'s, 'c> {
     src: &'s str,
     lines: LineIndex,

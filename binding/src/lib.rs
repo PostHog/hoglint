@@ -45,6 +45,14 @@ pub(crate) fn ids_from(raw: &[u8]) -> PyResult<Vec<u32>> {
     Ok(chunks.iter().map(|c| u32::from_le_bytes(*c)).collect())
 }
 
+/// The use reading's inventory of one module's source (`hoglint_facts::inventory`): each
+/// module-level or class-body binding identity as (the class's dotted name, empty for the module;
+/// the name); None when the source does not parse. For the test against CPython's `symtable`.
+#[pyfunction]
+fn inventory(source: &[u8]) -> Option<Vec<(String, String)>> {
+    hoglint_facts::inventory(source)
+}
+
 #[pymodule]
 fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Link>()?;
@@ -52,6 +60,7 @@ fn hoglint_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<evaluator::Rules>()?;
     module.add_function(wrap_pyfunction!(link_jsonl, module)?)?;
     module.add_function(wrap_pyfunction!(link_blobs, module)?)?;
+    module.add_function(wrap_pyfunction!(inventory, module)?)?;
     module.add("FACTS_ID", hoglint_facts::FACTS_ID)?;
     module.add("NATIVE_ID", hoglint_facts::NATIVE_ID)?;
     module.add("PROTOCOL", PROTOCOL)?;
