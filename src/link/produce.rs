@@ -1319,6 +1319,35 @@ pub struct Producers<'p> {
     /// The attributes stored on each class the graph defines, from any file and scope
     /// (`stores`), by class; `*` for a computed name.
     pub class_stores: FxHashMap<Ent, FxHashSet<Sid>>,
+    /// Each file's values that may be a module, a class or a function, used where no entry
+    /// accounts for them (`values`), by owner.
+    pub values: FxHashMap<usize, Vec<Held>>,
+    /// The classes some file uses where no entry accounts for them (`values`).
+    pub touched_classes: FxHashSet<Ent>,
+    /// The first-party modules some file uses where no entry accounts for them (`values`).
+    pub touched_modules: FxHashSet<Sid>,
+    /// Classes handed to a record constructor: (class, owner, scope, line, callee). Accounted
+    /// only when the callee builds a record (`touched`).
+    pub handed: Vec<(Ent, usize, i32, u32, String)>,
+    /// The classes `touched` is deciding, against a loop through record callees.
+    pub touching: FxHashSet<Ent>,
+}
+
+/// A value a `!` row names, as the reading file resolves it (`Producers::values`).
+#[derive(Clone, Copy, Debug)]
+pub enum Held {
+    /// A first-party module.
+    Module(Sid),
+    /// A class the graph defines; reached through a dunder attribute (its module then too).
+    Class(Ent, bool),
+    /// A function the graph defines; reached through a dunder attribute.
+    Def(Ent, bool),
+    /// A first-party name of another kind (`plain_variable`).
+    Variable(Ent),
+    /// An attribute of a class.
+    Member,
+    /// Anything else: any module.
+    Any,
 }
 
 /// What each module-level sequence of names holds, by (module, name): per item, the entity its
@@ -1380,6 +1409,7 @@ impl Producers<'_> {
         self.each(Self::references);
         self.read_classes();
         self.each(Self::stores);
+        self.each(Self::values);
         self.each(Self::sequences);
         let read = std::mem::take(&mut self.declared);
         let attributes = std::mem::take(&mut self.attributes);
@@ -1769,20 +1799,36 @@ impl Producers<'_> {
             let scope = escape.scope;
             let (keys, touch): (Vec<Sid>, Touch) = if text == "*" {
                 (out.keys().copied().collect(), Touch::Other)
-            } else if text.starts_with('@') {
-                // A store into a module or a class (`stores`), read before any file.
+            } else if text.starts_with('@') || text.starts_with('!') {
+                // A store into a module or a class (`stores`), or a value that may be a module,
+                // a class or a function (`values`), read before any file.
                 continue;
             } else if let Some((name, relied)) = text.split_once('?') {
                 // A read that relied on these names' bindings: a binding of one from another
                 // file or through a module object makes it an escape.
                 let module = self.scopes[owner].module;
                 let stored = self.foreign.get(&module);
-                let rebound = relied.split(',').any(|dep| {
-                    stored.is_some_and(|names| {
-                        (names.iter())
-                            .any(|n| matches!(self.core.it.s(*n), "*") || self.core.it.s(*n) == dep)
-                    })
-                });
+                let mut rebound = self.module_touched(module)
+                    || relied.split(',').any(|dep| {
+                        stored.is_some_and(|names| {
+                            (names.iter()).any(|n| {
+                                matches!(self.core.it.s(*n), "*") || self.core.it.s(*n) == dep
+                            })
+                        })
+                    });
+                // `#Class.ATTR`: a read that took a class attribute's body binding as its type,
+                // which holds only from a stable class (`stable_class`).
+                let classes: Vec<(String, String)> = (relied.split(','))
+                    .filter_map(|dep| dep.strip_prefix('#')?.rsplit_once('.'))
+                    .map(|(class, attribute)| (class.to_string(), attribute.to_string()))
+                    .collect();
+                for (class, attribute) in classes {
+                    let class = Ent {
+                        m: module,
+                        s: self.core.it.intern(&class),
+                    };
+                    rebound = rebound || !self.stable_class(class, &attribute);
+                }
                 if !rebound {
                     continue;
                 }
@@ -1836,7 +1882,8 @@ impl Producers<'_> {
                             .unwrap_or_default();
                         self.plain_record(owner, &rows)
                     });
-                if !(classes && copied && scope == -1) {
+                let proved = classes && self.callees_proved(owner, scope, escape.line, callees);
+                if !(proved && copied && scope == -1) {
                     (held, Touch::Escaped)
                 } else {
                     for target in targets.split(',') {
@@ -1938,38 +1985,36 @@ impl Producers<'_> {
         (false, class)
     }
 
-    /// T3's class: bare, so building a record runs no code but its constructor's body (limit 1):
-    /// no base, no class keyword (no metaclass), each decorator `dataclasses.dataclass` (with any
-    /// arguments), no hook the construction invokes with the value (`__setattr__`,
+    /// T3's class: plain, so building a record runs no code but its constructor's body (limit
+    /// 1): no base, no class keyword (no metaclass), each decorator `dataclasses.dataclass` (with
+    /// any arguments), no decorated def in the body (a property, its setter or another
+    /// descriptor), no hook the construction invokes with the value (`__setattr__`,
     /// `__getattribute__`, `__getattr__`, `__set_name__`, defined or assigned in the body, or a
-    /// default whose class has `__set__`: each default must be `inert_default`), and no store
-    /// on the class from any file (`class_stores`). A `__new__` it defines is a constructor body
-    /// too. Anything else escapes.
+    /// default whose class has `__get__` or `__set__`: each default must be `inert_default`), no
+    /// store on the class from any file (`class_stores`), every occurrence of it accounted
+    /// (`touched`), and no first-party module value that may be its module used otherwise
+    /// (`module_touched`). A `__new__` it defines is a constructor body too. Anything else
+    /// escapes.
     fn bare_record(&mut self, class: Ent) -> bool {
         let Some((owner, idx)) = self.def_of(class.m, class.s, HitKind::Class) else {
             return false;
         };
-        if self.class_stores.contains_key(&class) {
+        if self.class_stores.contains_key(&class)
+            || self.touched(class)
+            || self.module_touched(class.m)
+        {
             return false;
         }
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
         let record = &facts.files[file];
         let node = &record.defs[idx as usize];
-        if !node.bases.is_empty() || node.keywords {
+        if !node.bases.is_empty() || node.keywords || !self.dataclass_only(owner, node) {
             return false;
         }
-        let dataclass = node.dec.iter().all(|decorator| {
-            let callee = match decorator {
-                V::Call(callee, ..) => &**callee,
-                decorator => decorator,
-            };
-            let names = self.named(owner, callee, node.s, node.l);
-            names.is_some_and(|(surface, target)| {
-                surface == "dataclasses.dataclass" || target == "dataclasses.dataclass"
-            })
-        });
-        if !dataclass {
+        // A decorated def in the body may be a property, its setter, or another descriptor.
+        let decorated = (record.defs.iter()).any(|def| def.s == idx as i32 && !def.dec.is_empty());
+        if decorated {
             return false;
         }
         let it = &self.core.it;
@@ -2025,9 +2070,9 @@ impl Producers<'_> {
         Some((core.kind(hit), core.origin(hit)))
     }
 
-    /// Whether a class-body default of a record class is no data descriptor, so the generated
-    /// `__init__` stores the value with no first-party code: a literal, a display, a function,
-    /// a class whose metaclass is `type` or `abc.ABCMeta` (`plain_metaclass`), or
+    /// Whether a class-body default of a record class is no descriptor, so the generated
+    /// `__init__` stores the value with no first-party code: a literal, a display, a class whose
+    /// metaclass is `type` or `abc.ABCMeta` (`plain_metaclass`; a function is a descriptor), or
     /// `dataclasses.field(...)` whose `default=` is one of these (read from the record's text,
     /// `text` and the row).
     fn inert_default(
@@ -2242,6 +2287,276 @@ impl Producers<'_> {
                 _ => {}
             }
         }
+    }
+
+    /// The `!` rows of a file (round 9), the walker's uses of a value that may be a module, a
+    /// class or a function where no entry accounts for them, from any scope, resolved where the
+    /// file reads them (`Held`). A class so used, or one handed to a record constructor whose
+    /// callee builds no record, is touched (`touched`); a module so used, or the module of a
+    /// class or def reached through a dunder attribute, is touched for every file
+    /// (`touched_modules`). The file's own list is the reading file's evidence for its records
+    /// (`callees_proved`).
+    fn values(&mut self, owner: usize) {
+        let facts = self.core.facts.clone();
+        let record = &facts.files[self.scopes[owner].file as usize];
+        if !record.ok() {
+            return;
+        }
+        let module = self.scopes[owner].module;
+        for escape in &record.escapes {
+            let Some(text) = self.core.it.s(escape.name).strip_prefix('!') else {
+                continue;
+            };
+            let (text, marker) = match text.find(['@', '#', '%']) {
+                Some(at) => (text[..at].to_string(), text[at..].to_string()),
+                None => (text.to_string(), String::new()),
+            };
+            let through = marker == "%";
+            let held = match text.as_str() {
+                "*" => Held::Any,
+                "." => Held::Module(module),
+                _ if text.starts_with(':') => {
+                    let named = self.core.it.intern(&text[1..]);
+                    if self.core.exists(named) {
+                        Held::Module(named)
+                    } else {
+                        Held::Any
+                    }
+                }
+                _ => {
+                    let chain = self.core.it.intern(&text);
+                    let core = &mut *self.core;
+                    let names = &self.settings.names;
+                    let (found, rest) = core.chain_lookup(
+                        names,
+                        &mut self.scopes[owner],
+                        chain,
+                        escape.scope,
+                        escape.line,
+                    );
+                    match found.hit {
+                        Some(hit) if rest.is_empty() => {
+                            let origin = core.origin(hit);
+                            match core.kind(hit) {
+                                HitKind::Module => Held::Module(origin.m),
+                                HitKind::Class => Held::Class(origin, through),
+                                HitKind::Def => Held::Def(origin, through),
+                                _ => Held::Variable(origin),
+                            }
+                        }
+                        Some(hit) if core.kind(hit) == HitKind::Class => Held::Member,
+                        _ => Held::Any,
+                    }
+                }
+            };
+            match (held, marker.as_str()) {
+                (Held::Class(class, _), callee) if callee.starts_with('@') => {
+                    let callee = callee[1..].to_string();
+                    self.handed
+                        .push((class, owner, escape.scope, escape.line, callee));
+                }
+                (Held::Class(_, _), "#default") => {}
+                (Held::Class(class, through), _) => {
+                    self.touched_classes.insert(class);
+                    if through {
+                        self.touched_modules.insert(class.m);
+                    }
+                }
+                (Held::Def(def, true), _) => {
+                    self.touched_modules.insert(def.m);
+                }
+                (Held::Module(module), _) => {
+                    self.touched_modules.insert(module);
+                }
+                _ => {}
+            }
+            self.values.entry(owner).or_default().push(held);
+        }
+    }
+
+    /// Whether some file uses the class where no entry accounts for it (`values`): a `!` row
+    /// that names it, or an argument of a record constructor whose callee builds no record.
+    fn touched(&mut self, class: Ent) -> bool {
+        if self.touched_classes.contains(&class) {
+            return true;
+        }
+        if !self.touching.insert(class) {
+            return false;
+        }
+        let handed: Vec<(Ent, usize, i32, u32, String)> = (self.handed.iter())
+            .filter(|handed| handed.0 == class)
+            .cloned()
+            .collect();
+        let out = (handed.into_iter()).any(|(_, owner, scope, line, callee)| {
+            !self.builds_record(owner, scope, line, &callee)
+        });
+        self.touching.remove(&class);
+        out
+    }
+
+    /// Whether a module is `module` or inside it (`module` is a package of it).
+    fn within(&self, module: Sid, target: Sid) -> bool {
+        let (module, target) = (self.core.it.s(module), self.core.it.s(target));
+        target == module
+            || target
+                .strip_prefix(module)
+                .is_some_and(|rest| rest.starts_with('.'))
+    }
+
+    /// Whether some first-party file uses a value that may be `module` where no entry accounts
+    /// for it (`touched_modules`): the module itself or a package of it.
+    fn module_touched(&self, module: Sid) -> bool {
+        (self.touched_modules.iter()).any(|touched| self.within(*touched, module))
+    }
+
+    /// Part B (round 9): a record's callee is trusted only on positive evidence in the reading
+    /// file. Every value there that may be the callee's module or the callee itself (`values`)
+    /// is used only as an attribute read or a call: a class or a def the graph proves is no
+    /// module, unless reached through a dunder attribute (its module then); a first-party name
+    /// bound only to displays and literals is none (`plain_variable`); an attribute of a class
+    /// is none. Any other value may be any module, `dataclasses` among them.
+    fn callees_proved(&mut self, owner: usize, scope: i32, line: u32, callees: &str) -> bool {
+        let held = self.values.get(&owner).cloned().unwrap_or_default();
+        for callee in callees.split(',') {
+            let (_, class) = self.record_callee(owner, scope, line, callee);
+            for value in &held {
+                let proved = match *value {
+                    Held::Any => false,
+                    Held::Member => true,
+                    Held::Variable(name) => self.plain_variable(name),
+                    Held::Module(module) => {
+                        class.is_some_and(|class| !self.within(module, class.m))
+                    }
+                    Held::Class(other, through) => {
+                        class != Some(other)
+                            && !(through && class.is_some_and(|class| class.m == other.m))
+                    }
+                    Held::Def(def, through) => {
+                        !(through && class.is_none_or(|class| class.m == def.m))
+                    }
+                };
+                if !proved {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Whether a first-party module-level name is bound only by assignments of displays and
+    /// literals, and by no other form (`=name`): it holds no module.
+    fn plain_variable(&mut self, name: Ent) -> bool {
+        let Some(table) = self.core.table(name.m) else {
+            return false;
+        };
+        let Some(file) = self.core.table_at(table).record else {
+            return false;
+        };
+        let facts = self.core.facts.clone();
+        let record = &facts.files[file as usize];
+        let text = self.core.it.s(name.s).to_string();
+        let rebound = format!("={text}");
+        if (record.escapes.iter()).any(|e| e.scope == -1 && self.core.it.s(e.name) == rebound) {
+            return false;
+        }
+        let rows: Vec<&Assign> = (record.assigns.iter())
+            .filter(|row| row.s == -1)
+            .filter(|row| (row.targets.iter()).any(|t| matches!(t, V::Chain(n) if *n == name.s)))
+            .collect();
+        !rows.is_empty()
+            && rows.iter().all(|row| {
+                matches!(
+                    row.value,
+                    Some(
+                        V::Str(..)
+                            | V::Scalar
+                            | V::Null
+                            | V::Tuple(_)
+                            | V::List(_)
+                            | V::Set(_)
+                            | V::Dict(_)
+                    )
+                ) && row.targets.len() == 1
+            })
+    }
+
+    /// Part C (round 9, t30's ruling (a)): a class attribute read returns what the body binds
+    /// only from a stable class: no file stores into it (`class_stores`), every occurrence of it
+    /// is accounted (`touched`), its lineage's metaclass is `type` or `abc.ABCMeta` with no
+    /// decorator but `dataclasses.dataclass` (`stable_lineage`), and its body binds the
+    /// attribute once, at its top level (an assignment, a def or a class).
+    fn stable_class(&mut self, class: Ent, attribute: &str) -> bool {
+        let Some((owner, idx)) = self.def_of(class.m, class.s, HitKind::Class) else {
+            return false;
+        };
+        if self.class_stores.contains_key(&class)
+            || self.touched(class)
+            || !self.stable_lineage(class, 0)
+        {
+            return false;
+        }
+        let facts = self.core.facts.clone();
+        let record = &facts.files[self.scopes[owner].file as usize];
+        let top = record.defs[idx as usize].f | crate::facts::flags::CLASS;
+        let first = attribute.split('.').next().unwrap_or_default();
+        let it = &self.core.it;
+        let assigned = (record.assigns.iter())
+            .filter(|row| row.s == idx as i32)
+            .filter(|row| {
+                (row.targets.iter()).any(|t| matches!(t, V::Chain(n) if it.s(*n) == first))
+            })
+            .map(|row| row.f);
+        let defined = (record.defs.iter())
+            .filter(|def| def.s == idx as i32 && it.s(def.n) == first)
+            .map(|def| def.f);
+        let flags: Vec<u32> = assigned.chain(defined).collect();
+        matches!(flags.as_slice(), [flags] if *flags == top)
+    }
+
+    /// Whether a class and its first-party bases, at any depth, have no class keyword (so no
+    /// metaclass but their bases'), no decorator but `dataclasses.dataclass`, and bases that
+    /// are `object`, `abc.ABC`, `typing.Generic` or such first-party classes: the metaclass is
+    /// `type` or `abc.ABCMeta` along the whole lineage.
+    fn stable_lineage(&mut self, class: Ent, depth: usize) -> bool {
+        if depth > MAX_BASE_DEPTH {
+            return false;
+        }
+        let Some((owner, idx)) = self.def_of(class.m, class.s, HitKind::Class) else {
+            return false;
+        };
+        let facts = self.core.facts.clone();
+        let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
+        if node.keywords || !self.dataclass_only(owner, node) {
+            return false;
+        }
+        node.bases.iter().all(|base| {
+            if let Some((HitKind::Class, base_class)) = self.named_hit(owner, base, node.s, node.l)
+                && self
+                    .def_of(base_class.m, base_class.s, HitKind::Class)
+                    .is_some()
+            {
+                return self.stable_lineage(base_class, depth + 1);
+            }
+            self.named(owner, base, node.s, node.l)
+                .is_some_and(|(surface, target)| {
+                    PLAIN_BASES.contains(&surface.as_str())
+                        || PLAIN_BASES.contains(&target.as_str())
+                })
+        })
+    }
+
+    /// Whether each decorator of a class is `dataclasses.dataclass` (with any arguments).
+    fn dataclass_only(&mut self, owner: usize, node: &Def) -> bool {
+        node.dec.iter().all(|decorator| {
+            let callee = match decorator {
+                V::Call(callee, ..) => &**callee,
+                decorator => decorator,
+            };
+            let names = self.named(owner, callee, node.s, node.l);
+            names.is_some_and(|(surface, target)| {
+                surface == "dataclasses.dataclass" || target == "dataclasses.dataclass"
+            })
+        })
     }
 
     /// A name of this module some file stores into it (`foreign`), or an attribute of a class
@@ -3026,12 +3341,34 @@ impl Producers<'_> {
             .map(str::to_string);
         let Some(rest) = rest else {
             // A class member the lookup lands on (`Base.WORKFLOWS` read in another class body)
-            // is stored as one: no reference edge may read it from outside.
+            // is stored as one: no reference edge may read it from outside. It is read back
+            // only from a stable class (`stable_class`).
+            let member = (self.core.it.s(target.s).rsplit_once('.'))
+                .filter(|_| surface == origin)
+                .map(|(class, attribute)| (class.to_string(), attribute.to_string()));
+            if let Some((class, attribute)) = member {
+                let class = Ent {
+                    m: target.m,
+                    s: self.core.it.intern(&class),
+                };
+                let is_class = self.def_of(class.m, class.s, HitKind::Class).is_some();
+                if is_class && !self.stable_class(class, &attribute) {
+                    out.push(None);
+                    return;
+                }
+            }
             if reading == Reading::Declaration || self.core.it.s(target.s).contains('.') {
                 self.bound_name(target, reading, seen);
             }
             return;
         };
+        // An attribute of a class is what its body binds only when the class is stable.
+        if self.def_of(target.m, target.s, HitKind::Class).is_some()
+            && !self.stable_class(target, &rest)
+        {
+            out.push(None);
+            return;
+        }
         let key = format!("{}.{rest}", self.core.it.s(target.s));
         let attribute = Ent {
             m: target.m,

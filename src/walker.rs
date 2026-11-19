@@ -68,53 +68,133 @@ fn name_id(expr: &Expr) -> &str {
 /// to a name's items (`emit_mutation`).
 const MUTATORS: [&str; 5] = ["append", "extend", "insert", "update", "add"];
 
-/// What a module-level or class-body binding identity is, joined over every binding of it
-/// (`Walker::survey`): the use reading starts from it.
-#[derive(Clone, Debug, Default)]
+/// What an expression is to the use reading (`Walker::kind_of`, the one function that gives
+/// every expression its kind, at binding sites and at use sites alike). It keeps the receiver's
+/// exact type and the set of source lists apart.
+#[derive(Clone, Debug, PartialEq)]
 struct Shape {
-    /// Every binding is a display, a comprehension, a literal, a builtin copy, a concatenation
-    /// of such, or an alias of a name that is: its dunders are builtin.
-    builtin: bool,
-    /// Some binding builds a record (a call of a record constructor, `dataclasses.replace`).
+    /// Proved builtin-typed: a display, a literal, a comprehension, or a slice, copy, view or
+    /// re-list of a value that is itself proved builtin-typed. Only then are its dunders builtin.
+    exact: bool,
+    /// It may be an item of its sources (never exact); else it is them, or holds their items.
+    item: bool,
+    /// A record (T3, T4): it holds what it was built with.
     record: bool,
-    /// Some binding is a `for` target over a name (of a scope), an item of it, or (the flag) a
-    /// copy of it: the identity may be an item of it, or hold its items.
-    item_of: Option<(String, i64, bool)>,
-    /// Some binding aliases a class attribute, directly or through other aliases: a store on the
-    /// class, a second class statement, a decorator or a metaclass may replace what the body
-    /// binds, so it is never T13's other operand.
-    class_alias: bool,
-    /// The lists a re-list's items come from (`_Z = [*W]`, `_Z = W + [x]`, `_Z += W`), each a
-    /// name of a scope: an item of the identity is an item of each of them.
-    relist: Vec<(String, i64)>,
+    /// What of the value an expression is that only its parent keeps (`Part`).
+    part: Part,
+    /// Every name whose value it may be, or whose items it may hold or be: a name of a scope, or
+    /// a class attribute by its dotted path (scope -1). A name's own sources are in it, so an
+    /// escape lands on every root source.
+    sources: Vec<(String, i64)>,
+    /// The class attributes (dotted paths) whose body binding its exact type takes: a use that
+    /// relies on that type writes them (`#Class.ATTR` in `name?...`), and the link makes the read
+    /// an escape unless the class is stable.
+    relies: Vec<String>,
 }
 
-/// One binding of an identity, as the inventory reads it (`Walker::survey`).
-enum Bind<'a> {
-    /// A value whose dunders are builtin: a display, a comprehension, a literal, a builtin copy.
-    Same,
-    /// A value that is another identity's (an alias, a concatenation): each group lists the
-    /// identities one name may be.
-    Alias(Vec<Vec<(i64, &'a str)>>),
-    /// A record.
-    Record,
-    /// An item of a name of a scope, or (the flag) a copy of it, which holds its items.
-    Item(String, i64, bool),
-    /// An alias of a class attribute (`X = Class.ATTR`): as `Alias`, and never T13's other
-    /// operand (`Shape::class_alias`).
-    ClassAlias(Identity<'a>),
-    /// Anything else.
-    Opaque,
+/// A piece of a value that only one parent keeps (`Walker::step`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Part {
+    /// The value, or the item, itself.
+    Whole,
+    /// A method of it that copies (`copy`, `keys`, `values`, `items`): only its call keeps it.
+    Copier,
+    /// A method of it that gives an item (`get`, `pop`): only its call keeps it.
+    Picker,
+    /// `*X`: only a list, tuple or set display keeps it.
+    Star,
 }
 
-impl<'a> Bind<'a> {
-    fn groups(self) -> Vec<Vec<(i64, &'a str)>> {
-        match self {
-            Bind::Alias(groups) => groups,
-            Bind::ClassAlias(identity) => vec![vec![identity], vec![CLASS_ALIAS]],
-            _ => Vec::new(),
+impl Shape {
+    /// A value of none of the names: builtin-typed or not.
+    fn fresh(exact: bool) -> Shape {
+        Shape {
+            exact,
+            item: false,
+            record: false,
+            part: Part::Whole,
+            sources: Vec::new(),
+            relies: Vec::new(),
         }
     }
+
+    /// A new container of these sources' items, builtin-typed or not.
+    fn holding(exact: bool, sources: &[(String, i64)]) -> Shape {
+        Shape {
+            sources: sources.to_vec(),
+            ..Shape::fresh(exact)
+        }
+    }
+
+    /// A builtin-typed copy of a builtin-typed value's items, whose type relies on what the
+    /// value's does.
+    fn copy_of(kind: &Shape) -> Shape {
+        Shape {
+            relies: kind.relies.clone(),
+            ..Shape::holding(true, &kind.sources)
+        }
+    }
+
+    /// An item of these sources.
+    fn item_of(sources: &[(String, i64)]) -> Shape {
+        Shape {
+            item: true,
+            sources: sources.to_vec(),
+            ..Shape::fresh(false)
+        }
+    }
+
+    /// The least safe of both: builtin only when both are, every source of either.
+    fn join(&self, other: &Shape) -> Shape {
+        let mut sources = self.sources.clone();
+        for source in &other.sources {
+            if !sources.contains(source) {
+                sources.push(source.clone());
+            }
+        }
+        let part = if self.part == other.part {
+            self.part
+        } else {
+            Part::Whole
+        };
+        let mut relies = self.relies.clone();
+        for class in &other.relies {
+            if !relies.contains(class) {
+                relies.push(class.clone());
+            }
+        }
+        Shape {
+            exact: self.exact && other.exact,
+            item: self.item || other.item,
+            record: self.record || other.record,
+            part,
+            sources,
+            relies,
+        }
+    }
+
+    /// What a name bound to it holds: a part no parent kept is read as an item of its sources,
+    /// whose uses escape for them.
+    fn bound(self) -> Shape {
+        if self.part == Part::Whole {
+            return self;
+        }
+        Shape::item_of(&self.sources)
+    }
+}
+
+/// One binding of an identity, as the inventory reads it (`Walker::survey`); `Walker::settle`
+/// gives each its shape by `kind_of`.
+enum Bind<'a> {
+    /// `name = value` or `name: T = value`, in a scope.
+    Value(&'a Expr, i64),
+    /// A `for` target over this iterable, in a scope: an item of it.
+    Items(&'a Expr, i64),
+    /// `name += value` or `name |= value`, in a scope: a display or a literal keeps the name as
+    /// it is; any other value adds its sources.
+    Augment(&'a Expr, i64),
+    /// Anything else.
+    Opaque,
 }
 
 /// A module-level or class-body binding identity: (scope, name).
@@ -130,31 +210,20 @@ enum Aliased<'a> {
     Unknown,
 }
 
-/// A marker in an alias's groups (`Bind::Alias`): one of the names is a class attribute.
-const CLASS_ALIAS: Identity<'static> = (-2, "");
-
 /// A binding the inventory found: the identity and how it binds.
 type Found<'a> = (Identity<'a>, Bind<'a>);
 
 /// What a use starts as (`Walker::start`).
 #[derive(Clone, Debug)]
 enum Start {
-    /// The name's own value; `builtin` as `Shape::builtin`.
-    Value { builtin: bool },
+    /// A name the inventory binds, as its shape says (`Shape`).
+    Value(Shape),
+    /// A comprehension's variable: an item of its sources, and no value of its own.
+    Variable(Shape),
     /// A class this file defines: it holds what its body binds.
     Class,
     /// A record: it holds its arguments.
     Record,
-    /// An item of `source` (a name of `scope`): it keeps the provenance, so handed on it
-    /// escapes for the source. `own`: a name the inventory binds to an item, which is also a
-    /// value of its own (a comprehension's variable is not).
-    Item {
-        source: String,
-        scope: i64,
-        own: bool,
-        copy: bool,
-        builtin: bool,
-    },
     /// An attribute of a class this file defines (a class index) that its body does not bind:
     /// it may be a base's, so every use escapes for the class and its bases of this file.
     Inherited(i64),
@@ -170,17 +239,6 @@ enum Chain<'a> {
     /// An attribute of a class (its index).
     Attribute(i64, &'a str),
 }
-
-/// The iterator builtins T8 reads.
-const ITERATORS: [&str; 7] = [
-    "builtins.iter",
-    "builtins.reversed",
-    "builtins.enumerate",
-    "builtins.zip",
-    "builtins.map",
-    "builtins.filter",
-    "itertools.chain",
-];
 
 /// Where a use takes the value (`Walker::read_use`).
 enum Outcome<'a> {
@@ -236,22 +294,6 @@ const ENTRY_POINTS: [&str; 26] = [
     "locate",
     "importfile",
     "safeimport",
-];
-
-/// The builtins a callable slot may name (`Walker::callable_slot`): they read their argument.
-/// Not `id`: its integer gives the object back (`ctypes`).
-const READING_BUILTINS: [&str; 11] = [
-    "builtins.str",
-    "builtins.repr",
-    "builtins.len",
-    "builtins.bool",
-    "builtins.hash",
-    "builtins.int",
-    "builtins.float",
-    "builtins.list",
-    "builtins.tuple",
-    "builtins.sorted",
-    "builtins.type",
 ];
 
 /// Where a node sits: its scope, the def whose header holds it (-1 = none), and the flags of
@@ -319,6 +361,20 @@ pub struct TypedDictClass {
     pub fields: Vec<(String, Value, i64, i64)>,
 }
 
+/// The dunder attributes a module-value chain reads as plain attributes (`emit_module_value`): a
+/// name, a docstring or a path, no namespace.
+const PLAIN_DUNDERS: [&str; 6] = [
+    "__name__",
+    "__qualname__",
+    "__module__",
+    "__doc__",
+    "__file__",
+    "__path__",
+];
+
+/// The most rounds `Walker::settle` runs before it gives up on builtin types.
+const MAX_SETTLE: usize = 64;
+
 /// The most `calls` rows one call becomes over the values of the loops around it.
 const MAX_LOOP_ROWS: usize = 64;
 
@@ -359,11 +415,14 @@ pub struct Walker<'a, 'w> {
     /// The variables of the loops, comprehensions and lambdas around the code being walked.
     elements: Vec<ElementOf<'a>>,
     /// The inventory: what each module-level and class-body binding identity is, by (scope,
-    /// name), joined over every binding of it (`survey`).
+    /// name), joined over every binding of it (`survey`, `settle`).
     identities: HashMap<(i64, &'a str), Shape>,
-    /// The variables of the comprehensions around the code being walked that take items of a
-    /// module-level or class-body name: (variable, source name, source scope).
-    items: Vec<(&'a str, String, i64)>,
+    /// The variables of the comprehensions around the code being walked, with their shapes
+    /// (`comprehension_items`): a variable hides a module name of its spelling.
+    items: Vec<(&'a str, Shape)>,
+    /// The expressions around the node being walked, innermost last, each with the length of
+    /// `path` when it was entered: a use climbs them (`climb`).
+    stack: Vec<(&'a Expr, usize)>,
     /// The module-level names the inventory resolves to `sys.modules` (`from sys import modules
     /// as m`, `m2 = m`, `M = sys.modules`).
     modules_aliases: HashSet<&'a str>,
@@ -371,9 +430,6 @@ pub struct Walker<'a, 'w> {
     statement: Option<&'a Expr>,
     /// What the file patches (`patched_names`).
     patched: Patched<'a>,
-    /// The re-lists the inventory found: each binding identity and the lists its value takes
-    /// items of (`relist_sources`), joined into `Shape::relist` by `settle`.
-    relists: Vec<(Identity<'a>, Vec<(String, i64)>)>,
     /// Whether the file stores into a module the patch check cannot name (`survey`): every
     /// callee may be patched.
     patched_any: bool,
@@ -398,6 +454,8 @@ pub struct Walker<'a, 'w> {
     relied: RefCell<Vec<String>>,
     /// Whether the file star-imports a first-party module, which may bind any bare name.
     star_first_party: bool,
+    /// The `!` rows written, by scope and text (`emit_value_row`).
+    values_seen: HashSet<(i64, String)>,
     /// The names each function declares `global`, by its scope (`emit_global`).
     globals: HashMap<i64, HashSet<String>>,
     config: &'w ExtractConfig,
@@ -433,10 +491,10 @@ impl<'a, 'w> Walker<'a, 'w> {
             elements: Vec::new(),
             identities: HashMap::new(),
             items: Vec::new(),
+            stack: Vec::new(),
             modules_aliases: HashSet::new(),
             statement: None,
             patched: Patched::default(),
-            relists: Vec::new(),
             patched_any: false,
             name_aliases: HashSet::new(),
             top_aliases: HashMap::new(),
@@ -446,6 +504,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             star_import: false,
             relied: RefCell::new(Vec::new()),
             star_first_party: false,
+            values_seen: HashSet::new(),
             globals: HashMap::new(),
             config,
             exprs: config.kinds.any(&EXPRESSION_KINDS),
@@ -639,37 +698,11 @@ impl<'a, 'w> Walker<'a, 'w> {
     ) {
         for stmt in suite {
             let mut positive: Vec<(&'a str, Bind<'a>)> = Vec::new();
-            let relisted: Vec<(&'a str, &'a Expr)> = match stmt {
-                Stmt::Assign(a) => (a.targets.iter())
-                    .filter_map(|t| t.as_name_expr().map(|n| (n.id.as_str(), &*a.value)))
-                    .collect(),
-                Stmt::AnnAssign(a) => match (&*a.target, a.value.as_deref()) {
-                    (Expr::Name(name), Some(value)) => vec![(name.id.as_str(), value)],
-                    _ => Vec::new(),
-                },
-                Stmt::AugAssign(a) if matches!(a.op, ast::Operator::Add | ast::Operator::BitOr) => {
-                    match &*a.target {
-                        Expr::Name(name) => vec![(name.id.as_str(), &*a.value)],
-                        _ => Vec::new(),
-                    }
-                }
-                _ => Vec::new(),
-            };
-            for (name, value) in relisted {
-                let sources = match stmt {
-                    Stmt::AugAssign(_) => self.item_source(value, scope).into_iter().collect(),
-                    _ => self.relist_sources(value, scope),
-                };
-                if !sources.is_empty() {
-                    let at = if global.contains(name) { -1 } else { scope };
-                    self.relists.push(((at, name), sources));
-                }
-            }
             match stmt {
                 Stmt::Assign(a) => {
                     for target in &a.targets {
                         if let Expr::Name(name) = target {
-                            positive.push((name.id.as_str(), self.value_bind(&a.value, scope)));
+                            positive.push((name.id.as_str(), Bind::Value(&a.value, scope)));
                         }
                     }
                     if let [Expr::Name(name)] = a.targets.as_slice()
@@ -681,27 +714,24 @@ impl<'a, 'w> Walker<'a, 'w> {
                 }
                 Stmt::AnnAssign(a) => {
                     if let (Expr::Name(name), Some(value)) = (&*a.target, a.value.as_deref()) {
-                        positive.push((name.id.as_str(), self.value_bind(value, scope)));
+                        positive.push((name.id.as_str(), Bind::Value(value, scope)));
                     }
                 }
                 Stmt::AugAssign(a) => {
                     if let Expr::Name(name) = &*a.target {
-                        let keeps = matches!(a.op, ast::Operator::Add | ast::Operator::BitOr)
-                            && builtin_literal(&a.value);
-                        let bind = if keeps { Bind::Same } else { Bind::Opaque };
+                        let bind = if matches!(a.op, ast::Operator::Add | ast::Operator::BitOr) {
+                            Bind::Augment(&a.value, scope)
+                        } else {
+                            Bind::Opaque
+                        };
                         positive.push((name.id.as_str(), bind));
                     }
                 }
                 Stmt::For(f) => {
-                    let source = self.item_source(&f.iter, scope);
                     let mut names = Vec::new();
                     target_names(&f.target, &mut names);
                     for name in names {
-                        let bind = match &source {
-                            Some((source, at)) => Bind::Item(source.clone(), *at, false),
-                            None => Bind::Opaque,
-                        };
-                        positive.push((name, bind));
+                        positive.push((name, Bind::Items(&f.iter, scope)));
                     }
                 }
                 Stmt::ImportFrom(i) => {
@@ -780,82 +810,264 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
-    /// What a binding to `value` in `scope` makes the target (`Bind`). A class attribute
-    /// (`Class.ATTR`) is an alias that is never T13's other operand (`Bind::ClassAlias`). An
-    /// item of a name (`X[i]`, `X.copy()[i]`, `X.pop()`,
-    /// `X.get(k)`) keeps the name it came from.
-    fn value_bind(&self, value: &'a Expr, scope: i64) -> Bind<'a> {
-        if let Some((source, at)) = self.comprehension_copy(value, scope) {
-            return Bind::Item(source, at, true);
-        }
-        if builtin_literal(value) {
-            return Bind::Same;
-        }
-        if let Some((source, at)) = self.item_of(value, scope) {
-            return Bind::Item(source, at, false);
-        }
-        // A copy of a name (`X.copy()`, a view, `X[a:b]`, `list(X)`, an iterator over it) holds
-        // its items: read as one of them.
-        let copy = matches!(value, Expr::Call(_))
-            || matches!(value, Expr::Subscript(s) if s.slice.is_slice_expr());
-        if copy && let Some((source, at)) = self.item_source(value, scope) {
-            return Bind::Item(source, at, true);
-        }
-        match value {
-            Expr::Name(name) if !self.bound.contains_key(name.id.as_str()) => {
-                Bind::Alias(vec![self.alias_identities(scope, name.id.as_str())])
-            }
-            Expr::Attribute(_) => match self.class_chain(value) {
-                Some(identity) => Bind::ClassAlias(identity),
-                None => Bind::Opaque,
-            },
-            Expr::BinOp(binary) if binary.op == ast::Operator::Add => {
-                match (
-                    self.value_bind(&binary.left, scope),
-                    self.value_bind(&binary.right, scope),
-                ) {
-                    (Bind::Opaque, _) | (_, Bind::Opaque) => Bind::Opaque,
-                    // `+` of a copy (or of an item) holds its items: a copy of the same source.
-                    (Bind::Item(source, at, _), _) | (_, Bind::Item(source, at, _)) => {
-                        Bind::Item(source, at, true)
-                    }
-                    (left, right) => Bind::Alias([left.groups(), right.groups()].concat()),
+    /// The kind of an expression where `scope` reads it, with the comprehension variables `env`
+    /// around it: the one function that gives every expression its kind, at a binding (the
+    /// inventory, `settle`) and at a use (`climb`) alike. A name is what the inventory says and
+    /// one of its own sources (`name_kind`); a class attribute is never builtin-typed
+    /// (`attribute_kind`); a record constructor's call is a record; a literal, a display or a
+    /// comprehension is builtin-typed; any other expression is what it keeps of its
+    /// sub-expressions (`step`), else a value of no name that is not builtin-typed.
+    fn kind_of(&self, expr: &'a Expr, scope: i64, env: &[(&'a str, Shape)]) -> Shape {
+        match expr {
+            Expr::Name(name) => return self.name_kind(name.id.as_str(), scope, env),
+            Expr::Attribute(_) => {
+                if let Some((class, attribute)) = self.class_chain(expr) {
+                    return self.attribute_kind(class, attribute);
                 }
             }
-            Expr::Call(call) => {
-                let callee = callee_text(call);
-                let full = self.resolve(&callee);
-                let copy = full.as_deref().is_some_and(|full| {
-                    matches!(
-                        full,
-                        "builtins.list"
-                            | "builtins.tuple"
-                            | "builtins.set"
-                            | "builtins.frozenset"
-                            | "builtins.dict"
-                            | "builtins.sorted"
-                    )
+            Expr::Call(call) if self.record_callee(&callee_text(call)) => {
+                return Shape {
+                    record: true,
+                    ..Shape::fresh(false)
+                };
+            }
+            Expr::ListComp(c) => {
+                return self.comprehension_kind(expr, &[&c.elt], &c.generators, scope, env);
+            }
+            Expr::SetComp(c) => {
+                return self.comprehension_kind(expr, &[&c.elt], &c.generators, scope, env);
+            }
+            Expr::Generator(c) => {
+                return self.comprehension_kind(expr, &[&c.elt], &c.generators, scope, env);
+            }
+            Expr::DictComp(c) => {
+                let parts: Vec<&'a Expr> = c.key.iter().map(|k| &**k).chain([&*c.value]).collect();
+                return self.comprehension_kind(expr, &parts, &c.generators, scope, env);
+            }
+            _ => {}
+        }
+        let literal = matches!(
+            expr,
+            Expr::StringLiteral(_)
+                | Expr::BytesLiteral(_)
+                | Expr::NumberLiteral(_)
+                | Expr::BooleanLiteral(_)
+                | Expr::NoneLiteral(_)
+                | Expr::EllipsisLiteral(_)
+                | Expr::FString(_)
+                | Expr::TString(_)
+                | Expr::List(_)
+                | Expr::Tuple(_)
+                | Expr::Set(_)
+                | Expr::Dict(_)
+        );
+        let mut kept: Option<Shape> = None;
+        for child in contributors(expr) {
+            let kind = self.kind_of(child, scope, env);
+            if let Some(step) = self.step(expr, child, &kind, scope, env) {
+                kept = Some(match kept {
+                    Some(kept) => kept.join(&step),
+                    None => step,
                 });
-                if copy {
-                    Bind::Same
-                } else if self.record_callee(&callee) {
-                    Bind::Record
-                } else {
-                    Bind::Opaque
-                }
             }
-            _ => Bind::Opaque,
+        }
+        match kept {
+            Some(kept) if literal => Shape::fresh(true).join(&kept),
+            Some(kept) => kept,
+            None => Shape::fresh(literal),
         }
     }
 
-    /// The identities a name read in `scope` may be: the class body's own binding and the
-    /// module's (a class body reads its own name only once bound, so both may hold).
-    fn alias_identities(&self, scope: i64, name: &'a str) -> Vec<(i64, &'a str)> {
-        let mut out = vec![(-1, name)];
-        if scope != -1 {
-            out.push((scope, name));
+    /// A name's kind: a comprehension variable's (`env`), or what the inventory says the
+    /// identity is (`shape_of`) with the name itself among its sources. Read in a class body, the
+    /// module's name is a source too: the body reads it until it binds its own. A name an import
+    /// binds, or one the file does not bind, is a value of no name.
+    fn name_kind(&self, id: &'a str, scope: i64, env: &[(&'a str, Shape)]) -> Shape {
+        if let Some((_, shape)) = env.iter().rev().find(|(variable, _)| *variable == id) {
+            return shape.clone();
+        }
+        if self.bound.contains_key(id) {
+            return Shape::fresh(false);
+        }
+        let Some(shape) = self.shape_of(scope, id) else {
+            return Shape::fresh(false);
+        };
+        let mut sources = vec![(id.to_string(), scope)];
+        if scope != -1 && self.identities.contains_key(&(-1, id)) {
+            sources.push((id.to_string(), -1));
+        }
+        sources.extend(shape.sources.iter().cloned());
+        sources.sort();
+        sources.dedup();
+        Shape { sources, ..shape }
+    }
+
+    /// A class attribute's kind (`Class.ATTR`, a class index and the attribute): what the class
+    /// body binds, with the attribute among its sources. Its exact type relies on the body being
+    /// the class (`Shape::relies`): a decorator, a metaclass or a store may replace what the
+    /// body binds, so the link keeps a read that relies on it only from a stable class.
+    fn attribute_kind(&self, class: i64, attribute: &str) -> Shape {
+        let Some(shape) = self.identities.get(&(class, attribute)) else {
+            return Shape::fresh(false);
+        };
+        let path = format!("{}.{attribute}", self.class_path(class));
+        let mut sources = vec![(path.clone(), -1)];
+        sources.extend(shape.sources.iter().cloned());
+        sources.sort();
+        sources.dedup();
+        let mut relies = vec![path];
+        relies.extend(shape.relies.iter().cloned());
+        relies.sort();
+        relies.dedup();
+        Shape {
+            sources,
+            relies,
+            ..shape.clone()
+        }
+    }
+
+    /// A comprehension's kind: builtin-typed, holding its element's items. Each generator's
+    /// variables are items of what it iterates, the first iterable read where the comprehension
+    /// sits.
+    fn comprehension_kind(
+        &self,
+        expr: &'a Expr,
+        parts: &[&'a Expr],
+        generators: &'a [ast::Comprehension],
+        scope: i64,
+        env: &[(&'a str, Shape)],
+    ) -> Shape {
+        let mut env = env.to_vec();
+        for generator in generators {
+            let iterated = self.kind_of(&generator.iter, scope, &env);
+            let mut names = Vec::new();
+            target_names(&generator.target, &mut names);
+            for name in names {
+                env.push((name, Shape::item_of(&iterated.sources)));
+            }
+        }
+        let mut out = Shape::fresh(true);
+        for part in parts {
+            let kind = self.kind_of(part, scope, &env);
+            if let Some(step) = self.step(expr, part, &kind, scope, &env) {
+                out = out.join(&step);
+            }
         }
         out
+    }
+
+    /// What an expression keeps of one of its sub-expressions (`child`, of kind `kind`), the one
+    /// rule the inventory and the use reading both follow. None when it keeps nothing of it: the
+    /// child is then consumed there (`consume`).
+    /// - An index of a builtin-typed value is an item of its sources, a slice a builtin-typed
+    ///   copy of them; of anything else, nothing (its `__getitem__` may give anything).
+    /// - `copy()`, `keys()`, `values()`, `items()` of a builtin-typed value are builtin-typed
+    ///   copies, `get(...)` and `pop(...)` items.
+    /// - `__name__`, `__qualname__`, `__module__` and `__doc__` hold no reference into a
+    ///   namespace: the result follows as an item of the same sources. Any other attribute keeps
+    ///   nothing.
+    /// - `*X` of a builtin-typed value in a list or tuple display: the display holds its
+    ///   items (T1). `X + D`, X builtin-typed and D a list or tuple display: a new list of X's
+    ///   items (T13).
+    /// - A conditional keeps either branch when neither is an item, builtin-typed only when both
+    ///   are (the alias rows of a name bound to it are `read_value`'s).
+    /// - A comprehension keeps its element when the element is an item: it holds such items.
+    fn step(
+        &self,
+        parent: &'a Expr,
+        child: &'a Expr,
+        kind: &Shape,
+        scope: i64,
+        env: &[(&'a str, Shape)],
+    ) -> Option<Shape> {
+        let is = |slot: &Expr| std::ptr::eq(slot, child);
+        let whole = kind.part == Part::Whole;
+        match parent {
+            Expr::Subscript(s) if is(&s.value) && s.ctx.is_load() && whole && kind.exact => {
+                Some(if s.slice.is_slice_expr() {
+                    Shape::copy_of(kind)
+                } else {
+                    Shape::item_of(&kind.sources)
+                })
+            }
+            Expr::Attribute(a) if is(&a.value) && a.ctx.is_load() && whole => {
+                match a.attr.as_str() {
+                    "__name__" | "__qualname__" | "__module__" | "__doc__" => {
+                        Some(Shape::item_of(&kind.sources))
+                    }
+                    "copy" | "keys" | "values" | "items" if kind.exact => Some(Shape {
+                        part: Part::Copier,
+                        ..kind.clone()
+                    }),
+                    "get" | "pop" if kind.exact => Some(Shape {
+                        part: Part::Picker,
+                        ..kind.clone()
+                    }),
+                    _ => None,
+                }
+            }
+            Expr::Call(call) if is(&call.func) => {
+                let args = call.arguments.args.len();
+                let no_keywords = call.arguments.keywords.is_empty();
+                match kind.part {
+                    Part::Copier if args == 0 && no_keywords => Some(Shape::copy_of(kind)),
+                    Part::Picker if args <= 2 && no_keywords && !has_star_arguments(call) => {
+                        Some(Shape::item_of(&kind.sources))
+                    }
+                    _ => None,
+                }
+            }
+            Expr::Starred(s) if is(&s.value) && whole && kind.exact => Some(Shape {
+                part: Part::Star,
+                ..kind.clone()
+            }),
+            Expr::List(_) | Expr::Tuple(_) if kind.part == Part::Star => Some(Shape::copy_of(kind)),
+            Expr::BinOp(binary)
+                if binary.op == ast::Operator::Add && whole && kind.exact && !kind.item =>
+            {
+                let other = if is(&binary.left) {
+                    &binary.right
+                } else if is(&binary.right) {
+                    &binary.left
+                } else {
+                    return None;
+                };
+                matches!(&**other, Expr::List(_) | Expr::Tuple(_)).then(|| Shape::copy_of(kind))
+            }
+            Expr::If(conditional)
+                if whole && !kind.item && (is(&conditional.body) || is(&conditional.orelse)) =>
+            {
+                let other = if is(&conditional.body) {
+                    &conditional.orelse
+                } else {
+                    &conditional.body
+                };
+                let other = self.kind_of(other, scope, env);
+                (!other.item).then(|| {
+                    let relies = Shape::holding(true, &[]).join(kind).join(&other).relies;
+                    Shape {
+                        exact: kind.exact && other.exact,
+                        item: false,
+                        record: false,
+                        part: Part::Whole,
+                        sources: kind.sources.clone(),
+                        relies,
+                    }
+                })
+            }
+            Expr::ListComp(c) if is(&c.elt) => self.element_kept(kind),
+            Expr::SetComp(c) if is(&c.elt) => self.element_kept(kind),
+            Expr::Generator(c) if is(&c.elt) => self.element_kept(kind),
+            Expr::DictComp(c) if is(&c.value) || c.key.as_deref().is_some_and(is) => {
+                self.element_kept(kind)
+            }
+            _ => None,
+        }
+    }
+
+    /// A comprehension's element it keeps: an item, whose sources the comprehension holds.
+    fn element_kept(&self, kind: &Shape) -> Option<Shape> {
+        (kind.part == Part::Whole && kind.item).then(|| Shape::holding(true, &kind.sources))
     }
 
     /// The class attribute a chain of a class this file defines names (`Reg.WORKFLOWS`,
@@ -875,250 +1087,6 @@ impl<'a, 'w> Walker<'a, 'w> {
         Some((owner, attribute.attr.as_str()))
     }
 
-    /// The name a `for` or a comprehension takes items of (a name of this module or a class
-    /// attribute of a class it defines), directly or through an iterator builtin (T8), and the
-    /// scope it is read in.
-    fn item_source(&self, iter: &'a Expr, scope: i64) -> Option<(String, i64)> {
-        let source = match iter {
-            Expr::Call(call) if self.iterator_builtin(call) || self.copy_reader(call) => call
-                .arguments
-                .args
-                .iter()
-                .find_map(|arg| self.item_source(arg, scope))?,
-            Expr::Call(call) => self.item_source(self.copy_of(call)?, scope)?,
-            Expr::Subscript(subscript) if subscript.slice.is_slice_expr() => {
-                self.item_source(&subscript.value, scope)?
-            }
-            Expr::Name(name) if !self.bound.contains_key(name.id.as_str()) => {
-                // A copy's items are its source's.
-                let copied = (self.shape_of(scope, name.id.as_str()))
-                    .and_then(|shape| shape.item_of.filter(|(_, _, copy)| *copy));
-                match copied {
-                    Some((source, at, _)) => (source, at),
-                    None => (name.id.to_string(), scope),
-                }
-            }
-            Expr::Attribute(_) => {
-                let (class, attribute) = self.class_chain(iter)?;
-                let name = format!("{}.{attribute}", self.class_path(class));
-                (name, -1)
-            }
-            _ => return None,
-        };
-        Some(source)
-    }
-
-    /// The lists a value re-lists (T1, T13): each `*X` of a list or tuple display, each operand
-    /// of `+` that is a name, a class attribute or a copy (`item_source`), through nested
-    /// displays and `+`.
-    fn relist_sources(&self, value: &'a Expr, scope: i64) -> Vec<(String, i64)> {
-        match value {
-            Expr::List(ast::ExprList { elts, .. }) | Expr::Tuple(ast::ExprTuple { elts, .. }) => {
-                (elts.iter())
-                    .filter_map(|elt| match elt {
-                        Expr::Starred(star) => self.item_source(&star.value, scope),
-                        _ => None,
-                    })
-                    .collect()
-            }
-            Expr::BinOp(binary) if binary.op == ast::Operator::Add => [&binary.left, &binary.right]
-                .into_iter()
-                .flat_map(|side| match &**side {
-                    Expr::List(_) | Expr::Tuple(_) | Expr::BinOp(_) => {
-                        self.relist_sources(side, scope)
-                    }
-                    side => self.item_source(side, scope).into_iter().collect(),
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
-
-    /// Every list an item of `source` (a name of `scope`, or `Class.ATTR`) is an item of too: the
-    /// lists it re-lists, at any depth (`Shape::relist`).
-    fn relist_closure(&self, source: &str, scope: i64) -> Vec<(String, i64)> {
-        let mut out: Vec<(String, i64)> = Vec::new();
-        let mut stack = vec![(source.to_string(), scope)];
-        while let Some((name, scope)) = stack.pop() {
-            let Some(shape) = self.source_shape(&name, scope) else {
-                continue;
-            };
-            for held in shape.relist {
-                if held.0 != source && !out.contains(&held) {
-                    out.push(held.clone());
-                    stack.push(held);
-                }
-            }
-        }
-        out
-    }
-
-    /// The shape of a source the use reading names: a name read in `scope`, or a class
-    /// attribute by its dotted path from the module (`Outer.Inner.ATTR`).
-    fn source_shape(&self, name: &str, scope: i64) -> Option<Shape> {
-        let Some((path, attribute)) = name.rsplit_once('.') else {
-            return self.shape_of(scope, name);
-        };
-        let class = (0..self.defs.entries.len() as i64)
-            .find(|&index| self.defs.is_class(index) && self.class_path(index) == path)?;
-        self.identities.get(&(class, attribute)).cloned()
-    }
-
-    /// The escapes of an item of `source`: for it, and for every list it re-lists.
-    fn emit_item_escape(&mut self, name: &ast::ExprName, at: At, source: &str, scope: i64) {
-        self.emit_escape(name, At { scope, ..at }, source);
-        for (held, held_scope) in self.relist_closure(source, scope) {
-            self.emit_escape(
-                name,
-                At {
-                    scope: held_scope,
-                    ..at
-                },
-                &held,
-            );
-        }
-    }
-
-    /// Whether a use of a re-list takes an item out of it that escapes (a re-list is read as a
-    /// value; its items are its sources' too): an element (`read_item`), `.pop()` or `.get()`,
-    /// `min`/`max`/`sum`, or the same of a copy of it. Iteration hands its targets the source
-    /// (`item_source`), so the loop's own escapes carry it.
-    fn take_items(&self, frames: &[Frame<'a>], at: At, site: TextSize) -> Outcome<'a> {
-        let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
-        let above = |k: usize| &frames[..frames.len() - k];
-        let Some(first) = up(1) else {
-            return Outcome::Read;
-        };
-        match first {
-            Frame::SubValue(subscript) => match up(2) {
-                Some(Frame::Terminal(text)) if text.ends_with("-target") || text == "del" => {
-                    Outcome::Read
-                }
-                _ if subscript.slice.is_slice_expr() => self.take_items(above(1), at, site),
-                _ => self.read_item(above(1), at, site),
-            },
-            Frame::Attr(method) => {
-                let Some(Frame::CallFunc(call)) = up(2) else {
-                    return Outcome::Read;
-                };
-                let bare = call.arguments.args.is_empty() && call.arguments.keywords.is_empty();
-                match method {
-                    "copy" | "keys" | "values" | "items" if bare => {
-                        self.take_items(above(2), at, site)
-                    }
-                    "pop" | "get" => self.read_item(above(2), at, site),
-                    _ => Outcome::Read,
-                }
-            }
-            Frame::Arg(call, 0) if !has_star_arguments(call) => {
-                let only = call.arguments.args.len() == 1 && call.arguments.keywords.is_empty();
-                match self.resolve(&callee_text(call)).as_deref() {
-                    Some(
-                        "builtins.list" | "builtins.tuple" | "builtins.set" | "builtins.frozenset"
-                        | "builtins.dict",
-                    ) if only => self.take_items(above(1), at, site),
-                    Some("builtins.sorted") => self.take_items(above(1), at, site),
-                    Some("builtins.min" | "builtins.max" | "builtins.sum") if only => {
-                        self.read_item(above(1), at, site)
-                    }
-                    Some(full) if ITERATORS.contains(&full) => match up(2) {
-                        Some(Frame::Arg(..)) => self.take_items(above(2), at, site),
-                        _ => Outcome::Read,
-                    },
-                    _ => Outcome::Read,
-                }
-            }
-            _ => Outcome::Read,
-        }
-    }
-
-    /// The name an expression is an item of (T6, T9, T10): `X[i]` with an index that is no
-    /// slice, `X.pop(...)`, `X.get(...)`, `min(X)`, `max(X)`, `sum(X)`, or an element of a copy,
-    /// `X.copy()[i]` (a view's too), X a name of this module or a class attribute of a class it
-    /// defines.
-    fn item_of(&self, value: &'a Expr, scope: i64) -> Option<(String, i64)> {
-        let source = match value {
-            Expr::Subscript(subscript) if !subscript.slice.is_slice_expr() => {
-                match &*subscript.value {
-                    Expr::Call(call) => self.copy_of(call)?,
-                    container => container,
-                }
-            }
-            Expr::Call(call) => match &*call.func {
-                Expr::Attribute(method) if matches!(method.attr.as_str(), "pop" | "get") => {
-                    &method.value
-                }
-                // `min`, `max` and `sum` of one argument give one of its items.
-                _ => match call.arguments.args.as_ref() {
-                    [only] if self.picks_item(call) => only,
-                    _ => return None,
-                },
-            },
-            _ => return None,
-        };
-        match source {
-            Expr::Name(name) if !self.bound.contains_key(name.id.as_str()) => {
-                Some((name.id.to_string(), scope))
-            }
-            Expr::Attribute(_) => {
-                let (class, attribute) = self.class_chain(source)?;
-                Some((format!("{}.{attribute}", self.class_path(class)), -1))
-            }
-            _ => None,
-        }
-    }
-
-    /// The name a comprehension copies items of: its element (a dict comprehension's key or
-    /// value) is a target of one of its generators, over a name (`item_source`).
-    fn comprehension_copy(&self, value: &'a Expr, scope: i64) -> Option<(String, i64)> {
-        let (parts, generators): (Vec<&Expr>, &[ast::Comprehension]) = match value {
-            Expr::ListComp(c) => (vec![&*c.elt], &c.generators),
-            Expr::SetComp(c) => (vec![&*c.elt], &c.generators),
-            Expr::Generator(c) => (vec![&*c.elt], &c.generators),
-            Expr::DictComp(c) => (
-                c.key.iter().map(|k| &**k).chain([&*c.value]).collect(),
-                &c.generators,
-            ),
-            _ => return None,
-        };
-        let yielded: Vec<&str> = (parts.iter())
-            .filter_map(|part| match part {
-                Expr::Name(name) => Some(name.id.as_str()),
-                _ => None,
-            })
-            .collect();
-        generators.iter().find_map(|generator| {
-            let mut targets = Vec::new();
-            target_names(&generator.target, &mut targets);
-            if !targets.iter().any(|target| yielded.contains(target)) {
-                return None;
-            }
-            self.item_source(&generator.iter, scope)
-        })
-    }
-
-    /// Whether a call is `min`, `max` or `sum` of one argument and no keyword (T6): its result
-    /// is one of the argument's items.
-    fn picks_item(&self, call: &ast::ExprCall) -> bool {
-        let full = self.resolve(&callee_text(call));
-        let picks = matches!(
-            full.as_deref(),
-            Some("builtins.min" | "builtins.max" | "builtins.sum")
-        );
-        picks && call.arguments.args.len() == 1 && call.arguments.keywords.is_empty()
-    }
-
-    /// The name a call copies by a method with no argument (`X.copy()`, `.keys()`, `.values()`,
-    /// `.items()`): its elements are the name's items.
-    fn copy_of(&self, call: &'a ast::ExprCall) -> Option<&'a Expr> {
-        let Expr::Attribute(method) = &*call.func else {
-            return None;
-        };
-        let copy = matches!(method.attr.as_str(), "copy" | "keys" | "values" | "items");
-        let bare = call.arguments.args.is_empty() && call.arguments.keywords.is_empty();
-        (copy && bare).then_some(&*method.value)
-    }
-
     /// The dotted name of a class this file defines, from the module (`Outer.Inner`).
     fn class_path(&self, mut class: i64) -> String {
         let mut parts = Vec::new();
@@ -1133,95 +1101,52 @@ impl<'a, 'w> Walker<'a, 'w> {
         parts.join(".")
     }
 
-    /// Joins the bindings into each identity's shape: builtin only when every binding is and
-    /// every alias it takes is (the greatest such assignment), a record when any binding builds
-    /// one, an item when any binding takes items.
+    /// Gives each identity its shape: the join of `kind_of` over its bindings, to a fixpoint from
+    /// "builtin-typed, no source" (the greatest assignment that is builtin-typed, the least set
+    /// of sources). `kind_of` only lowers exactness and adds sources as the shapes it reads do,
+    /// so the loop ends; a cap makes every identity not builtin-typed.
     fn settle(&mut self, found: Vec<Found<'a>>) {
-        let mut deps: HashMap<Identity<'a>, Vec<Vec<Identity<'a>>>> = HashMap::new();
-        for (identity, sources) in std::mem::take(&mut self.relists) {
-            let shape = self.identities.entry(identity).or_insert(Shape {
-                builtin: true,
-                ..Shape::default()
-            });
-            shape.relist.extend(sources);
-        }
+        let mut bindings: HashMap<Identity<'a>, Vec<Bind<'a>>> = HashMap::new();
         for (identity, bind) in found {
-            let shape = self.identities.entry(identity).or_insert(Shape {
-                builtin: true,
-                ..Shape::default()
-            });
-            match bind {
-                Bind::Same => {}
-                Bind::Alias(groups) => {
-                    if groups.iter().flatten().any(|dep| *dep == CLASS_ALIAS) {
-                        shape.class_alias = true;
-                    }
-                    let groups = groups.into_iter().filter(|group| group != &[CLASS_ALIAS]);
-                    deps.entry(identity).or_default().extend(groups);
-                }
-                Bind::ClassAlias(dep) => {
-                    shape.class_alias = true;
-                    deps.entry(identity).or_default().push(vec![dep]);
-                }
-                Bind::Record => {
-                    shape.record = true;
-                    shape.builtin = false;
-                }
-                Bind::Item(source, scope, copy) => {
-                    shape.item_of = Some((source, scope, copy));
-                    // A copy is a builtin container; an item may be anything.
-                    shape.builtin &= copy;
-                }
-                Bind::Opaque => shape.builtin = false,
-            }
+            bindings.entry(identity).or_default().push(bind);
         }
-        // An alias is builtin when, for each name it reads, every identity the name may be that
-        // the file binds is builtin, and the file binds one. An alias of an item is an item of
-        // the same name.
-        loop {
-            let mut changed = false;
-            for (identity, groups) in &deps {
-                let builtin = groups.iter().all(|group| {
-                    let shapes: Vec<&Shape> = (group.iter())
-                        .filter_map(|dep| self.identities.get(dep))
-                        .collect();
-                    !shapes.is_empty() && shapes.iter().all(|shape| shape.builtin)
-                });
-                let item = (groups.iter().flatten())
-                    .find_map(|dep| self.identities.get(dep).and_then(|s| s.item_of.clone()));
-                let class_alias = (groups.iter().flatten())
-                    .any(|dep| self.identities.get(dep).is_some_and(|s| s.class_alias));
-                // An alias of a re-list is the same list: its items come from the same lists.
-                let relist: Vec<(String, i64)> = (groups.iter().flatten())
-                    .filter_map(|dep| self.identities.get(dep))
-                    .flat_map(|s| s.relist.clone())
-                    .collect();
-                let shape = self.identities.get_mut(identity).expect("a found identity");
-                if class_alias && !shape.class_alias {
-                    shape.class_alias = true;
-                    changed = true;
-                }
-                for held in relist {
-                    if !shape.relist.contains(&held) {
-                        shape.relist.push(held);
-                        changed = true;
+        self.identities = (bindings.keys())
+            .map(|identity| (*identity, Shape::fresh(true)))
+            .collect();
+        for _ in 0..MAX_SETTLE {
+            let next: HashMap<Identity<'a>, Shape> = (bindings.iter())
+                .map(|(identity, binds)| {
+                    let mut shape = self.bind_kind(&binds[0]);
+                    for bind in &binds[1..] {
+                        shape = shape.join(&self.bind_kind(bind));
                     }
-                }
-                if shape.builtin && !builtin {
-                    shape.builtin = false;
-                    changed = true;
-                }
-                if shape.item_of.is_none()
-                    && let Some(item) = item
-                {
-                    shape.builtin &= item.2;
-                    shape.item_of = Some(item);
-                    changed = true;
-                }
+                    shape.sources.sort();
+                    shape.sources.dedup();
+                    shape.relies.sort();
+                    shape.relies.dedup();
+                    (*identity, shape)
+                })
+                .collect();
+            if next == self.identities {
+                return;
             }
-            if !changed {
-                break;
+            self.identities = next;
+        }
+        for shape in self.identities.values_mut() {
+            shape.exact = false;
+        }
+    }
+
+    /// What one binding makes its identity (`Bind`), by `kind_of`.
+    fn bind_kind(&self, bind: &Bind<'a>) -> Shape {
+        match bind {
+            Bind::Value(value, scope) => self.kind_of(value, *scope, &[]).bound(),
+            Bind::Items(iter, scope) => Shape::item_of(&self.kind_of(iter, *scope, &[]).sources),
+            Bind::Augment(value, _) if builtin_literal(value) => Shape::fresh(true),
+            Bind::Augment(value, scope) => {
+                Shape::holding(false, &self.kind_of(value, *scope, &[]).sources)
             }
+            Bind::Opaque => Shape::fresh(false),
         }
     }
 
@@ -1229,19 +1154,13 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// class's own binding joined with the module's (the less safe wins); None when neither
     /// binds it.
     fn shape_of(&self, scope: i64, name: &str) -> Option<Shape> {
-        let module = self.identities.get(&(-1, name)).cloned();
+        let module = self.identities.get(&(-1, name));
         let own = (scope != -1)
-            .then(|| self.identities.get(&(scope, name)).cloned())
+            .then(|| self.identities.get(&(scope, name)))
             .flatten();
         match (own, module) {
-            (Some(a), Some(b)) => Some(Shape {
-                builtin: a.builtin && b.builtin,
-                record: a.record || b.record,
-                item_of: a.item_of.or(b.item_of),
-                class_alias: a.class_alias || b.class_alias,
-                relist: [a.relist, b.relist].concat(),
-            }),
-            (a, b) => a.or(b),
+            (Some(own), Some(module)) => Some(own.join(module)),
+            (own, module) => own.or(module).cloned(),
         }
     }
 
@@ -1590,12 +1509,11 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
-    /// An augmented assignment in a class body to a name the body has not bound before reads the
-    /// module's value and changes it in place (`list.__iadd__`) before the class name binds it:
-    /// a change of the module's name. T11's form (`+=` or `|=` of a display, a literal or a
-    /// builtin-typed name, on a builtin-typed name) writes the module's change row; any other is
-    /// an escape of the module's name. A binding before it in a block counts as none (it may not
-    /// run).
+    /// An augmented assignment in a class body to a name the body has not definitely bound
+    /// before (`shadowed`) reads the module's value and changes it in place (`list.__iadd__`):
+    /// a change of the module's name, at every such statement of the body. T11's form (`+=` or
+    /// `|=` of a display or a literal, on a builtin-typed name) writes the module's change row;
+    /// any other is an escape of the module's name.
     fn class_change(&mut self, stmt: &'a Stmt, a: &'a ast::StmtAugAssign, at: At) {
         if !self.wants(Kind::Escapes) || !self.defs.is_class(at.scope) {
             return;
@@ -1604,25 +1522,12 @@ impl<'a, 'w> Walker<'a, 'w> {
             return;
         };
         let id = target.id.as_str();
-        if self.bound.contains_key(id) {
+        if self.bound.contains_key(id) || self.shadowed(at.scope, id, stmt.range().start()) {
             return;
         }
-        let DefNode::Class(class) = self.defs.entries[at.scope as usize].node else {
-            return;
-        };
-        let start = stmt.range().start();
-        let bound_before = (class.body.iter())
-            .take_while(|earlier| earlier.range().start() < start)
-            .any(|earlier| {
-                let mut names = Vec::new();
-                statement_bindings(earlier, &mut names);
-                names.contains(&id)
-            });
-        if bound_before {
-            return;
-        }
-        let module_builtin = self.shape_of(-1, id).is_some_and(|shape| shape.builtin);
-        let operand = builtin_literal(&a.value) || self.builtin_name(&a.value, at);
+        let module_builtin = (self.identities.get(&(-1, id)))
+            .is_some_and(|shape| shape.exact && shape.relies.is_empty());
+        let operand = builtin_literal(&a.value);
         let keeps = matches!(a.op, ast::Operator::Add | ast::Operator::BitOr);
         let flags = self.out.def_flags[at.scope as usize];
         let module = At {
@@ -1641,6 +1546,39 @@ impl<'a, 'w> Walker<'a, 'w> {
         let t = vec![self.value(Some(&a.target), false)];
         let v = self.enc.assigned(Some(&a.value), self.src);
         self.emit_assign(stmt, module, format!("{}=", binop(a.op)), t, None, v);
+    }
+
+    /// Whether the body of class `class`, before `site`, definitely binds `id` itself: its last
+    /// top-level statement that binds or unbinds `id` (in any block of it) is a plain
+    /// `id = <display or literal>` that reads no `id`. An annotation, `del`, `for`, `except ...
+    /// as`, `match`, a walrus or `id = id` does not shadow the module's name.
+    fn shadowed(&self, class: i64, id: &str, site: TextSize) -> bool {
+        let DefNode::Class(class) = self.defs.entries[class as usize].node else {
+            return false;
+        };
+        let mut shadowed = false;
+        for stmt in class
+            .body
+            .iter()
+            .take_while(|stmt| stmt.range().end() <= site)
+        {
+            let plain = match stmt {
+                Stmt::Assign(a) => {
+                    a.targets
+                        .iter()
+                        .any(|t| matches!(t, Expr::Name(n) if n.id.as_str() == id))
+                        && builtin_literal(&a.value)
+                        && !reads_name(&a.value, id)
+                }
+                _ => false,
+            };
+            if plain {
+                shadowed = true;
+            } else if binds_anywhere(stmt, id) {
+                shadowed = false;
+            }
+        }
+        shadowed
     }
 
     /// A `def` or `class` binds its name, decorated or not: a rebinding when the file also
@@ -1945,13 +1883,15 @@ impl<'a, 'w> Walker<'a, 'w> {
         });
     }
 
-    /// The `escapes` rows of a name node at module level or in a class body (`emit_rebinding`
-    /// for a store or a delete). A load of a name no import binds starts as what the inventory
-    /// says it is (`start`), and the use table reads it (`read_use`): read, bound as an alias
-    /// (`name~TARGETS`) or into a record (`name>TARGETS@CALLEES`), changed in place by a
+    /// A use of a module-level or class-body name (or a comprehension's variable over one) in a
+    /// module-level or class-body expression: the use reading. The inventory says what the name
+    /// is (`start`); the use table reads the name's own value (`read_value`): read, bound as an
+    /// alias (`name~TARGETS`) or into a record (`name>TARGETS@CALLEES`), changed in place by a
     /// statement whose mutation row the table writes, or escaped (`name`; `name.*` for a class,
-    /// or when handed to `setattr` or `delattr`; an item escapes for the name it came from). A
-    /// use in an `if TYPE_CHECKING:` branch never runs, so it is none.
+    /// or when handed to `setattr` or `delattr`). Where the value, or what the use takes out of
+    /// it, goes then (`carry`, `consume`) decides for its sources: when it escapes, each source
+    /// escapes, so an escape lands on every root list. A use in an `if TYPE_CHECKING:` branch
+    /// never runs, so it is none.
     fn emit_use(&mut self, name: &'a ast::ExprName, at: At) {
         if !self.wants(Kind::Escapes) {
             return;
@@ -1984,65 +1924,50 @@ impl<'a, 'w> Walker<'a, 'w> {
         let handed = matches!(frames.last(), Some(Frame::Arg(call, 0))
             if matches!(callee_text(call).as_str(), "setattr" | "delattr"));
         let site = name.range.start();
-        // A name bound to an item is the item, read for the name it came from, and a value of
-        // its own the inventory cannot type.
-        let relist = !self.relist_closure(&reached, at.scope).is_empty()
-            && matches!(start, Start::Value { .. } | Start::Item { own: true, .. })
-            && matches!(self.take_items(frames, at, site), Outcome::Escape);
-        let (start, item_escape) = match start {
-            Start::Item {
-                source,
-                scope,
-                own: true,
-                copy,
-                builtin,
-            } => {
-                let read = if copy {
-                    self.read_copy(frames, at, site)
-                } else {
-                    self.read_item(frames, at, site)
-                };
-                let escapes = matches!(read, Outcome::Escape);
-                (Start::Value { builtin }, escapes.then_some((source, scope)))
-            }
-            start => (start, None),
-        };
         self.relied.borrow_mut().clear();
-        let outcome = if handed {
-            Outcome::Escape
-        } else {
-            self.read_use(frames, &start, at, !reached.contains('.'), site)
+        if let Start::Value(shape) | Start::Variable(shape) = &start
+            && shape.exact
+        {
+            let relies = shape.relies.iter().map(|class| format!("#{class}"));
+            self.relied.borrow_mut().extend(relies);
+        }
+        let outcome = match &start {
+            _ if handed => Outcome::Escape,
+            Start::Value(shape) => {
+                self.read_value(frames, shape.exact, at, !reached.contains('.'), site)
+            }
+            Start::Variable(_) => Outcome::Read,
+            Start::Class => self.read_holder(frames, false, at),
+            Start::Record => self.read_holder(frames, true, at),
+            Start::Inherited(_) => Outcome::Escape,
         };
         let mut relied = std::mem::take(&mut *self.relied.borrow_mut());
-        if let Some((source, scope)) = item_escape {
-            self.emit_item_escape(name, at, &source, scope);
-        }
-        if relist {
-            for (held, held_scope) in self.relist_closure(&reached, at.scope) {
-                self.emit_escape(
-                    name,
-                    At {
-                        scope: held_scope,
-                        ..at
-                    },
-                    &held,
-                );
+        if let Start::Value(shape) | Start::Variable(shape) = &start {
+            // The sources: with no step kept, the value goes where its own reading says (an
+            // item where `consume` says); else what the steps made goes where `consume` says.
+            let escapes = match self.carry(used, shape, at) {
+                None if handed => true,
+                None if shape.item => !self.consume(frames, shape, site),
+                None => matches!(outcome, Outcome::Escape),
+                Some((top, kept)) => !self.consume(&self.path[..top], &kept, site),
+            };
+            if escapes {
+                for (source, scope) in &shape.sources {
+                    self.emit_escape(
+                        name,
+                        At {
+                            scope: *scope,
+                            ..at
+                        },
+                        source,
+                    );
+                }
             }
         }
         if !matches!(outcome, Outcome::Escape) && !relied.is_empty() {
             relied.sort();
             relied.dedup();
-            let (held, held_at) = match &start {
-                Start::Item { source, scope, .. } => (
-                    source.clone(),
-                    At {
-                        scope: *scope,
-                        ..at
-                    },
-                ),
-                _ => (reached.clone(), at),
-            };
-            self.emit_escape(name, held_at, &format!("{held}?{}", relied.join(",")));
+            self.emit_escape(name, at, &format!("{reached}?{}", relied.join(",")));
         }
         let row = match outcome {
             Outcome::Read => return,
@@ -2052,9 +1977,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 format!("{reached}>{targets}@{}", callees.join(","))
             }
             Outcome::Escape => match start {
-                Start::Item { source, scope, .. } => {
-                    return self.emit_item_escape(name, at, &source, scope);
-                }
+                Start::Variable(_) => return,
                 Start::Inherited(class) => {
                     for held in self.lineage_names(class) {
                         self.emit_escape(name, At { scope: -1, ..at }, &format!("{held}.*"));
@@ -2075,42 +1998,124 @@ impl<'a, 'w> Walker<'a, 'w> {
         self.emit_escape(name, at, &row);
     }
 
+    /// Climbs the expressions around a use (`stack`; the use is `used` attribute steps above
+    /// the name) while each keeps what it reads (`step`). None when the first keeps nothing of
+    /// it; else the length of `path` at the last expression that keeps it, and its kind there.
+    fn carry(&self, used: usize, shape: &Shape, at: At) -> Option<(usize, Shape)> {
+        let mut index = self.stack.len().checked_sub(1 + used)?;
+        let mut kind = shape.clone();
+        let mut kept = false;
+        while index > 0 {
+            let (child, _) = self.stack[index];
+            let (parent, _) = self.stack[index - 1];
+            let Some(step) = self.step(parent, child, &kind, at.scope, &self.items) else {
+                break;
+            };
+            kind = step;
+            index -= 1;
+            kept = true;
+        }
+        kept.then(|| (self.stack[index].1, kind))
+    }
+
+    /// Whether the place a value reaches (its frames, innermost last) keeps all of its sources
+    /// in: names bound to it (the inventory gives them its kind), a statement that drops it, a
+    /// test, formatting or a comparison with literals of an item or a builtin-typed value (an
+    /// item's own dunders receive the item only), `is`, iteration of a builtin-typed value (its
+    /// targets are items: `comprehension_items`, the inventory), and a store into one or a
+    /// reading or changing method of one with no keyword. Anything else hands it on: each
+    /// source escapes. `site` tells the use's own operand from the others.
+    fn consume(&self, frames: &[Frame<'a>], kind: &Shape, site: TextSize) -> bool {
+        if kind.part != Part::Whole {
+            return false;
+        }
+        let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
+        let Some(first) = up(1) else {
+            return true;
+        };
+        let reads = kind.exact || kind.item;
+        match first {
+            Frame::Terminal("expr") => true,
+            Frame::Terminal("if-test" | "while-test" | "assert")
+            | Frame::Step("ifexp:test" | "comp:if" | "fstr")
+            | Frame::Op("unary:", "not") => reads,
+            Frame::Terminal("for-iter") | Frame::Step("comp:iter") => kind.exact,
+            Frame::AssignValue(targets) => targets.iter().all(Expr::is_name_expr),
+            Frame::AnnAssignValue(target) => target.is_name_expr(),
+            Frame::Arg(call, _) | Frame::Kw(call, Some(_)) => {
+                reads && !has_star_arguments(call) && is_format_call(call)
+            }
+            Frame::Operand("cmp:", _, Expr::Compare(compare)) => {
+                let identity =
+                    (compare.ops.iter()).all(|op| matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot));
+                let plain = compare.ops.iter().all(|op| {
+                    matches!(
+                        op,
+                        ast::CmpOp::Eq
+                            | ast::CmpOp::NotEq
+                            | ast::CmpOp::In
+                            | ast::CmpOp::NotIn
+                            | ast::CmpOp::Is
+                            | ast::CmpOp::IsNot
+                    )
+                });
+                let others = (compare.operands.iter()).filter(|o| !o.range().contains(site));
+                identity || (reads && plain && others.into_iter().all(plain_literal))
+            }
+            Frame::Operand("bin:", "%", Expr::BinOp(binary)) => {
+                kind.exact
+                    && binary.left.is_string_literal_expr()
+                    && binary.right.range().contains(site)
+            }
+            Frame::SubValue(subscript) => kind.exact && !subscript.ctx.is_load(),
+            Frame::Attr(method) => {
+                kind.exact
+                    && matches!(up(2), Some(Frame::CallFunc(call))
+                    if !has_star_arguments(call)
+                        && call.arguments.keywords.is_empty()
+                        && matches!(
+                            method,
+                            "count" | "index" | "remove" | "discard" | "clear" | "reverse"
+                                | "sort" | "append" | "extend" | "insert" | "add" | "update"
+                        ))
+            }
+            _ => false,
+        }
+    }
+
     /// What a use of `id` starts as, the name it reaches (`Reg.WORKFLOWS` through a class's
-    /// attributes) and how many parent frames that takes: a comprehension's item of a name, a
-    /// class this file defines, a class attribute or a name as the inventory says, or an
-    /// attribute the class body does not bind (it may be a base's). None for a name the file
-    /// does not bind at module level or in a class body: it is no name the link reads.
+    /// attributes) and how many parent frames that takes: a comprehension's variable, a class
+    /// this file defines, a record, a class attribute or a name as the inventory says
+    /// (`attribute_kind`, `name_kind`), or an attribute the class body does not bind (it may be a
+    /// base's). None for a name the file does not bind at module level or in a class body, and
+    /// for a comprehension variable of no source: no name the link reads.
     fn start(&self, id: &'a str, at: At) -> Option<(String, usize, Start)> {
-        let item = self
+        if let Some((_, shape)) = self
             .items
             .iter()
             .rev()
-            .find(|(variable, _, _)| *variable == id);
-        if let Some((_, source, scope)) = item {
-            if source.is_empty() {
+            .find(|(variable, _)| *variable == id)
+        {
+            if shape.sources.is_empty() {
                 return None;
             }
-            let source = source.clone();
-            return Some((
-                id.to_string(),
-                0,
-                Start::Item {
-                    source,
-                    scope: *scope,
-                    own: false,
-                    copy: false,
-                    builtin: false,
-                },
-            ));
+            return Some((id.to_string(), 0, Start::Variable(shape.clone())));
         }
         let (reached, used, chain) = self.class_attribute(id);
         let start = match chain {
             Chain::Class => Start::Class,
             Chain::Attribute(class, attribute) => match self.identities.get(&(class, attribute)) {
-                Some(shape) => shape_start(shape),
+                Some(shape) if shape.record => Start::Record,
+                Some(_) => Start::Value(self.attribute_kind(class, attribute)),
                 None => Start::Inherited(class),
             },
-            Chain::Name => shape_start(&self.shape_of(at.scope, id)?),
+            Chain::Name => {
+                if self.shape_of(at.scope, id)?.record {
+                    Start::Record
+                } else {
+                    Start::Value(self.name_kind(id, at.scope, &[]))
+                }
+            }
         };
         Some((reached, used, start))
     }
@@ -2231,27 +2236,9 @@ impl<'a, 'w> Walker<'a, 'w> {
     // operation and the binding of its callee. One entry per operation (T1 to T13 of
     // `engine/round7-table.md`); anything else escapes.
 
-    /// Reads a use up through its parent frames (innermost last) by the entry for what it
-    /// starts as. `bare`: the use is a name with no dot; `site`: where the use starts, to tell
-    /// it from the other operands of an operator.
-    fn read_use(
-        &self,
-        frames: &[Frame<'a>],
-        start: &Start,
-        at: At,
-        bare: bool,
-        site: TextSize,
-    ) -> Outcome<'a> {
-        match start {
-            Start::Value { builtin } => self.read_value(frames, *builtin, at, bare, site),
-            Start::Item { .. } => self.read_item(frames, at, site),
-            Start::Class => self.read_holder(frames, false, at),
-            Start::Record => self.read_holder(frames, true, at),
-            Start::Inherited(_) => Outcome::Escape,
-        }
-    }
-
     /// The name's own value. Every entry that invokes a protocol of it needs it builtin-typed.
+    /// A step that takes a copy, a view, an item or a re-list out of it reads the value itself;
+    /// what the step made goes where `carry` and `consume` say.
     fn read_value(
         &self,
         frames: &[Frame<'a>],
@@ -2292,23 +2279,25 @@ impl<'a, 'w> Walker<'a, 'w> {
             Frame::Step("fstr") if builtin => Outcome::Read,
             Frame::Step("elt:list" | "elt:tuple") => self.in_display(frames, 2, builtin, at),
             Frame::Arg(call, index) => {
-                self.value_argument(frames, call, Position::Arg(index), builtin, at, site)
+                self.value_argument(frames, call, Position::Arg(index), builtin, at)
             }
             Frame::Kw(call, keyword) => {
-                self.value_argument(frames, call, Position::Keyword(keyword), builtin, at, site)
+                self.value_argument(frames, call, Position::Keyword(keyword), builtin, at)
             }
-            Frame::SubValue(subscript) => {
-                self.value_element(frames, subscript, builtin, at, bare, site)
-            }
+            Frame::SubValue(subscript) => self.value_element(frames, subscript, builtin, at, bare),
             Frame::Attr(attribute) => match up(2) {
                 Some(Frame::CallFunc(call)) => {
-                    self.value_method(frames, attribute, call, builtin, at, bare, site)
+                    self.value_method(frames, attribute, call, builtin, at, bare)
                 }
-                _ => Outcome::Escape,
+                // An attribute that holds no reference into a namespace (`step`).
+                _ => read_if(matches!(
+                    attribute,
+                    "__name__" | "__qualname__" | "__module__" | "__doc__"
+                )),
             },
             // T13 (and `%` of T12).
             Frame::Operand(prefix, op, node) if builtin => {
-                read_if(self.operator_reads(prefix, op, node, at, site, true))
+                read_if(self.operator_reads(prefix, op, node, site))
             }
             _ => Outcome::Escape,
         }
@@ -2359,11 +2348,10 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
-    /// The value handed to a call: a record (T3), `str.format` (T12), a builtin reader by the
-    /// slot it sits in (T5, T6) or an iterator consumed in place (T8). Every argument present
-    /// must be a slot the entry names; a `*` or `**` argument never is. A copy reader's result
-    /// holds the items (`read_copy`); `min`'s, `max`'s and `sum`'s may be one (`read_item`).
-    /// `id` is no reader: its integer gives the object back (`ctypes`).
+    /// The value handed to a call: a record (T3) or `str.format` (T12). Every argument present
+    /// must be a slot the entry names; a `*` or `**` argument never is. No builtin reads it
+    /// (round 9: no builtin reader or callee is resolved but a record's class and
+    /// `dataclasses.replace`).
     fn value_argument(
         &self,
         frames: &[Frame<'a>],
@@ -2371,7 +2359,6 @@ impl<'a, 'w> Walker<'a, 'w> {
         position: Position<'a>,
         builtin: bool,
         at: At,
-        site: TextSize,
     ) -> Outcome<'a> {
         // T3: `**X` of a builtin-typed dict hands a record constructor X's items as arguments.
         let callee = callee_text(call);
@@ -2390,65 +2377,12 @@ impl<'a, 'w> Walker<'a, 'w> {
         if self.record_call(call) {
             return self.record(frames, 1, at);
         }
-        if !builtin {
-            return Outcome::Escape;
-        }
-        if is_format_call(call) {
-            return Outcome::Read;
-        }
-        let Some(full) = self.resolve(&callee_text(call)) else {
-            return Outcome::Escape;
-        };
-        let args = call.arguments.args.len();
-        let no_keywords = call.arguments.keywords.is_empty();
-        let only = position == Position::Arg(0) && args == 1 && no_keywords;
-        let above = &frames[..frames.len() - 1];
-        match full.as_str() {
-            "builtins.list" | "builtins.tuple" | "builtins.set" | "builtins.frozenset"
-            | "builtins.dict"
-                if only =>
-            {
-                self.read_copy(above, at, site)
-            }
-            "builtins.sorted"
-                if position == Position::Arg(0) && args == 1 && self.sort_keywords(call) =>
-            {
-                self.read_copy(above, at, site)
-            }
-            "builtins.dict.fromkeys"
-                if position == Position::Arg(0) && (1..=2).contains(&args) && no_keywords =>
-            {
-                self.read_copy(above, at, site)
-            }
-            "builtins.min" | "builtins.max" | "builtins.sum" if only => {
-                self.read_item(above, at, site)
-            }
-            "builtins.len" | "builtins.bool" | "builtins.hash" | "builtins.repr"
-            | "builtins.str" | "builtins.any" | "builtins.all" => read_if(only),
-            "builtins.print" => read_if(matches!(position, Position::Arg(_)) && no_keywords),
-            "builtins.isinstance" => read_if(
-                position == Position::Arg(0)
-                    && args == 2
-                    && no_keywords
-                    && self.builtin_classes(&call.arguments.args[1]),
-            ),
-            full if ITERATORS.contains(&full) => {
-                if !self.iterator_slot(call, full, position) || !self.consumed(frames, 2) {
-                    return Outcome::Escape;
-                }
-                // An iterator a copy reader consumes leaves the reader's result, a copy.
-                match frames.len().checked_sub(2).map(|i| frames[i]) {
-                    Some(Frame::Arg(..)) => self.read_copy(&frames[..frames.len() - 2], at, site),
-                    _ => Outcome::Read,
-                }
-            }
-            _ => Outcome::Escape,
-        }
+        read_if(builtin && is_format_call(call))
     }
 
     /// T11 and T9: an element of the value. A store or a `del` of it by a module-level
     /// statement on the bare name changes the name in place (the assignment row is the change);
-    /// a load by an index is an item, by a slice a copy (`read_copy`).
+    /// a load by an index or a slice of a builtin-typed value takes an item or a copy (`step`).
     fn value_element(
         &self,
         frames: &[Frame<'a>],
@@ -2456,7 +2390,6 @@ impl<'a, 'w> Walker<'a, 'w> {
         builtin: bool,
         at: At,
         bare: bool,
-        site: TextSize,
     ) -> Outcome<'a> {
         let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
         let statement = builtin && bare && at.scope == -1;
@@ -2467,18 +2400,13 @@ impl<'a, 'w> Walker<'a, 'w> {
             Some(Frame::Terminal(text)) if text.ends_with("-target") || text == "del" => {
                 Outcome::Escape
             }
-            _ if !builtin => Outcome::Escape,
-            _ if subscript.slice.is_slice_expr() => {
-                self.read_copy(&frames[..frames.len() - 1], at, site)
-            }
-            _ => self.read_item(&frames[..frames.len() - 1], at, site),
+            _ => read_if(builtin && subscript.ctx.is_load()),
         }
     }
 
     /// A method of the value: a change by a module-level statement on the bare name (T11, which
-    /// writes the mutation row), a reading method (T10), a copy or a view (`read_copy`), or
-    /// `.get()`/`.pop()`, whose result is an item.
-    #[allow(clippy::too_many_arguments)]
+    /// writes the mutation row), a reading method (T10), or a copy, a view, `.get()` or `.pop()`,
+    /// whose result goes where `step` says.
     fn value_method(
         &self,
         frames: &[Frame<'a>],
@@ -2487,7 +2415,6 @@ impl<'a, 'w> Walker<'a, 'w> {
         builtin: bool,
         at: At,
         bare: bool,
-        site: TextSize,
     ) -> Outcome<'a> {
         let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
         if !builtin || has_star_arguments(call) {
@@ -2499,144 +2426,33 @@ impl<'a, 'w> Walker<'a, 'w> {
             && at.scope == -1
             && self.statement.is_some()
             && matches!(up(3), Some(Frame::Terminal("expr")));
-        let above = &frames[..frames.len() - 2];
         match attribute {
             "append" | "add" | "extend" if statement && args == 1 && !keywords => {
                 Outcome::Changed(call)
             }
             "insert" if statement && args == 2 && !keywords => Outcome::Changed(call),
             "update" if statement && args <= 1 => Outcome::Changed(call),
-            "copy" | "keys" | "values" | "items" if args == 0 && !keywords => {
-                self.read_copy(above, at, site)
-            }
+            "copy" | "keys" | "values" | "items" if args == 0 && !keywords => Outcome::Read,
+            "get" | "pop" if args <= 2 && !keywords => Outcome::Read,
             "clear" | "reverse" | "sort" if args == 0 && !keywords => Outcome::Read,
             "count" | "remove" | "discard" if args == 1 && !keywords => Outcome::Read,
             "index" if (1..=3).contains(&args) && !keywords => Outcome::Read,
-            "get" | "pop" if args <= 2 && !keywords => self.read_item(above, at, site),
             _ => Outcome::Escape,
         }
     }
 
-    /// A new container of the value's items, a copy (T5's copy readers, T9's slice, T10's
-    /// `.copy()` and views), at the frames above it: an element of it is an item
-    /// (`read_item`), a copy or a slice of it a copy again; a store into it, a test, iteration
-    /// (`item_source` reads a copy's items), formatting, a statement, a scalar reader, a
-    /// reading method or a comparison reads it; bound to names, each keeps where the items came
-    /// from (`item_of`). Anything else escapes.
-    fn read_copy(&self, frames: &[Frame<'a>], at: At, site: TextSize) -> Outcome<'a> {
-        let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
-        let Some(first) = up(1) else {
-            return Outcome::Read;
-        };
-        let above = |k: usize| &frames[..frames.len() - k];
-        match first {
-            Frame::SubValue(subscript) => match up(2) {
-                Some(Frame::Terminal(text)) if text.ends_with("-target") || text == "del" => {
-                    Outcome::Read
-                }
-                _ if subscript.slice.is_slice_expr() => self.read_copy(above(1), at, site),
-                _ => self.read_item(above(1), at, site),
-            },
-            Frame::Attr(method) => {
-                let Some(Frame::CallFunc(call)) = up(2) else {
-                    return Outcome::Escape;
-                };
-                let args = call.arguments.args.len();
-                let bare = args == 0 && call.arguments.keywords.is_empty();
-                match method {
-                    "copy" | "keys" | "values" | "items" if bare => {
-                        self.read_copy(above(2), at, site)
-                    }
-                    "get" | "pop" if args <= 2 && call.arguments.keywords.is_empty() => {
-                        self.read_item(above(2), at, site)
-                    }
-                    // These read the copy or put other values in: no item leaves it.
-                    "count" | "index" | "remove" | "discard" | "clear" | "reverse" | "sort"
-                    | "append" | "extend" | "insert" | "add" | "update" => {
-                        read_if(!has_star_arguments(call) && call.arguments.keywords.is_empty())
-                    }
-                    _ => Outcome::Escape,
-                }
-            }
-            Frame::Terminal("expr" | "if-test" | "while-test" | "assert" | "for-iter")
-            | Frame::Step("ifexp:test" | "comp:if" | "comp:iter" | "fstr")
-            | Frame::Op("unary:", "not") => Outcome::Read,
-            // T1 of a copy, as of the value: the link reads `*` itself.
-            Frame::Step("star") => {
-                read_if(matches!(up(2), Some(Frame::Step("elt:list" | "elt:tuple"))))
-            }
-            Frame::AssignValue(targets) => read_if(targets.iter().all(Expr::is_name_expr)),
-            Frame::AnnAssignValue(target) => read_if(target.is_name_expr()),
-            Frame::Arg(call, 0) if !has_star_arguments(call) => {
-                let only = call.arguments.args.len() == 1 && call.arguments.keywords.is_empty();
-                match self.resolve(&callee_text(call)).as_deref() {
-                    Some(
-                        "builtins.list" | "builtins.tuple" | "builtins.set" | "builtins.frozenset"
-                        | "builtins.sorted",
-                    ) if only => self.read_copy(above(1), at, site),
-                    Some("builtins.min" | "builtins.max" | "builtins.sum") if only => {
-                        self.read_item(above(1), at, site)
-                    }
-                    Some(
-                        "builtins.len" | "builtins.bool" | "builtins.hash" | "builtins.repr"
-                        | "builtins.str" | "builtins.any" | "builtins.all",
-                    ) => read_if(only),
-                    // T8 over a copy: consumed in place, its targets keep the items' source
-                    // (`item_source`); consumed by a copy reader, the reader's result is a copy.
-                    Some(full) if ITERATORS.contains(&full) => {
-                        if !self.iterator_slot(call, full, Position::Arg(0))
-                            || !self.consumed(frames, 2)
-                        {
-                            return Outcome::Escape;
-                        }
-                        match up(2) {
-                            Some(Frame::Arg(..)) => self.read_copy(above(2), at, site),
-                            _ => Outcome::Read,
-                        }
-                    }
-                    _ => Outcome::Escape,
-                }
-            }
-            Frame::Operand("cmp:", _, node) => {
-                read_if(self.operator_reads("cmp:", "", node, at, site, false))
-            }
-            // T13's `+` with a display or a builtin-typed name: a new copy of the items.
-            Frame::Operand("bin:", "+", node)
-                if self.operator_reads("bin:", "+", node, at, site, true) =>
-            {
-                self.read_copy(above(1), at, site)
-            }
-            _ => Outcome::Escape,
-        }
-    }
-
-    /// T13 and `%` of T12: `X + Y` with Y a list or tuple display or a builtin-typed name;
-    /// `"lit" % X`; a comparison by `==`, `!=`, `in`, `not in` with literals (`value`: or
-    /// builtin-typed names), or by `is`/`is not` with anything. `site` tells the use's own
-    /// operand from the others.
-    fn operator_reads(
-        &self,
-        prefix: &str,
-        op: &str,
-        node: &'a Expr,
-        at: At,
-        site: TextSize,
-        value: bool,
-    ) -> bool {
+    /// T13 and `%` of T12, on a builtin-typed value: `X + D` with D a list or tuple display (its
+    /// result goes where `step` says); `"lit" % X`; a comparison by `==`, `!=`, `in`, `not in`
+    /// with literals, or by `is`/`is not` with anything. No other operand is read (round 9: a
+    /// name operand is not). `site` tells the use's own operand from the others.
+    fn operator_reads(&self, prefix: &str, op: &str, node: &'a Expr, site: TextSize) -> bool {
         let other = |operand: &Expr| !operand.range().contains(site);
-        let known =
-            |operand: &Expr| plain_literal(operand) || (value && self.builtin_name(operand, at));
         match (prefix, node) {
-            ("bin:", Expr::BinOp(binary)) if op == "+" && value => [&*binary.left, &*binary.right]
+            ("bin:", Expr::BinOp(binary)) if op == "+" => [&*binary.left, &*binary.right]
                 .into_iter()
                 .filter(|operand| other(operand))
-                .all(|operand| {
-                    matches!(operand, Expr::List(_) | Expr::Tuple(_))
-                        || self.builtin_name(operand, at)
-                }),
-            ("bin:", Expr::BinOp(binary)) if op == "%" && value => {
-                binary.left.is_string_literal_expr()
-            }
+                .all(|operand| matches!(operand, Expr::List(_) | Expr::Tuple(_))),
+            ("bin:", Expr::BinOp(binary)) if op == "%" => binary.left.is_string_literal_expr(),
             ("cmp:", Expr::Compare(compare)) => {
                 let identity =
                     (compare.ops.iter()).all(|op| matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot));
@@ -2651,51 +2467,11 @@ impl<'a, 'w> Walker<'a, 'w> {
                             | ast::CmpOp::IsNot
                     )
                 });
-                let operands = compare.operands.iter();
-                identity || (plain && operands.filter(|o| other(o)).all(known))
+                let mut others = compare.operands.iter().filter(|o| other(o));
+                identity || (plain && others.all(plain_literal))
             }
             _ => false,
         }
-    }
-
-    /// An item of a name (a comprehension's or a `for`'s variable over it, an element of it, a
-    /// `.get()` or `.pop()` of it, a name bound to one). It keeps its provenance: read where
-    /// nothing can reach the name from it (an attribute read, a test, formatting, a reading
-    /// builtin, a comparison, a binding to names, which keep it: `item_of`), else it escapes for
-    /// the name. In a display, a dict or a comprehension's element it sits in a container no
-    /// name keeps it for, so it escapes.
-    fn read_item(&self, frames: &[Frame<'a>], at: At, site: TextSize) -> Outcome<'a> {
-        let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
-        let Some(first) = up(1) else {
-            return Outcome::Read;
-        };
-        let read = match first {
-            Frame::Attr(_) => !matches!(up(2), Some(Frame::CallFunc(_))),
-            Frame::Terminal("if-test" | "while-test" | "assert" | "expr")
-            | Frame::Step("ifexp:test" | "comp:if" | "fstr")
-            | Frame::Op("unary:", "not") => true,
-            Frame::AssignValue(targets) => targets.iter().all(Expr::is_name_expr),
-            Frame::AnnAssignValue(target) => target.is_name_expr(),
-            // The element of a comprehension bound to names: the names are copies that keep
-            // where the items came from (`comprehension_copy`).
-            Frame::Step("comp:elt" | "comp:key" | "comp:val") => match up(2) {
-                Some(Frame::AssignValue(targets)) => targets.iter().all(Expr::is_name_expr),
-                Some(Frame::AnnAssignValue(target)) => target.is_name_expr(),
-                _ => false,
-            },
-            Frame::Arg(call, _) => {
-                !has_star_arguments(call)
-                    && (is_format_call(call) || self.reads_item(call) || self.loader_call(call))
-            }
-            Frame::Kw(call, Some(_)) => {
-                !has_star_arguments(call) && (is_format_call(call) || self.loader_call(call))
-            }
-            Frame::Operand(prefix, op, node) => {
-                self.operator_reads(prefix, op, node, at, site, false)
-            }
-            _ => false,
-        };
-        read_if(read)
     }
 
     /// A class this file defines, or a record: it holds what its body binds or its arguments.
@@ -2736,186 +2512,6 @@ impl<'a, 'w> Walker<'a, 'w> {
         self.resolve(&callee_text(call)).as_deref() == Some("dataclasses.replace")
             && call.arguments.args.len() == 1
             && !has_star_arguments(call)
-    }
-
-    /// Whether a call's keywords are `sorted`'s: `reverse`, and `key` as a callable slot.
-    fn sort_keywords(&self, call: &ast::ExprCall) -> bool {
-        call.arguments.keywords.iter().all(|keyword| {
-            match keyword.arg.as_ref().map(|arg| arg.as_str()) {
-                Some("reverse") => true,
-                Some("key") => self.callable_slot(&keyword.value),
-                _ => false,
-            }
-        })
-    }
-
-    /// A callable that receives items (`key=`, `map`'s and `filter`'s function): a lambda, a
-    /// builtin that reads its argument, or a function this module defines (its body is limit 1).
-    fn callable_slot(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Lambda(_) => true,
-            Expr::Name(name) => {
-                let id = name.id.as_str();
-                let module_def = (self.defs.entries.iter()).any(|entry| {
-                    entry.parent == -1
-                        && matches!(entry.node, DefNode::Func(f) if f.name.as_str() == id)
-                });
-                let builtin = (self.resolve(id))
-                    .is_some_and(|full| READING_BUILTINS.contains(&full.as_str()));
-                self.relied.borrow_mut().push(id.to_string());
-                let unique = self.others.get(id) == Some(&1) && !self.bound.contains_key(id);
-                builtin || (module_def && unique && !self.patched_any)
-            }
-            _ => false,
-        }
-    }
-
-    /// `isinstance`'s classes: a builtin type, or a tuple display of builtin types.
-    fn builtin_classes(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Tuple(tuple) => tuple.elts.iter().all(|e| self.builtin_classes(e)),
-            Expr::Name(name) => (self.resolve(name.id.as_str())).is_some_and(|full| {
-                matches!(
-                    full.as_str(),
-                    "builtins.list"
-                        | "builtins.tuple"
-                        | "builtins.dict"
-                        | "builtins.set"
-                        | "builtins.frozenset"
-                        | "builtins.str"
-                        | "builtins.bytes"
-                        | "builtins.int"
-                        | "builtins.float"
-                        | "builtins.bool"
-                        | "builtins.type"
-                        | "builtins.object"
-                )
-            }),
-            _ => false,
-        }
-    }
-
-    /// Whether a call is a builtin copy reader (T5): its result holds the argument's items.
-    fn copy_reader(&self, call: &ast::ExprCall) -> bool {
-        (self.resolve(&callee_text(call))).is_some_and(|full| {
-            matches!(
-                full.as_str(),
-                "builtins.list"
-                    | "builtins.tuple"
-                    | "builtins.set"
-                    | "builtins.frozenset"
-                    | "builtins.sorted"
-                    | "builtins.dict"
-            )
-        })
-    }
-
-    /// Whether a call is an iterator builtin (T8).
-    fn iterator_builtin(&self, call: &ast::ExprCall) -> bool {
-        (self.resolve(&callee_text(call))).is_some_and(|full| ITERATORS.contains(&full.as_str()))
-    }
-
-    /// Whether the value sits in a slot an iterator builtin reads it from (T8).
-    fn iterator_slot(&self, call: &ast::ExprCall, full: &str, position: Position) -> bool {
-        let args = &call.arguments.args;
-        let keywords: Vec<&str> = (call.arguments.keywords.iter())
-            .filter_map(|k| k.arg.as_ref().map(|arg| arg.as_str()))
-            .collect();
-        match full {
-            "builtins.iter" | "builtins.reversed" => {
-                position == Position::Arg(0) && args.len() == 1 && keywords.is_empty()
-            }
-            "builtins.enumerate" => {
-                position == Position::Arg(0)
-                    && (1..=2).contains(&args.len())
-                    && keywords.iter().all(|k| *k == "start")
-            }
-            "builtins.zip" => {
-                matches!(position, Position::Arg(_)) && keywords.iter().all(|k| *k == "strict")
-            }
-            "builtins.map" => {
-                matches!(position, Position::Arg(i) if i >= 1)
-                    && keywords.is_empty()
-                    && self.callable_slot(&args[0])
-            }
-            "builtins.filter" => {
-                position == Position::Arg(1)
-                    && args.len() == 2
-                    && keywords.is_empty()
-                    && (args[0].is_none_literal_expr() || self.callable_slot(&args[0]))
-            }
-            "itertools.chain" => matches!(position, Position::Arg(_)) && keywords.is_empty(),
-            _ => false,
-        }
-    }
-
-    /// Whether the iterator at `up(k)` is consumed in place (T8): the iterable of a `for` or a
-    /// comprehension, or the only argument of a builtin copy reader.
-    fn consumed(&self, frames: &[Frame<'a>], k: usize) -> bool {
-        let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
-        match up(k) {
-            Some(Frame::Terminal("for-iter") | Frame::Step("comp:iter")) => true,
-            Some(Frame::Arg(reader, 0)) => {
-                let full = self.resolve(&callee_text(reader));
-                let copy = full.as_deref().is_some_and(|full| {
-                    matches!(
-                        full,
-                        "builtins.list"
-                            | "builtins.tuple"
-                            | "builtins.set"
-                            | "builtins.frozenset"
-                            | "builtins.dict"
-                    )
-                });
-                let sorted =
-                    full.as_deref() == Some("builtins.sorted") && self.sort_keywords(reader);
-                reader.arguments.args.len() == 1
-                    && !has_star_arguments(reader)
-                    && ((copy && reader.arguments.keywords.is_empty()) || sorted)
-            }
-            _ => false,
-        }
-    }
-
-    /// T14: a configured loader (`importlib.import_module`, `__import__`, through a unique, valid
-    /// binding or an import alias) takes the item as a module's name: the computed-import rule
-    /// reads the loop over the list, and the loader keeps nothing of the item.
-    fn loader_call(&self, call: &ast::ExprCall) -> bool {
-        (self.resolve(&callee_text(call)))
-            .is_some_and(|full| self.config.watch_aliased.contains(&full))
-    }
-
-    /// The builtins that read an item handed to them: nothing of it goes on.
-    fn reads_item(&self, call: &ast::ExprCall) -> bool {
-        let Some(full) = self.resolve(&callee_text(call)) else {
-            return false;
-        };
-        match full.as_str() {
-            "builtins.list" | "builtins.tuple" | "builtins.set" | "builtins.frozenset"
-            | "builtins.len" | "builtins.bool" | "builtins.hash" | "builtins.repr"
-            | "builtins.str" | "builtins.print" => call.arguments.keywords.is_empty(),
-            "builtins.isinstance" => {
-                call.arguments.args.len() == 2
-                    && call.arguments.keywords.is_empty()
-                    && self.builtin_classes(&call.arguments.args[1])
-            }
-            _ => false,
-        }
-    }
-
-    /// Whether an operand is a name the inventory says is builtin-typed (T13's other operand).
-    /// Never a class attribute: a store on the class, a second class statement, a decorator or a
-    /// metaclass may replace what the body binds. The name is one the read relies on (`relied`).
-    fn builtin_name(&self, expr: &Expr, at: At) -> bool {
-        let Expr::Name(name) = expr else {
-            return false;
-        };
-        let id = name.id.as_str();
-        if self.bound.contains_key(id) {
-            return false;
-        }
-        self.relied.borrow_mut().push(id.to_string());
-        (self.shape_of(at.scope, id)).is_some_and(|shape| shape.builtin && !shape.class_alias)
     }
 
     /// The full name a dotted name of the code stands for: through the import that binds its
@@ -2998,7 +2594,14 @@ impl<'a, 'w> Walker<'a, 'w> {
     }
 
     fn expr(&mut self, expr: &'a Expr, at: At) {
+        self.stack.push((expr, self.path.len()));
+        self.walk_expr(expr, at);
+        self.stack.pop();
+    }
+
+    fn walk_expr(&mut self, expr: &'a Expr, at: At) {
         self.emit_module_reads(expr, at);
+        self.emit_computed_value(expr, at);
         self.emit_store(expr, at);
         match expr {
             Expr::Call(call) => {
@@ -3202,23 +2805,19 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
-    /// The variables of a comprehension's generators that take items of a module-level or
-    /// class-body name (`item_source`): their uses in it are items of that name. A variable over
-    /// anything else hides a name of the same spelling.
+    /// The variables of a comprehension's generators, each an item of what its generator
+    /// iterates (`kind_of`, read with the variables of the generators before it). A variable of
+    /// no source hides a name of the same spelling.
     fn comprehension_items(&mut self, generators: &'a [ast::Comprehension], scope: i64) {
         if !self.wants(Kind::Escapes) {
             return;
         }
         for generator in generators {
+            let iterated = self.kind_of(&generator.iter, scope, &self.items);
             let mut names = Vec::new();
             target_names(&generator.target, &mut names);
-            let source = self.item_source(&generator.iter, scope);
             for name in names {
-                let (source, at) = match &source {
-                    Some((source, at)) => (source.clone(), *at),
-                    None => (String::new(), scope),
-                };
-                self.items.push((name, source, at));
+                self.items.push((name, Shape::item_of(&iterated.sources)));
             }
         }
     }
@@ -3308,6 +2907,228 @@ impl<'a, 'w> Walker<'a, 'w> {
             return Some(String::new());
         }
         Some(sequence.to_string())
+    }
+
+    // ---- module values (round 9, part B and C) -----------------------------------------------
+    //
+    // The evidence the link needs before it trusts a record's class, `dataclasses.replace`, or
+    // a class body read back: every use, in any scope, of a value that may be a module, a class
+    // or a function, in a place that is no attribute read and no call. Each such use is a `!`
+    // row (one per text and scope): `!TEXT` names the value as the file's lookup reads it,
+    // `!TEXT@CALLEE` a value handed to a record constructor, `!TEXT#default` a dataclass default,
+    // `!:MODULE` a module a literal import names, `!.` the file's own module, `!*` any module.
+
+    /// A load of a name that may be a module, a class or a function: an import in any scope, a
+    /// class or a def at module level, or a builtin's name. Its attribute chain of plain loads is
+    /// the value; where the chain sits decides (`accounted`). A builtin only counts through
+    /// `__self__`, `__dict__` or `__globals__` (any module).
+    fn emit_module_value(&mut self, name: &'a ast::ExprName, at: At) {
+        if !self.wants(Kind::Escapes) || name.ctx != ExprContext::Load || at.flags & TYPE_ONLY != 0
+        {
+            return;
+        }
+        let id = name.id.as_str();
+        let defined = (self.defs.entries.iter()).any(|entry| {
+            entry.parent == -1
+                && match entry.node {
+                    DefNode::Func(f) => f.name.as_str() == id,
+                    DefNode::Class(c) => c.name.as_str() == id,
+                }
+        });
+        let root = self.bound.contains_key(id) || defined;
+        let builtin = !root
+            && !self.binds_name(id)
+            && !self.parameters.contains(id)
+            && !self.star_import
+            && !self.items.iter().any(|(variable, _)| *variable == id);
+        if !root && !builtin {
+            return;
+        }
+        let mut index = self.stack.len() - 1;
+        let mut text = id.to_string();
+        let mut dunder = false;
+        while index > 0 {
+            let Expr::Attribute(attribute) = self.stack[index - 1].0 else {
+                break;
+            };
+            let attr = attribute.attr.as_str();
+            let plain =
+                !(attr.starts_with("__") && attr.ends_with("__")) || PLAIN_DUNDERS.contains(&attr);
+            if !plain || !attribute.ctx.is_load() {
+                dunder = matches!(attr, "__self__" | "__dict__" | "__globals__");
+                break;
+            }
+            text = format!("{text}.{attr}");
+            index -= 1;
+        }
+        let pos = self.lines.pos(name.range.start());
+        if builtin {
+            if dunder {
+                self.emit_value_row(at, pos, "*".to_string());
+            }
+            return;
+        }
+        let frames = &self.path[..self.stack[index].1];
+        // `sys.modules["m"]`: the module a literal key names, whatever reads it.
+        if let Some(Frame::SubValue(subscript)) = frames.last()
+            && self.is_modules(self.stack[index].0)
+            && let Expr::StringLiteral(key) = &*subscript.slice
+        {
+            return self.emit_value_row(at, pos, format!(":{}", key.value.to_str()));
+        }
+        let Some(marker) = self.accounted(frames, at) else {
+            return;
+        };
+        self.emit_value_row(at, pos, format!("{text}{marker}"));
+    }
+
+    /// A value only a call or an import names: `x.__globals__` or `x.__self__` of anything but
+    /// a name `emit_module_value` reads (any module); `globals()`, and `vars()` at module level
+    /// (the file's own module); a call of `__import__` or `import_module` whose result is no
+    /// attribute read and no call (the module a literal first argument names, else any).
+    fn emit_computed_value(&mut self, expr: &'a Expr, at: At) {
+        if !self.wants(Kind::Escapes) || at.flags & TYPE_ONLY != 0 {
+            return;
+        }
+        let pos = self.lines.pos(expr.range().start());
+        match expr {
+            Expr::Attribute(attribute)
+                if matches!(attribute.attr.as_str(), "__globals__" | "__self__") =>
+            {
+                let mut head = &*attribute.value;
+                while let Expr::Attribute(inner) = head {
+                    head = &inner.value;
+                }
+                if !matches!(head, Expr::Name(_)) {
+                    self.emit_value_row(at, pos, "*".to_string());
+                }
+            }
+            Expr::Call(call) => {
+                let callee = callee_text(call);
+                let last = callee.rsplit('.').next().unwrap_or_default();
+                let bare = !self.binds_name(last) && !self.bound.contains_key(last);
+                let own = match last {
+                    "globals" => bare && callee == "globals",
+                    "vars" => {
+                        bare && callee == "vars" && call.arguments.is_empty() && at.scope == -1
+                    }
+                    _ => false,
+                };
+                if own {
+                    return self.emit_value_row(at, pos, ".".to_string());
+                }
+                if !matches!(last, "__import__" | "import_module") {
+                    return;
+                }
+                let mut index = self.stack.len() - 1;
+                while index > 0 {
+                    match self.stack[index - 1].0 {
+                        Expr::Attribute(a)
+                            if a.ctx.is_load()
+                                && (!(a.attr.starts_with("__") && a.attr.ends_with("__"))
+                                    || PLAIN_DUNDERS.contains(&a.attr.as_str())) =>
+                        {
+                            index -= 1
+                        }
+                        _ => break,
+                    }
+                }
+                let frames = &self.path[..self.stack[index].1];
+                if self.accounted(frames, at).is_none() {
+                    return;
+                }
+                let module = match call.arguments.args.first() {
+                    Some(Expr::StringLiteral(literal)) => format!(":{}", literal.value.to_str()),
+                    _ => "*".to_string(),
+                };
+                self.emit_value_row(at, pos, module);
+            }
+            _ => {}
+        }
+    }
+
+    /// Where a value that may be a module, a class or a function sits, when that place is not
+    /// accounted (None when it is): an attribute read is followed, so this is the place of the
+    /// whole chain. Accounted: a call of it, a base, a decorator, an annotation, a test, a
+    /// statement, `is`, an argument of `isinstance` or `issubclass` (a builtin the file does
+    /// not bind). A record constructor's argument (`@CALLEE`) and a dataclass default
+    /// (`#default`) are accounted for a class only: the link decides.
+    fn accounted(&self, frames: &[Frame<'a>], at: At) -> Option<String> {
+        let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
+        let annotation = frames.iter().any(|frame| {
+            matches!(
+                frame,
+                Frame::Terminal("annotation" | "returns") | Frame::ParamAnn(_)
+            )
+        });
+        if annotation {
+            return None;
+        }
+        let checks = |call: &ast::ExprCall| {
+            let callee = callee_text(call);
+            matches!(callee.as_str(), "isinstance" | "issubclass")
+                && !self.binds_name(&callee)
+                && !self.bound.contains_key(callee.as_str())
+                && !self.star_import
+        };
+        let first = up(1)?;
+        match first {
+            Frame::CallFunc(_)
+            | Frame::Base(_)
+            | Frame::Terminal("decorator" | "expr" | "if-test" | "while-test" | "assert")
+            | Frame::Step("ifexp:test" | "comp:if")
+            | Frame::Op("unary:", "not") => None,
+            Frame::Operand("cmp:", _, Expr::Compare(compare))
+                if (compare.ops.iter())
+                    .all(|op| matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot)) =>
+            {
+                None
+            }
+            Frame::Arg(call, _) if checks(call) => None,
+            Frame::Step("elt:tuple") if matches!(up(2), Some(Frame::Arg(call, 1)) if checks(call)) => {
+                None
+            }
+            Frame::Arg(call, _) | Frame::Kw(call, Some(_))
+                if !has_star_arguments(call) && self.record_callee(&callee_text(call)) =>
+            {
+                Some(format!("@{}", callee_text(call)))
+            }
+            Frame::AssignValue([Expr::Name(_)]) | Frame::AnnAssignValue(Expr::Name(_))
+                if self.dataclass_body(at.scope) =>
+            {
+                Some("#default".to_string())
+            }
+            _ => Some(String::new()),
+        }
+    }
+
+    /// Whether `scope` is the body of a class decorated `dataclass` (by any spelling, with any
+    /// arguments).
+    fn dataclass_body(&self, scope: i64) -> bool {
+        if !self.defs.is_class(scope) {
+            return false;
+        }
+        let DefNode::Class(class) = self.defs.entries[scope as usize].node else {
+            return false;
+        };
+        class.decorator_list.iter().any(|decorator| {
+            let callee = match &decorator.expression {
+                Expr::Call(call) => &*call.func,
+                expr => expr,
+            };
+            dotted_name(callee).is_some_and(|name| name.rsplit('.').next() == Some("dataclass"))
+        })
+    }
+
+    /// One `!` row, once per text and scope in the file.
+    fn emit_value_row(&mut self, at: At, pos: (i64, i64), text: String) {
+        if !self.values_seen.insert((at.scope, text.clone())) {
+            return;
+        }
+        self.out.escapes.push(Tag {
+            site: at.site(pos),
+            name: format!("!{text}"),
+        });
     }
 
     // ---- emitters -------------------------------------------------------------------------
@@ -3781,6 +3602,7 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// needs the `refs` rows too: they seed the derivation.
     fn emit_ref(&mut self, name: &'a ast::ExprName, at: At) {
         self.emit_use(name, at);
+        self.emit_module_value(name, at);
         if !self.wants_any(&[Kind::Refs, Kind::Derived, Kind::Uses, Kind::Listed]) {
             return;
         }
@@ -3921,6 +3743,56 @@ fn attribute_of<'f>(frame: Frame<'f>) -> Option<&'f str> {
 
 /// A value whose dunders are builtin on its own: a display, a list, set or dict comprehension,
 /// a literal or an f-string.
+/// The sub-expressions an expression may keep something of (`Walker::step`): a subscript's,
+/// an attribute's or a starred value, a callee, an operand of a binary operation, a branch of a
+/// conditional, an element of a list, tuple or set display.
+fn contributors(expr: &Expr) -> Vec<&Expr> {
+    match expr {
+        Expr::Subscript(s) => vec![&*s.value],
+        Expr::Attribute(a) => vec![&*a.value],
+        Expr::Call(c) => vec![&*c.func],
+        Expr::Starred(s) => vec![&*s.value],
+        Expr::BinOp(b) => vec![&*b.left, &*b.right],
+        Expr::If(i) => vec![&*i.body, &*i.orelse],
+        Expr::List(l) => l.elts.iter().collect(),
+        Expr::Tuple(t) => t.elts.iter().collect(),
+        Expr::Set(s) => s.elts.iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether a statement, or any statement in its blocks (not in a def or class it holds),
+/// binds or unbinds `id`.
+fn binds_anywhere(stmt: &Stmt, id: &str) -> bool {
+    let mut names = Vec::new();
+    statement_bindings(stmt, &mut names);
+    names.contains(&id)
+        || nested_bodies(stmt)
+            .iter()
+            .any(|body| body.iter().any(|s| binds_anywhere(s, id)))
+}
+
+/// Whether an expression loads the name `id` anywhere in it.
+fn reads_name(expr: &Expr, id: &str) -> bool {
+    struct Reads<'n> {
+        id: &'n str,
+        found: bool,
+    }
+    impl<'e> Visitor<'e> for Reads<'_> {
+        fn visit_expr(&mut self, expr: &'e Expr) {
+            if let Expr::Name(name) = expr
+                && name.id.as_str() == self.id
+            {
+                self.found = true;
+            }
+            visitor::walk_expr(self, expr);
+        }
+    }
+    let mut reads = Reads { id, found: false };
+    reads.visit_expr(expr);
+    reads.found
+}
+
 fn builtin_literal(expr: &Expr) -> bool {
     matches!(
         expr,
@@ -4396,26 +4268,6 @@ impl<'a> Visitor<'a> for ValueBindings<'a> {
             self.pairs.push((name.id.as_str(), &named.value));
         }
         visitor::walk_expr(self, expr);
-    }
-}
-
-/// What a use of an identity starts as (`Walker::start`): a record holds, an item keeps its
-/// provenance, else the value itself.
-fn shape_start(shape: &Shape) -> Start {
-    if shape.record {
-        return Start::Record;
-    }
-    if let Some((source, scope, copy)) = &shape.item_of {
-        return Start::Item {
-            source: source.clone(),
-            scope: *scope,
-            own: true,
-            copy: *copy,
-            builtin: shape.builtin,
-        };
-    }
-    Start::Value {
-        builtin: shape.builtin,
     }
 }
 

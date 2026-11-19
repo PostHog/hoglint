@@ -361,8 +361,9 @@ def load():
     assert_eq!(full["cfg"], "0456280f");
     assert_eq!(
         kinds_of(&full),
+        // `escapes`: `x = Thing.objects` binds a value that may be a module (`!` rows, round 9).
         strings(&[
-            "callees", "calls", "defs", "derived", "imports", "refs", "strs", "uses"
+            "callees", "calls", "defs", "derived", "escapes", "imports", "refs", "strs", "uses"
         ])
     );
     let cases: [(&[Kind], &str, &[&str]); 2] = [

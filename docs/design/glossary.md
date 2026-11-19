@@ -261,3 +261,10 @@ These belong to the PostHog preset, not to the engine.
   The `wiring-watched` rule checks that the wiring locations other packages drive, the receivers and hook callbacks, and the modules the request pipeline reaches are watched.
   The `reached-watched` rule checks the same for every product file that code outside the products reaches past the export.
   In the extractor, a `watched` row is a dict entry whose key is one of the `--watch-keys` strings.
+- **Kind of an expression** (`Walker::kind_of`, `Shape` in `src/walker.rs`).
+  What the use reading knows of an expression, from one function at bindings and uses alike: whether its type is proved builtin, the tracked lists it may be, hold items of or be an item of (its sources), whether it may be an item, whether it is a record.
+  An escape of it is an escape of every source.
+- **Stable class** (`Producers::stable_class` in `src/link/produce.rs`).
+  A class whose attribute read returns what its body binds: metaclass `type` or `abc.ABCMeta` along its lineage, no decorator but `dataclasses.dataclass`, no store into it from any file, every occurrence of it accounted, the attribute bound once at the body's top level.
+- **Module value, `!` row** (an `escapes` row `!VALUE`).
+  A use of a value that may be a module, a class or a function, in a place that is no attribute read and no call; the link resolves it and trusts no record class, `dataclasses.replace` or class read back that it may reach.

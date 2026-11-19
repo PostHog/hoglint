@@ -452,6 +452,11 @@ impl Link {
             rebound_imports: FxHashSet::default(),
             foreign: FxHashMap::default(),
             class_stores: FxHashMap::default(),
+            values: FxHashMap::default(),
+            touched_classes: FxHashSet::default(),
+            touched_modules: FxHashSet::default(),
+            handed: Vec::new(),
+            touching: FxHashSet::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
