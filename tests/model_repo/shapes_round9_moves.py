@@ -3,7 +3,7 @@ with what it gives now (`outcome` and `reason`, or `unread` for the first shapes
 Every move but one is a read the round no longer makes: it fails closed. The pinned data stays as it
 was; `moved` lays this over it. Round 9b (`moved9b`) moves the `__globals__` rows limit 9 kept to
 unread, and marks `alone` the rows whose change reaches every module: they run in an answer of
-their own."""
+their own. Round 10 (`MOVES10`, `moved10`) moves the rows its narrowed entries fail closed."""
 
 from __future__ import annotations
 
@@ -770,6 +770,150 @@ MOVES: dict[str, dict[str, Any]] = {
 }
 
 
+# Round 10 (`engine/brief-watched-round10.md`): each entry narrowed to positive evidence; these
+# rows now fail closed, each for the rule named.
+MOVES10: dict[str, dict[str, Any]] = {
+    "decl_class_attribute": {
+        "moved10": "round 10 family 4: a class read needs a stable class whose binding is a literal, a display, a function or a plain class; a record instance as the value is none of these",
+        "unread": True,
+    },
+    "decl_class_module": {
+        "moved10": "round 10 family 4: a class read needs a stable class whose binding is a literal, a display, a function or a plain class; a record instance as the value is none of these",
+        "unread": True,
+    },
+    "r4_c_cls_self": {
+        "moved10": "round 10 family 4: a class read needs a stable class whose binding is a literal, a display, a function or a plain class; this body binds an expression",
+        "outcome": "unread",
+        "reason": "Registration.WORKFLOWS",
+    },
+    "r4_c_cls_mutual": {
+        "moved10": "round 10 family 4: a class read needs a stable class whose binding is a literal, a display, a function or a plain class; this body binds another class's attribute",
+        "outcome": "unread",
+        "reason": "Registration.WORKFLOWS",
+    },
+    "r4_c_cls_sub": {
+        "moved10": "round 10 family 5: a class some class statement takes as a base is touched; a subclass reaches it",
+        "outcome": "unread",
+        "reason": "Registration.WORKFLOWS",
+    },
+    "r4_e_override": {
+        "moved10": "round 10 family 5: a class some class statement takes as a base is touched; a subclass reaches it",
+        "outcome": "unread",
+        "reason": "products.r4_e_override.",
+    },
+    "r4_e_override_star": {
+        "moved10": "round 10 family 5: a class some class statement takes as a base is touched; a subclass reaches it",
+        "outcome": "unread",
+        "reason": "products.r4_e_override_star.",
+    },
+    "r4_e_base_read_sub": {
+        "moved10": "round 10 family 5: a class some class statement takes as a base is touched; a subclass reaches it",
+        "outcome": "unread",
+        "reason": "products.r4_e_base_read_sub.",
+    },
+    "r4_e_init_subclass": {
+        "moved10": "round 10 family 5: a class some class statement takes as a base is touched; a subclass reaches it (its `__init_subclass__` fills the list)",
+        "outcome": "unread",
+        "reason": "products.r4_e_init_subclass.",
+    },
+    "r4_e_init_subclass_mod": {
+        "moved10": "round 10 family 5: a class some class statement takes as a base is touched; a subclass reaches it (its `__init_subclass__` fills the list)",
+        "outcome": "unread",
+        "reason": "products.r4_e_init_subclass_mod.",
+    },
+    "r4_f_enumval": {
+        "moved10": "round 10 family 4: a class read needs a stable class whose binding is a literal, a display, a function or a plain class; an Enum's metaclass is no stable lineage",
+        "outcome": "unread",
+        "reason": "TASK_QUEUE",
+    },
+    "r4_d_extend_u": {
+        "moved10": "round 10 audit: `extend` iterates its argument, which must be a display, a literal or a builtin-typed value; a call's result may be anything",
+        "outcome": "unread",
+        "reason": "products.r4_d_extend_u.",
+    },
+    "r4_d_setlit_ior": {
+        "moved10": "round 10 audit: `|=` of a value no display, literal or builtin type proves runs its `__or__`",
+        "outcome": "unread",
+        "reason": "products.r4_d_setlit_ior.",
+    },
+    "r4_f_update_mut": {
+        "moved10": "round 10 family 7: `update` releases the values it replaces, so each value must be proved inert; a call's result is not (t30's ruling)",
+        "outcome": "unread",
+        "reason": "products.r4_f_update_mut.",
+    },
+    "r8_c_base": {
+        "moved10": "round 10 family 5: a class some class statement takes as a base is touched; a subclass reaches it",
+        "outcome": "unread",
+        "reason": "products.r8_c_base.",
+    },
+    "r8_c_t1": {
+        "moved10": "round 10 family 4: `[*_K.L]` reads the class back, and its binding is an alias of the list, no inert value",
+        "outcome": "unread",
+        "reason": "products.r8_c_t1.",
+    },
+    "r8_o_t9_index_hk": {
+        "moved10": "round 10 family 7: an operand the operation hooks (`__index__`, `__eq__`, `__format__`) must be a literal or a proved name; a call is not",
+        "outcome": "unread",
+        "reason": "products.r8_o_t9_index_hk.",
+    },
+    "r8_o_t9_slice_hk": {
+        "moved10": "round 10 family 7: an operand the operation hooks (`__index__`, `__eq__`, `__format__`) must be a literal or a proved name; a call is not",
+        "outcome": "unread",
+        "reason": "products.r8_o_t9_slice_hk.",
+    },
+    "r8_o_t10_count_hk": {
+        "moved10": "round 10 family 7: an operand the operation hooks (`__index__`, `__eq__`, `__format__`) must be a literal or a proved name; a call is not",
+        "outcome": "unread",
+        "reason": "products.r8_o_t10_count_hk.",
+    },
+    "r8_o_t10_index_hk": {
+        "moved10": "round 10 family 7: an operand the operation hooks (`__index__`, `__eq__`, `__format__`) must be a literal or a proved name; a call is not",
+        "outcome": "unread",
+        "reason": "products.r8_o_t10_index_hk.",
+    },
+    "r8_o_t11_insert_hk": {
+        "moved10": "round 10 family 7: an operand the operation hooks (`__index__`, `__eq__`, `__format__`) must be a literal or a proved name; a call is not",
+        "outcome": "unread",
+        "reason": "products.r8_o_t11_insert_hk.",
+    },
+    "r8_o_t11_setitem_hk": {
+        "moved10": "round 10 family 7: an operand the operation hooks (`__index__`, `__eq__`, `__format__`) must be a literal or a proved name; a call is not",
+        "outcome": "unread",
+        "reason": "products.r8_o_t11_setitem_hk.",
+    },
+    "r8_o_t12_fstr_spec": {
+        "moved10": "round 10 family 7: an operand the operation hooks (`__index__`, `__eq__`, `__format__`) must be a literal or a proved name; a call is not",
+        "outcome": "unread",
+        "reason": "products.r8_o_t12_fstr_spec.",
+    },
+    "r8_o_t12_pct_other": {
+        "moved10": "round 10 family 7: an operand the operation hooks (`__index__`, `__eq__`, `__format__`) must be a literal or a proved name; a call is not",
+        "outcome": "unread",
+        "reason": "products.r8_o_t12_pct_other.",
+    },
+    "r8_o_t12_format_other": {
+        "moved10": "round 10 family 7: an operand the operation hooks (`__index__`, `__eq__`, `__format__`) must be a literal or a proved name; a call is not",
+        "outcome": "unread",
+        "reason": "products.r8_o_t12_format_other.",
+    },
+    "r8_o_t11_extend_hk": {
+        "moved10": "round 10 audit: `extend` iterates its argument; an instance's `__iter__` may yield anything",
+        "outcome": "unread",
+        "reason": "products.r8_o_t11_extend_hk.",
+    },
+    "r9_g6_rebind_name": {
+        "moved10": "round 10 family 4: a read through a name that is no class statement's is unread itself",
+        "outcome": "unread",
+        "reason": "products.r9_g6_rebind_name.backend.facade.temporal.WORKFLOWS",
+    },
+    "r9_g6_cls_body_alias_deco": {
+        "moved10": "round 10 family 4: a class read of a decorated class is unread itself",
+        "outcome": "unread",
+        "reason": "products.r9_g6_cls_body_alias_deco.backend.facade.temporal.WORKFLOWS",
+    },
+}
+
+
 def moved(rows: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """The rows with round 9's moves laid over them."""
-    return {p: {**row, **MOVES[p]} if p in MOVES else row for p, row in rows.items()}
+    """The rows with the moves of round 9 and round 10 laid over them."""
+    return {p: {**row, **MOVES.get(p, {}), **MOVES10.get(p, {})} for p, row in rows.items()}

@@ -476,6 +476,9 @@ pub struct Walker<'a, 'w> {
     /// The module-level names the inventory resolves to `sys.modules` (`from sys import modules
     /// as m`, `m2 = m`, `M = sys.modules`).
     modules_aliases: HashSet<&'a str>,
+    /// The module-level names bound to `sys.modules` on positive evidence (`is_sys_modules`):
+    /// a store into one is a store into it (family 2).
+    sys_aliases: HashSet<&'a str>,
     /// The value of the module-level expression statement being walked, for T11's mutation row.
     statement: Option<&'a Expr>,
     /// What the file patches (`patched_names`).
@@ -506,6 +509,9 @@ pub struct Walker<'a, 'w> {
     star_first_party: bool,
     /// The module's statements, for `literal_text`.
     suite: &'a [Stmt],
+    /// Whether the file has code that may bind a module-level name with no assignment statement
+    /// (`namespace_writers`): no module-level name then resolves a key (`bound_once`).
+    namespace_writers: bool,
     /// The names bound to a module value, by scope (`follow`).
     computed: HashMap<(i64, &'a str), Tracked>,
     /// The `!` rows written, by scope and text (`emit_value_row`).
@@ -547,6 +553,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             items: Vec::new(),
             stack: Vec::new(),
             modules_aliases: HashSet::new(),
+            sys_aliases: HashSet::new(),
             statement: None,
             patched: Patched::default(),
             patched_any: false,
@@ -559,6 +566,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             relied: RefCell::new(Vec::new()),
             star_first_party: false,
             suite: &[],
+            namespace_writers: false,
             computed: HashMap::new(),
             values_seen: HashSet::new(),
             globals: HashMap::new(),
@@ -572,6 +580,7 @@ impl<'a, 'w> Walker<'a, 'w> {
 
     pub fn run(mut self, suite: &'a [Stmt]) -> Walk {
         self.suite = suite;
+        self.namespace_writers = namespace_writers(suite);
         if self.wants_any(&[Kind::Escapes, Kind::Computed, Kind::Derived]) {
             self.bindings(suite);
         }
@@ -671,6 +680,20 @@ impl<'a, 'w> Walker<'a, 'w> {
         let mut found: Vec<Found<'a>> = Vec::new();
         self.survey_body(suite, -1, &HashSet::new(), &mut found);
         self.settle(found);
+        loop {
+            let before = self.sys_aliases.len();
+            for stmt in suite {
+                if let Stmt::Assign(a) = stmt
+                    && let [Expr::Name(name)] = a.targets.as_slice()
+                    && self.is_sys_modules(&a.value, -1)
+                {
+                    self.sys_aliases.insert(name.id.as_str());
+                }
+            }
+            if self.sys_aliases.len() == before {
+                break;
+            }
+        }
     }
 
     /// Whether the file stores into a module object the patch check cannot name, so any module
@@ -1438,6 +1461,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                     let targets: Vec<&Expr> = a.targets.iter().collect();
                     self.emit_global(stmt, at, &targets, Some(&a.value));
                 }
+                self.emit_chained(&a.targets, at);
                 for t in &a.targets {
                     self.child(Frame::Terminal("assign-target"), t, at);
                 }
@@ -1467,6 +1491,8 @@ impl<'a, 'w> Walker<'a, 'w> {
                     self.emit_global(stmt, at, &[&*a.target], Some(&a.value));
                 }
                 self.class_change(stmt, a, at);
+                self.emit_modules_or(a, at);
+                self.emit_augment(a, at);
                 self.child(Frame::Terminal("augassign-target"), &a.target, at);
                 self.child(Frame::AugAssignValue(op, &a.target), &a.value, at);
             }
@@ -1563,6 +1589,33 @@ impl<'a, 'w> Walker<'a, 'w> {
                 self.opt_child(Frame::Terminal("assert-msg"), a.msg.as_deref(), at);
             }
             _ => {}
+        }
+    }
+
+    /// The audit (round 10): `W += X` iterates X and `W |= X` hashes and compares the items. X
+    /// must be a display, a literal or a builtin-typed value, whose iteration runs no code (an
+    /// instance's `__iter__` may yield anything); else W escapes. `|=` needs every item proved
+    /// (`?$`). Module-level and class-body statements on a name only; T11 and the class-body
+    /// change read the rest.
+    fn emit_augment(&mut self, a: &'a ast::StmtAugAssign, at: At) {
+        if !self.wants(Kind::Escapes) || !self.emits_assign(at.scope) {
+            return;
+        }
+        let Expr::Name(target) = &*a.target else {
+            return;
+        };
+        if !matches!(a.op, ast::Operator::Add | ast::Operator::BitOr) {
+            return;
+        }
+        let iterated = matches!(
+            &*a.value,
+            Expr::List(_) | Expr::Tuple(_) | Expr::Set(_) | Expr::Dict(_)
+        ) || plain_literal(&a.value)
+            || self.kind_of(&a.value, at.scope, &[]).exact;
+        if !iterated {
+            self.emit_escape(target, at, target.id.as_str());
+        } else if matches!(a.op, ast::Operator::BitOr) {
+            self.emit_escape(target, at, &format!("{}?$", target.id));
         }
     }
 
@@ -1914,6 +1967,91 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
+    /// A chained assignment (`W = _V = [A]`) binds every target to the same object: each name
+    /// target is an alias of every other (`W~_V`, `_V~W`), so a change, a use or an escape
+    /// through any of them is one of each. A target that is not a plain name (an attribute, a
+    /// subscript, an unpacking) hands the object on: every name target escapes.
+    fn emit_chained(&mut self, targets: &'a [Expr], at: At) {
+        if targets.len() < 2 || !self.wants(Kind::Escapes) || !self.emits_assign(at.scope) {
+            return;
+        }
+        let names: Vec<&'a ast::ExprName> = targets.iter().filter_map(Expr::as_name_expr).collect();
+        let plain = names.len() == targets.len();
+        for name in &names {
+            let others: Vec<&str> = (names.iter())
+                .filter(|other| other.id != name.id)
+                .map(|other| other.id.as_str())
+                .collect();
+            let row = if !plain {
+                name.id.to_string()
+            } else if others.is_empty() {
+                continue;
+            } else {
+                format!("{}~{}", name.id, others.join(","))
+            };
+            self.emit_escape(name, at, &row);
+        }
+    }
+
+    /// A use of a module-level name in a function body, in the value bound to a name the
+    /// function declares `global` (`global _X; _X = W`): the module's `_X` may be W itself
+    /// (`W~_X`) or hold it (`W^_X`), so every module-level change, use and escape of `_X` is one
+    /// of W.
+    fn emit_global_alias(&mut self, name: &'a ast::ExprName, at: At) {
+        if at.scope == -1 || self.emits_assign(at.scope) || !self.wants(Kind::Escapes) {
+            return;
+        }
+        let id = name.id.as_str();
+        let Some(declared) = self.globals.get(&at.scope) else {
+            return;
+        };
+        let module = declared.contains(id) || !self.binds_locally(at.scope, id);
+        if !module || !self.identities.contains_key(&(-1, id)) || self.bound.contains_key(id) {
+            return;
+        }
+        let Some(index) = (self.path.iter()).rposition(|frame| {
+            matches!(
+                frame,
+                Frame::AssignValue(_)
+                    | Frame::AnnAssignValue(_)
+                    | Frame::AugAssignValue(..)
+                    | Frame::Walrus(_)
+            )
+        }) else {
+            return;
+        };
+        let targets: Vec<&str> = match self.path[index] {
+            Frame::AssignValue(targets) => {
+                let mut names = Vec::new();
+                for target in targets {
+                    target_names(target, &mut names);
+                }
+                names
+            }
+            Frame::AnnAssignValue(target) | Frame::AugAssignValue(_, target) => {
+                let mut names = Vec::new();
+                target_names(target, &mut names);
+                names
+            }
+            Frame::Walrus(target) => vec![target],
+            _ => Vec::new(),
+        };
+        let globals: Vec<&str> = (targets.into_iter())
+            .filter(|target| declared.contains(*target) && *target != id)
+            .collect();
+        if globals.is_empty() {
+            return;
+        }
+        let whole = index + 1 == self.path.len()
+            && matches!(
+                self.path[index],
+                Frame::AssignValue(_) | Frame::AnnAssignValue(_)
+            );
+        let link = if whole { '~' } else { '^' };
+        let row = format!("{id}{link}{}", globals.join(","));
+        self.emit_escape(name, At { scope: -1, ..at }, &row);
+    }
+
     /// An `escapes` row: a name the item reading cannot read at the name node's site.
     fn emit_escape(&mut self, name: &ast::ExprName, at: At, escaped: &str) {
         let (l, c) = self.lines.pos(name.range.start());
@@ -1970,6 +2108,9 @@ impl<'a, 'w> Walker<'a, 'w> {
             self.emit_rebinding(id, pos, at, assignment);
             return;
         }
+        if at.flags & TYPE_ONLY == 0 {
+            self.emit_global_alias(name, at);
+        }
         if at.flags & TYPE_ONLY != 0 || !self.emits_assign(at.scope) || self.bound.contains_key(id)
         {
             return;
@@ -1998,15 +2139,14 @@ impl<'a, 'w> Walker<'a, 'w> {
             Start::Record => self.read_holder(frames, true, at),
             Start::Inherited(_) => Outcome::Escape,
         };
-        let mut relied = std::mem::take(&mut *self.relied.borrow_mut());
         if let Start::Value(shape) | Start::Variable(shape) = &start {
             // The sources: with no step kept, the value goes where its own reading says (an
             // item where `consume` says); else what the steps made goes where `consume` says.
             let escapes = match self.carry(used, shape, at) {
                 None if handed => true,
-                None if shape.item => !self.consume(frames, shape, site),
+                None if shape.item => !self.consume(frames, shape, site, at.scope),
                 None => matches!(outcome, Outcome::Escape),
-                Some((top, kept)) => !self.consume(&self.path[..top], &kept, site),
+                Some((top, kept)) => !self.consume(&self.path[..top], &kept, site, at.scope),
             };
             if escapes {
                 for (source, scope) in &shape.sources {
@@ -2018,6 +2158,23 @@ impl<'a, 'w> Walker<'a, 'w> {
                         },
                         source,
                     );
+                }
+            }
+        }
+        let mut relied = std::mem::take(&mut *self.relied.borrow_mut());
+        // `$` (family 7): the read runs code of the items it compares, hashes, formats or
+        // releases. Each source's items must be proved inert: a `?$` row where it lives.
+        if let Some(at_items) = relied.iter().position(|dep| dep == "$") {
+            relied.swap_remove(at_items);
+            relied.retain(|dep| dep != "$");
+            let sources = match &start {
+                Start::Value(shape) | Start::Variable(shape) => shape.sources.clone(),
+                _ => vec![(reached.clone(), at.scope)],
+            };
+            if !matches!(outcome, Outcome::Escape) {
+                for (source, scope) in sources {
+                    let site = At { scope, ..at };
+                    self.emit_escape(name, site, &format!("{source}?$"));
                 }
             }
         }
@@ -2082,7 +2239,7 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// targets are items: `comprehension_items`, the inventory), and a store into one or a
     /// reading or changing method of one with no keyword. Anything else hands it on: each
     /// source escapes. `site` tells the use's own operand from the others.
-    fn consume(&self, frames: &[Frame<'a>], kind: &Shape, site: TextSize) -> bool {
+    fn consume(&self, frames: &[Frame<'a>], kind: &Shape, site: TextSize, scope: i64) -> bool {
         if kind.part != Part::Whole {
             return false;
         }
@@ -2091,16 +2248,34 @@ impl<'a, 'w> Walker<'a, 'w> {
             return true;
         };
         let reads = kind.exact || kind.item;
+        // Family 7: a test of an item runs its `__bool__`; formatting, a comparison and a
+        // changing or reading method run its items' code (`needs_items`).
+        let items = |kept: bool| {
+            if kept {
+                self.needs_items();
+            }
+            kept
+        };
         match first {
             Frame::Terminal("expr") => true,
             Frame::Terminal("if-test" | "while-test" | "assert")
-            | Frame::Step("ifexp:test" | "comp:if" | "fstr")
-            | Frame::Op("unary:", "not") => reads,
+            | Frame::Step("ifexp:test" | "comp:if")
+            | Frame::Op("unary:", "not") => {
+                if kind.item {
+                    self.needs_items();
+                }
+                reads
+            }
+            Frame::Step("fstr") => items(reads && self.fstring_inert(site, scope)),
             Frame::Terminal("for-iter") | Frame::Step("comp:iter") => kind.exact,
             Frame::AssignValue(targets) => targets.iter().all(Expr::is_name_expr),
             Frame::AnnAssignValue(target) => target.is_name_expr(),
             Frame::Arg(call, _) | Frame::Kw(call, Some(_)) => {
-                reads && !has_star_arguments(call) && is_format_call(call)
+                let others = (call.arguments.args.iter())
+                    .chain(call.arguments.keywords.iter().map(|keyword| &keyword.value))
+                    .filter(|value| !value.range().contains(site))
+                    .all(|value| self.formatted_inert(value, scope));
+                items(reads && !has_star_arguments(call) && is_format_call(call) && others)
             }
             Frame::Operand("cmp:", _, Expr::Compare(compare)) => {
                 let identity =
@@ -2117,24 +2292,31 @@ impl<'a, 'w> Walker<'a, 'w> {
                     )
                 });
                 let others = (compare.operands.iter()).filter(|o| !o.range().contains(site));
-                identity || (reads && plain && others.into_iter().all(plain_literal))
+                identity || items(reads && plain && others.into_iter().all(plain_literal))
             }
-            Frame::Operand("bin:", "%", Expr::BinOp(binary)) => {
+            Frame::Operand("bin:", "%", Expr::BinOp(binary)) => items(
                 kind.exact
                     && binary.left.is_string_literal_expr()
-                    && binary.right.range().contains(site)
+                    && binary.right.range().contains(site),
+            ),
+            Frame::SubValue(subscript) => {
+                items(kind.exact && !subscript.ctx.is_load() && index_literal(&subscript.slice))
             }
-            Frame::SubValue(subscript) => kind.exact && !subscript.ctx.is_load(),
             Frame::Attr(method) => {
-                kind.exact
-                    && matches!(up(2), Some(Frame::CallFunc(call))
-                    if !has_star_arguments(call)
-                        && call.arguments.keywords.is_empty()
-                        && matches!(
-                            method,
-                            "count" | "index" | "remove" | "discard" | "clear" | "reverse"
-                                | "sort" | "append" | "extend" | "insert" | "add" | "update"
-                        ))
+                let Some(Frame::CallFunc(call)) = up(2) else {
+                    return false;
+                };
+                let arguments = &call.arguments.args;
+                let literal = arguments.iter().all(plain_literal);
+                let simple =
+                    kind.exact && !has_star_arguments(call) && call.arguments.keywords.is_empty();
+                match method {
+                    "append" | "extend" | "reverse" => simple,
+                    "insert" => simple && arguments.first().is_some_and(index_literal),
+                    "count" | "index" | "remove" | "discard" | "clear" | "sort" | "add"
+                    | "update" => items(simple && literal),
+                    _ => false,
+                }
             }
             _ => false,
         }
@@ -2332,8 +2514,11 @@ impl<'a, 'w> Walker<'a, 'w> {
             {
                 Outcome::Read
             }
-            // T12: an f-string.
-            Frame::Step("fstr") if builtin => Outcome::Read,
+            // T12: an f-string, whose other fields are literals; it formats every item.
+            Frame::Step("fstr") if builtin && self.fstring_inert(site, at.scope) => {
+                self.needs_items();
+                Outcome::Read
+            }
             Frame::Step("elt:list" | "elt:tuple") => self.in_display(frames, 2, builtin, at),
             Frame::Arg(call, index) => {
                 self.value_argument(frames, call, Position::Arg(index), builtin, at)
@@ -2371,12 +2556,85 @@ impl<'a, 'w> Walker<'a, 'w> {
             Some(Frame::Operand("bin:", "%", Expr::BinOp(binary)))
                 if builtin
                     && binary.left.is_string_literal_expr()
-                    && binary.right.is_tuple_expr() =>
+                    && matches!(&*binary.right, Expr::Tuple(tuple) if self.others_inert(&tuple.elts, at.scope)) =>
             {
+                self.needs_items();
                 Outcome::Read
             }
             _ => Outcome::Escape,
         }
+    }
+
+    /// Family 7: the operation runs code of every item of the value (compares, hashes, formats
+    /// or releases them): the read holds only when the link proves each item inert (`$`).
+    fn needs_items(&self) {
+        self.relied.borrow_mut().push("$".to_string());
+    }
+
+    /// Whether every element of a display other than the use is formatted with no first-party
+    /// code (`formatted_inert`).
+    fn others_inert(&self, elements: &[Expr], scope: i64) -> bool {
+        let site = self.stack.last().map(|(expr, _)| expr.range().start());
+        (elements.iter())
+            .filter(|element| site.is_none_or(|site| !element.range().contains(site)))
+            .all(|element| self.formatted_inert(element, scope))
+    }
+
+    /// Whether formatting another operand runs no first-party code (family 7): a literal, or a
+    /// name the inventory proves builtin-typed, whose own use the same entry reads (its items
+    /// proved by its own `$`).
+    fn formatted_inert(&self, operand: &'a Expr, scope: i64) -> bool {
+        plain_literal(operand)
+            || (operand.is_name_expr() && self.kind_of(operand, scope, &[]).exact)
+    }
+
+    /// Whether every other field of the f-string around `site` (its siblings, the format spec
+    /// of each, nested fields too) is formatted with no first-party code (family 7):
+    /// formatting runs none but the items'.
+    fn fstring_inert(&self, site: TextSize, scope: i64) -> bool {
+        let Some(fstring) = (self.stack.iter().rev()).find_map(|(expr, _)| match expr {
+            Expr::FString(f) if f.range.contains(site) => Some(f),
+            _ => None,
+        }) else {
+            return false;
+        };
+        fstring.value.iter().all(|part| match part {
+            ast::FStringPartRef::FString(fs) => self.fields_inert(&fs.elements, site, scope),
+            _ => true,
+        })
+    }
+
+    /// Whether each field of an f-string's elements (`fstring_inert`) is formatted with no
+    /// first-party code, but the one that holds `site`, whose format spec is read the same way.
+    fn fields_inert(
+        &self,
+        elements: &'a [InterpolatedStringElement],
+        site: TextSize,
+        scope: i64,
+    ) -> bool {
+        elements.iter().all(|element| {
+            let InterpolatedStringElement::Interpolation(field) = element else {
+                return true;
+            };
+            let own = field.expression.range().contains(site);
+            let spec = (field.format_spec.as_ref())
+                .is_none_or(|spec| self.fields_inert(&spec.elements, site, scope));
+            (own || self.formatted_inert(&field.expression, scope)) && spec
+        })
+    }
+
+    /// An operand of a comparing method (`count`, `index`, `remove`, `discard`, `get`, `pop`) is
+    /// proved when it is a literal, or a dotted name the link proves inert (`&NAME`: an
+    /// undecorated function, or a class whose creation and metaclass run no first-party code).
+    fn operand_inert(&self, operand: &Expr) -> bool {
+        if plain_literal(operand) {
+            return true;
+        }
+        let Some(dotted) = dotted_name(operand) else {
+            return false;
+        };
+        self.relied.borrow_mut().push(format!("&{dotted}"));
+        true
     }
 
     /// T3: a record built by a constructor the link confirms (`record_call`) holds its
@@ -2434,7 +2692,16 @@ impl<'a, 'w> Walker<'a, 'w> {
         if self.record_call(call) {
             return self.record(frames, 1, at);
         }
-        read_if(builtin && is_format_call(call))
+        let site = self.stack.last().map(|(expr, _)| expr.range().start());
+        let others = (call.arguments.args.iter())
+            .chain(call.arguments.keywords.iter().map(|keyword| &keyword.value))
+            .filter(|value| site.is_none_or(|site| !value.range().contains(site)))
+            .all(|value| self.formatted_inert(value, at.scope));
+        if builtin && is_format_call(call) && others {
+            self.needs_items();
+            return Outcome::Read;
+        }
+        Outcome::Escape
     }
 
     /// T11 and T9: an element of the value. A store or a `del` of it by a module-level
@@ -2450,14 +2717,25 @@ impl<'a, 'w> Walker<'a, 'w> {
     ) -> Outcome<'a> {
         let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
         let statement = builtin && bare && at.scope == -1;
+        // Family 7: an index or slice of literals runs no `__index__`; a store or a `del`
+        // releases the items it displaces; a key that is no index (a dict's) compares the keys.
+        let index = index_literal(&subscript.slice);
         match up(2) {
-            Some(Frame::Terminal("assign-target" | "annassign-target" | "del")) if statement => {
+            Some(Frame::Terminal("assign-target" | "annassign-target" | "del"))
+                if statement && (index || plain_literal(&subscript.slice)) =>
+            {
+                self.needs_items();
                 Outcome::Read
             }
             Some(Frame::Terminal(text)) if text.ends_with("-target") || text == "del" => {
                 Outcome::Escape
             }
-            _ => read_if(builtin && subscript.ctx.is_load()),
+            _ if builtin && subscript.ctx.is_load() && index => Outcome::Read,
+            _ if builtin && subscript.ctx.is_load() && plain_literal(&subscript.slice) => {
+                self.needs_items();
+                Outcome::Read
+            }
+            _ => Outcome::Escape,
         }
     }
 
@@ -2483,19 +2761,53 @@ impl<'a, 'w> Walker<'a, 'w> {
             && at.scope == -1
             && self.statement.is_some()
             && matches!(up(3), Some(Frame::Terminal("expr")));
-        match attribute {
-            "append" | "add" | "extend" if statement && args == 1 && !keywords => {
-                Outcome::Changed(call)
+        // Family 7: an operand is a literal (an index one of `index_literal`), and a method
+        // that compares, hashes or releases items needs every item proved (`needs_items`).
+        let arguments = &call.arguments.args;
+        let literal = |position: usize| {
+            arguments
+                .get(position)
+                .is_none_or(|a| self.operand_inert(a))
+        };
+        let index = |position: usize| arguments.get(position).is_none_or(index_literal);
+        // `extend` and `update` iterate their argument: a display, a literal or a
+        // builtin-typed value, whose iteration runs no code.
+        let scope = at.scope;
+        let iterated = |position: usize| {
+            arguments.get(position).is_none_or(|argument| {
+                matches!(
+                    argument,
+                    Expr::List(_) | Expr::Tuple(_) | Expr::Set(_) | Expr::Dict(_)
+                ) || plain_literal(argument)
+                    || self.kind_of(argument, scope, &[]).exact
+            })
+        };
+        let outcome = match attribute {
+            "append" if statement && args == 1 && !keywords => return Outcome::Changed(call),
+            "extend" if statement && args == 1 && !keywords && iterated(0) => {
+                return Outcome::Changed(call);
             }
-            "insert" if statement && args == 2 && !keywords => Outcome::Changed(call),
-            "update" if statement && args <= 1 => Outcome::Changed(call),
-            "copy" | "keys" | "values" | "items" if args == 0 && !keywords => Outcome::Read,
-            "get" | "pop" if args <= 2 && !keywords => Outcome::Read,
-            "clear" | "reverse" | "sort" if args == 0 && !keywords => Outcome::Read,
-            "count" | "remove" | "discard" if args == 1 && !keywords => Outcome::Read,
-            "index" if (1..=3).contains(&args) && !keywords => Outcome::Read,
-            _ => Outcome::Escape,
-        }
+            "add" if statement && args == 1 && !keywords => Outcome::Changed(call),
+            "insert" if statement && args == 2 && !keywords && index(0) => {
+                return Outcome::Changed(call);
+            }
+            "update" if statement && args <= 1 && iterated(0) => Outcome::Changed(call),
+            "copy" | "keys" | "values" | "items" | "reverse" if args == 0 && !keywords => {
+                return Outcome::Read;
+            }
+            "pop" if args <= 1 && !keywords && index(0) => Outcome::Read,
+            "get" | "pop" if args <= 2 && !keywords && literal(0) && literal(1) => Outcome::Read,
+            "clear" | "sort" if args == 0 && !keywords => Outcome::Read,
+            "count" | "remove" | "discard" if args == 1 && !keywords && literal(0) => Outcome::Read,
+            "index"
+                if (1..=3).contains(&args) && !keywords && literal(0) && index(1) && index(2) =>
+            {
+                Outcome::Read
+            }
+            _ => return Outcome::Escape,
+        };
+        self.needs_items();
+        outcome
     }
 
     /// T13 and `%` of T12, on a builtin-typed value: `X + D` with D a list or tuple display (its
@@ -2509,7 +2821,13 @@ impl<'a, 'w> Walker<'a, 'w> {
                 .into_iter()
                 .filter(|operand| other(operand))
                 .all(|operand| matches!(operand, Expr::List(_) | Expr::Tuple(_))),
-            ("bin:", Expr::BinOp(binary)) if op == "%" => binary.left.is_string_literal_expr(),
+            ("bin:", Expr::BinOp(binary)) if op == "%" => {
+                let read = binary.left.is_string_literal_expr();
+                if read {
+                    self.needs_items();
+                }
+                read
+            }
             ("cmp:", Expr::Compare(compare)) => {
                 let identity =
                     (compare.ops.iter()).all(|op| matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot));
@@ -2525,7 +2843,11 @@ impl<'a, 'w> Walker<'a, 'w> {
                     )
                 });
                 let mut others = compare.operands.iter().filter(|o| other(o));
-                identity || (plain && others.all(plain_literal))
+                let read = identity || (plain && others.all(plain_literal));
+                if read && !identity {
+                    self.needs_items();
+                }
+                read
             }
             _ => false,
         }
@@ -2549,7 +2871,6 @@ impl<'a, 'w> Walker<'a, 'w> {
                 _ => Outcome::Escape,
             },
             Some(Frame::Step("elt:list" | "elt:tuple")) => self.in_display(frames, 2, false, at),
-            Some(Frame::Base(_)) if !record => Outcome::Read,
             _ => Outcome::Escape,
         }
     }
@@ -3006,13 +3327,17 @@ impl<'a, 'w> Walker<'a, 'w> {
         let mut dunder = false;
         let mut through = false;
         while index > 0 {
-            let Expr::Attribute(attribute) = self.stack[index - 1].0 else {
+            let Some((attr, load)) = self.read_attribute(index - 1) else {
+                // `getattr(x, <computed>)`: any attribute, a namespace among them.
+                if self.computed_getattr(index - 1) {
+                    dunder = true;
+                    through = true;
+                }
                 break;
             };
-            let attr = attribute.attr.as_str();
             let plain =
                 !(attr.starts_with("__") && attr.ends_with("__")) || PLAIN_DUNDERS.contains(&attr);
-            if !plain || !attribute.ctx.is_load() {
+            if !plain || !load {
                 dunder = matches!(attr, "__self__" | "__dict__" | "__globals__");
                 // Through a namespace: the chain from here reaches `__dict__`, `__globals__` or
                 // `__self__` (`f.__globals__`, `C.__init__.__globals__`).
@@ -3074,19 +3399,28 @@ impl<'a, 'w> Walker<'a, 'w> {
             module: None,
             member: Member::Module,
         };
+        let stored = matches!(expr, Expr::Name(name) if name.ctx != ExprContext::Load);
+        if !stored && self.is_sys_modules(expr, at.scope) {
+            return self.emit_modules_use(at, pos);
+        }
         match expr {
-            Expr::Attribute(attribute) if attribute.attr.as_str() == "__self__" => {
-                if !self.rooted(&attribute.value) {
+            // `patch.dict("sys.modules", ...)`: `sys.modules` named by a string, handed on.
+            Expr::StringLiteral(text)
+                if text.value.to_str() == "sys.modules"
+                    && matches!(self.path.last(), Some(Frame::Arg(..) | Frame::Kw(..))) =>
+            {
+                self.emit_value_row(at, pos, "+:*".to_string());
+            }
+            _ if let Some((value, "__self__")) = self.dunder_read(expr) => {
+                if !self.rooted(value) {
                     self.emit_value_row(at, pos, "*".to_string());
                 }
             }
-            Expr::Attribute(attribute)
-                if attribute.attr.as_str() == "__globals__" && attribute.ctx.is_load() =>
-            {
+            _ if let Some((value, "__globals__" | "?")) = self.dunder_read(expr) => {
                 // A function the file names: its module (`@` and the name, which the link
                 // resolves); anything else: any module.
-                let tracked = match dotted_name(&attribute.value) {
-                    Some(named) if self.rooted(&attribute.value) => Tracked {
+                let tracked = match dotted_name(value) {
+                    Some(named) if self.rooted(value) => Tracked {
                         module: Some(format!("@{named}")),
                         member: Member::Module,
                     },
@@ -3170,11 +3504,10 @@ impl<'a, 'w> Walker<'a, 'w> {
                 // The file's own records: a use that is no attribute read and no call.
                 let mut index = self.stack.len() - 1;
                 while index > 0 {
-                    match self.stack[index - 1].0 {
-                        Expr::Attribute(a)
-                            if a.ctx.is_load()
-                                && (!(a.attr.starts_with("__") && a.attr.ends_with("__"))
-                                    || PLAIN_DUNDERS.contains(&a.attr.as_str())) =>
+                    match self.read_attribute(index - 1) {
+                        Some((attr, true))
+                            if !(attr.starts_with("__") && attr.ends_with("__"))
+                                || PLAIN_DUNDERS.contains(&attr) =>
                         {
                             index -= 1
                         }
@@ -3199,6 +3532,162 @@ impl<'a, 'w> Walker<'a, 'w> {
                 );
             }
             _ => {}
+        }
+    }
+
+    /// A use of `sys.modules` itself (family 2): every write into it is a publication. Reads:
+    /// names only (`modules_names_only`), `keys` and `__contains__`, the module-level alias the
+    /// inventory tracks, a bare statement, `is`. `get` and `__getitem__` give the module a key
+    /// names, `values` and `items` any module (`follow`). A key store by a method (`update`,
+    /// `__ior__`, `__setitem__`, `setdefault`, `pop`, `__delitem__`) replaces the module each
+    /// key names (`+KEY:*`); `update` takes a dict display's keys and its keywords. Any other use
+    /// (`popitem`, `clear`, another method, passed, stored, bound again) may replace any module
+    /// (`+:*`). A subscript is `emit_computed_value`'s, `|=` the statement's (`emit_modules_or`).
+    fn emit_modules_use(&mut self, at: At, pos: (i64, i64)) {
+        let n = self.path.len();
+        let frame = |back: usize| n.checked_sub(back).map(|i| self.path[i]);
+        let any = Tracked {
+            module: None,
+            member: Member::Module,
+        };
+        let keys: Vec<Option<String>> = match frame(1) {
+            Some(Frame::SubValue(_) | Frame::Terminal("expr" | "augassign-target")) => return,
+            Some(Frame::Operand("cmp:", _, Expr::Compare(compare)))
+                if (compare.ops.iter())
+                    .all(|op| matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot)) =>
+            {
+                return;
+            }
+            _ if self.modules_names_only() => return,
+            Some(Frame::AssignValue([Expr::Name(alias)]))
+                if at.scope == -1 && self.sys_aliases.contains(alias.id.as_str()) =>
+            {
+                return;
+            }
+            Some(Frame::Attr(method)) => {
+                let Some(Frame::CallFunc(call)) = frame(2) else {
+                    return self.emit_value_row(at, pos, "+:*".to_string());
+                };
+                let call_index = self.stack.len().saturating_sub(3);
+                let first = call.arguments.args.first();
+                let key = |walker: &Self| first.and_then(|k| walker.literal_text(k, at.scope, 0));
+                match method {
+                    "keys" | "__contains__" => return,
+                    "get" | "__getitem__" => {
+                        let tracked = Tracked {
+                            module: key(self),
+                            member: Member::Module,
+                        };
+                        return self.follow_at(tracked, at, pos, call_index);
+                    }
+                    "values" | "items" => return self.follow_at(any, at, pos, call_index),
+                    "update" | "__ior__" => self.dict_keys(call, at.scope),
+                    "__setitem__" | "setdefault" | "pop" | "__delitem__" => vec![key(self)],
+                    _ => vec![None],
+                }
+            }
+            // pytest's `monkeypatch.setitem(sys.modules, KEY, v)` or `delitem`: KEY, also at
+            // undo (the old value back, or the key deleted), when the link proves the fixture
+            // pytest's own (`?monkeypatch`).
+            Some(Frame::Arg(call, 0)) if self.pytest_monkeypatch(call, at) => {
+                let key = (call.arguments.args.get(1))
+                    .and_then(|key| self.literal_text(key, at.scope, 0));
+                let row = match key {
+                    Some(key) => format!("+{key}:*?monkeypatch"),
+                    None => "+:*".to_string(),
+                };
+                return self.emit_value_row(at, pos, row);
+            }
+            _ => vec![None],
+        };
+        for key in keys {
+            let row = format!("+{}:*", key.unwrap_or_default());
+            self.emit_value_row(at, pos, row);
+        }
+    }
+
+    /// `monkeypatch.setitem(...)` or `monkeypatch.delitem(...)` where `monkeypatch` is a
+    /// parameter of the function the call sits in, bound by nothing else there: pytest's fixture
+    /// when no file defines one of that name (the link's check).
+    fn pytest_monkeypatch(&self, call: &ast::ExprCall, at: At) -> bool {
+        if !matches!(
+            callee_text(call).as_str(),
+            "monkeypatch.setitem" | "monkeypatch.delitem"
+        ) || has_star_arguments(call)
+        {
+            return false;
+        }
+        if at.scope < 0 {
+            return false;
+        }
+        let DefNode::Func(function) = self.defs.entries[at.scope as usize].node else {
+            return false;
+        };
+        let parameter = (function.parameters.iter()).any(|p| p.name().as_str() == "monkeypatch");
+        parameter && !rebinds(&function.body, "monkeypatch", self.defs)
+    }
+
+    /// The keys `update` (or `|=`) stores: each key of a dict display that resolves
+    /// (`literal_text`) and each keyword's name; None for any other key or argument.
+    fn dict_keys(&self, call: &ast::ExprCall, scope: i64) -> Vec<Option<String>> {
+        let mut keys = Vec::new();
+        for argument in call.arguments.args.iter() {
+            keys.extend(self.display_keys(argument, scope));
+        }
+        for keyword in call.arguments.keywords.iter() {
+            keys.push(keyword.arg.as_ref().map(|name| name.to_string()));
+        }
+        keys
+    }
+
+    /// The keys a dict display names (`literal_text`; None for one that does not resolve or a
+    /// `**` item), or None for any other value.
+    fn display_keys(&self, value: &Expr, scope: i64) -> Vec<Option<String>> {
+        let Expr::Dict(dict) = value else {
+            return vec![None];
+        };
+        (dict.items.iter())
+            .map(|item| (item.key.as_ref()).and_then(|key| self.literal_text(key, scope, 0)))
+            .collect()
+    }
+
+    /// `sys.modules |= VALUE` (or any other augmented assignment to it): the keys a dict display
+    /// stores, else any module.
+    fn emit_modules_or(&mut self, a: &'a ast::StmtAugAssign, at: At) {
+        if !self.wants(Kind::Escapes) || !self.is_sys_modules(&a.target, at.scope) {
+            return;
+        }
+        let pos = self.lines.pos(a.target.range().start());
+        let keys = if matches!(a.op, ast::Operator::BitOr) {
+            self.display_keys(&a.value, at.scope)
+        } else {
+            vec![None]
+        };
+        for key in keys {
+            let row = format!("+{}:*", key.unwrap_or_default());
+            self.emit_value_row(at, pos, row);
+        }
+    }
+
+    /// The value and the attribute an attribute read (`x.attr`, any context for `__self__`) or
+    /// `getattr(x, "attr")` reads (family 3: the same thing).
+    fn dunder_read(&self, expr: &'a Expr) -> Option<(&'a Expr, &'a str)> {
+        match expr {
+            Expr::Attribute(attribute)
+                if attribute.ctx.is_load() || attribute.attr.as_str() == "__self__" =>
+            {
+                Some((&*attribute.value, attribute.attr.as_str()))
+            }
+            // `?`: a computed name, any attribute, of a value a name the file roots gives
+            // (`rooted`; any other value's namespace is limit 9's).
+            Expr::Call(call) if !self.binds_name("getattr") && computed_getattr_call(call) => {
+                let value = call.arguments.args.first()?;
+                self.rooted(value).then_some((value, "?"))
+            }
+            Expr::Call(call) if !self.binds_name("getattr") => {
+                Some((call.arguments.args.first()?, getattr_literal(call)?))
+            }
+            _ => None,
         }
     }
 
@@ -3229,6 +3718,10 @@ impl<'a, 'w> Walker<'a, 'w> {
                 if !matches!(last, "spec_from_file_location" | "spec_from_loader") {
                     return None;
                 }
+                let before = attribute.range().start();
+                if !self.spec_untouched(scope, spec.id.as_str(), call, before) {
+                    return None;
+                }
                 self.literal_text(call.arguments.args.first()?, scope, depth + 1)
             }
             _ => None,
@@ -3241,7 +3734,10 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// the module's.
     fn bound_once(&self, scope: i64, id: &str) -> Option<&'a Expr> {
         let body: &'a [Stmt] = if scope == -1 {
-            if self.others.get(id) != Some(&1) || self.bound.contains_key(id) {
+            if self.others.get(id) != Some(&1)
+                || self.bound.contains_key(id)
+                || self.namespace_writers
+            {
                 return None;
             }
             self.suite
@@ -3280,6 +3776,74 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
+    /// Whether nothing may change the name of a spec bound once (`spec`, to `call`) before the
+    /// `sys.modules` store that reads `spec.name` at `before` (family 2, t30's ruling (a)). Before
+    /// the store in the scope's own statements, and anywhere in a nested def, lambda or class,
+    /// every use of `spec` reads `.name`. A spec from `spec_from_file_location(<key>, <a .py
+    /// path>)` with no keyword (no `loader=`, no `submodule_search_locations=`) gets the
+    /// standard source loader, which renames nothing: `.loader` reads, `is None` tests and
+    /// `importlib.util.module_from_spec(spec)` bound to a name count too, and that name (whose
+    /// `__spec__` is the spec) has no use at all there. The uses are those of the function that
+    /// binds `spec`, else of the whole file.
+    fn spec_untouched(&self, scope: i64, id: &str, call: &ast::ExprCall, before: TextSize) -> bool {
+        let body: &'a [Stmt] = if scope >= 0
+            && let DefNode::Func(function) = self.defs.entries[scope as usize].node
+            && rebinds(&function.body, id, self.defs)
+        {
+            &function.body
+        } else {
+            self.suite
+        };
+        let callee = callee_text(call);
+        let source = callee.rsplit('.').next() == Some("spec_from_file_location")
+            && call.arguments.args.len() == 2
+            && call.arguments.keywords.is_empty()
+            && self.source_path(&call.arguments.args[1], scope, 0);
+        let mut uses = SpecUses {
+            spec: id,
+            source,
+            before,
+            modules: Vec::new(),
+            nested: None,
+            other: false,
+        };
+        if source {
+            uses.modules = spec_modules(body, id);
+        }
+        uses.visit_body(body);
+        !uses.other
+    }
+
+    /// Whether a path names a Python source file (a `.py` suffix): a string literal ending in
+    /// `.py`, `x / "<name>.py"`, `x.with_name("<name>.py")`, `x.joinpath(..., "<name>.py")`,
+    /// `os.path.join(..., "<name>.py")`, `Path(<such>)` or `str(<such>)`, or a name bound once
+    /// to one of these (`bound_once`).
+    fn source_path(&self, expr: &Expr, scope: i64, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let python = |expr: &Expr| matches!(expr, Expr::StringLiteral(literal) if literal.value.to_str().ends_with(".py"));
+        match expr {
+            Expr::StringLiteral(_) => python(expr),
+            Expr::Name(name) => (self.bound_once(scope, name.id.as_str()))
+                .is_some_and(|value| self.source_path(value, scope, depth + 1)),
+            Expr::BinOp(binary) => matches!(binary.op, ast::Operator::Div) && python(&binary.right),
+            Expr::Call(call) if call.arguments.keywords.is_empty() => {
+                let callee = callee_text(call);
+                let last = callee.rsplit('.').next().unwrap_or_default();
+                let args = &call.arguments.args;
+                match last {
+                    "with_name" | "joinpath" | "join" => args.last().is_some_and(python),
+                    "Path" | "PurePath" | "str" | "fspath" => {
+                        matches!(args.as_ref(), [inner] if self.source_path(inner, scope, depth + 1))
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Whether an expression's head is a name `emit_module_value` reads (an import, a module-level
     /// class or def, a builtin): what it reaches is named by that row.
     fn rooted(&self, expr: &Expr) -> bool {
@@ -3313,14 +3877,18 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// (`!+MODULE:*`); in a function body the reading does not follow the handoff (limit 9's
     /// sentence, waiting on the owner), and the file's own records fail closed (`!*`).
     fn follow(&mut self, tracked: Tracked, at: At, pos: (i64, i64)) {
-        let mut index = self.stack.len() - 1;
+        self.follow_at(tracked, at, pos, self.stack.len() - 1);
+    }
+
+    /// `follow` from the expression at `index` of `stack` (a call that gives the module).
+    fn follow_at(&mut self, tracked: Tracked, at: At, pos: (i64, i64), mut index: usize) {
         let mut member = tracked.member.clone();
         let mut method: Option<&'a str> = None;
         while index > 0 {
             let child = self.stack[index].0;
+            let read = self.read_attribute(index - 1).filter(|(_, load)| *load);
             let next = match self.stack[index - 1].0 {
-                Expr::Attribute(a) if a.ctx.is_load() => {
-                    let attr = a.attr.as_str();
+                _ if let Some((attr, _)) = read => {
                     match member {
                         // A name or a path: no namespace.
                         Member::Module if PLAIN_DUNDERS.contains(&attr) => return,
@@ -3355,7 +3923,9 @@ impl<'a, 'w> Walker<'a, 'w> {
                         .is_some_and(|a| std::ptr::eq(a, child))
                         && callee_text(call) == "hasattr"
                         && !self.binds_name("hasattr")
-                        && matches!(call.arguments.args.get(1), Some(Expr::StringLiteral(_))) =>
+                        && matches!(call.arguments.args.get(1), Some(Expr::StringLiteral(name))
+                            if !(name.value.to_str().starts_with("__")
+                                && name.value.to_str().ends_with("__"))) =>
                 {
                     return;
                 }
@@ -3374,9 +3944,6 @@ impl<'a, 'w> Walker<'a, 'w> {
                         callee_text(call).as_str(),
                         call.arguments.args.get(1),
                     ) {
-                        (Member::Module, "getattr", Some(Expr::StringLiteral(name))) => {
-                            Member::Name(name.value.to_str().to_string())
-                        }
                         (Member::Module, "vars", _) => Member::Namespace,
                         (Member::Module | Member::Namespace, _, _) => Member::Unknown,
                         _ => member.clone(),
@@ -3395,7 +3962,17 @@ impl<'a, 'w> Walker<'a, 'w> {
             Member::Name(name) => format!("+{module}:{name}"),
             _ => format!("+{module}:*"),
         };
-        match self.module_use(frames, parent, &member, method) {
+        // `modules` of a value that may be `sys`: `sys.modules` itself, which the module `sys`
+        // reaches through `is_sys_modules`; of any module, any use but a read may write it.
+        let modules = member == Member::Name("modules".to_string());
+        if modules && tracked.module.as_deref() == Some("sys") {
+            return;
+        }
+        let used = self.module_use(frames, parent, &member, method);
+        if modules && tracked.module.is_none() && !matches!(used, ModuleUse::Read) {
+            return self.emit_value_row(at, pos, "+:*".to_string());
+        }
+        match used {
             ModuleUse::Read => {}
             ModuleUse::Alias(names) => {
                 for name in names {
@@ -3519,8 +4096,10 @@ impl<'a, 'w> Walker<'a, 'w> {
         };
         let first = up(1)?;
         match first {
+            // A base (family 5): a class statement's subclass reaches the class through `super()`
+            // and attribute lookup, so the link takes the class as touched (`#base`).
+            Frame::Base(_) => Some("#base".to_string()),
             Frame::CallFunc(_)
-            | Frame::Base(_)
             | Frame::Terminal("decorator" | "expr" | "if-test" | "while-test" | "assert")
             | Frame::Step("ifexp:test" | "comp:if")
             | Frame::Op("unary:", "not") => None,
@@ -3570,13 +4149,10 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// namespace: `__dict__`, `__globals__` or `__self__`.
     fn reaches_namespace(&self, mut index: usize) -> bool {
         loop {
-            let Expr::Attribute(attribute) = self.stack[index].0 else {
+            let Some((attr, _)) = self.read_attribute(index) else {
                 return false;
             };
-            if matches!(
-                attribute.attr.as_str(),
-                "__dict__" | "__globals__" | "__self__"
-            ) {
+            if matches!(attr, "__dict__" | "__globals__" | "__self__") {
                 return true;
             }
             let Some(outer) = index.checked_sub(1) else {
@@ -3584,6 +4160,44 @@ impl<'a, 'w> Walker<'a, 'w> {
             };
             index = outer;
         }
+    }
+
+    /// The attribute the expression at `index` of `stack` reads from the one above it in
+    /// `stack`: `x.attr` (and whether it loads), or `getattr(x, "attr")` (a builtin the file
+    /// does not bind), which is exactly `x.attr` (family 3).
+    fn read_attribute(&self, index: usize) -> Option<(&'a str, bool)> {
+        let child = self.stack.get(index + 1)?.0;
+        match self.stack.get(index)?.0 {
+            Expr::Attribute(attribute) => Some((attribute.attr.as_str(), attribute.ctx.is_load())),
+            Expr::Call(call)
+                if !self.binds_name("getattr")
+                    && call
+                        .arguments
+                        .args
+                        .first()
+                        .is_some_and(|f| std::ptr::eq(f, child)) =>
+            {
+                getattr_literal(call).map(|attr| (attr, true))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the expression at `index` of `stack` is `getattr(x, NAME)` of the one above it
+    /// with a NAME no literal gives (family 3): it may read any attribute, `__globals__` too.
+    fn computed_getattr(&self, index: usize) -> bool {
+        let (Some((child, _)), Some((Expr::Call(call), _))) =
+            (self.stack.get(index + 1), self.stack.get(index))
+        else {
+            return false;
+        };
+        computed_getattr_call(call)
+            && !self.binds_name("getattr")
+            && call
+                .arguments
+                .args
+                .first()
+                .is_some_and(|f| std::ptr::eq(f, *child))
     }
 
     /// One `!` row, once per text and scope in the file.
@@ -3729,17 +4343,15 @@ impl<'a, 'w> Walker<'a, 'w> {
         let (base, attribute) = match expr {
             Expr::Attribute(a) if a.ctx != ExprContext::Load => (&*a.value, a.attr.to_string()),
             Expr::Subscript(s) if s.ctx != ExprContext::Load => {
-                let Expr::Attribute(dict) = &*s.value else {
+                let Some((base, "__dict__" | "__globals__" | "?")) = self.dunder_read(&s.value)
+                else {
                     return;
                 };
-                if !matches!(dict.attr.as_str(), "__dict__" | "__globals__") {
-                    return;
-                }
                 let key = match &*s.slice {
                     Expr::StringLiteral(key) => key.value.to_str().to_string(),
                     _ => "*".to_string(),
                 };
-                (&*dict.value, key)
+                (base, key)
             }
             Expr::Call(call) => {
                 if !matches!(callee_text(call).as_str(), "setattr" | "delattr") {
@@ -3757,6 +4369,13 @@ impl<'a, 'w> Walker<'a, 'w> {
             _ => return,
         };
         let Some(mut dotted) = dotted_name(base) else {
+            // Family 6: a store into an object no dotted name gives (`type(x).attr = v`,
+            // `f().attr = v`, `x[i].attr = v`) may store into any class (`@?`).
+            let pos = self.lines.pos(expr.range().start());
+            self.out.escapes.push(Tag {
+                site: at.site(pos),
+                name: format!("@?.{attribute}"),
+            });
             return;
         };
         let head = dotted.split('.').next().unwrap_or_default().to_string();
@@ -3990,6 +4609,90 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// Whether an expression is `sys.modules` by any spelling (rule 1): an attribute named
     /// `modules` on any receiver, `getattr(x, "modules")`, a name an import binds as `modules`,
     /// or a module-level name the inventory resolves to one of these.
+    /// Whether an expression is `sys.modules` on positive evidence (family 2): `modules` read
+    /// from the module `sys` (`is_sys`) by attribute, `getattr`, `vars(sys)["modules"]` or
+    /// `sys.__dict__["modules"]`, a name `from sys import modules` binds, or a module-level alias
+    /// the inventory resolves to one of these.
+    fn is_sys_modules(&self, expr: &'a Expr, scope: i64) -> bool {
+        match expr {
+            Expr::Attribute(attribute) => {
+                attribute.attr.as_str() == "modules" && self.is_sys(&attribute.value, scope)
+            }
+            Expr::Name(name) => {
+                let id = name.id.as_str();
+                self.sys_aliases.contains(id)
+                    || (self.bound.get(id))
+                        .is_some_and(|b| b.member == "modules" && b.module == "sys")
+            }
+            Expr::Call(call) => {
+                getattr_literal(call) == Some("modules")
+                    && call
+                        .arguments
+                        .args
+                        .first()
+                        .is_some_and(|m| self.is_sys(m, scope))
+            }
+            Expr::Subscript(subscript) => {
+                let literal = matches!(&*subscript.slice,
+                    Expr::StringLiteral(key) if key.value.to_str() == "modules");
+                let namespace = match &*subscript.value {
+                    Expr::Call(call) => {
+                        callee_text(call) == "vars"
+                            && call
+                                .arguments
+                                .args
+                                .first()
+                                .is_some_and(|m| self.is_sys(m, scope))
+                    }
+                    Expr::Attribute(attribute) => {
+                        attribute.attr.as_str() == "__dict__"
+                            && self.is_sys(&attribute.value, scope)
+                    }
+                    _ => false,
+                };
+                literal && namespace
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether an expression may be the module `sys`: a name an import binds to it, a name the
+    /// file assigns a name that may hold a module whose chain does not end at another one
+    /// (`alias_target`), a name bound to a module value a literal names `sys` (`computed`), or
+    /// `__import__("sys")` and `import_module("sys")`.
+    fn is_sys(&self, expr: &'a Expr, scope: i64) -> bool {
+        let sys = |id: &str| {
+            (self.bound.get(id)).is_some_and(|b| b.module == "sys" && b.member.is_empty())
+        };
+        let tracked = |id: &str| {
+            [scope, -1].iter().any(|scope| {
+                self.computed.get(&(*scope, id)).is_some_and(|tracked| {
+                    tracked.module.as_deref() == Some("sys") && tracked.member == Member::Module
+                })
+            })
+        };
+        match expr {
+            Expr::Name(name) => {
+                let id = name.id.as_str();
+                sys(id)
+                    || tracked(id)
+                    || match self.alias_target(id, 0) {
+                        Aliased::No => false,
+                        Aliased::To(target) => sys(target),
+                        Aliased::Unknown => true,
+                    }
+            }
+            Expr::Call(call) => {
+                let callee = callee_text(call);
+                let last = callee.rsplit('.').next().unwrap_or_default();
+                matches!(last, "__import__" | "import_module")
+                    && matches!(call.arguments.args.first(),
+                        Some(Expr::StringLiteral(m)) if m.value.to_str() == "sys")
+            }
+            _ => false,
+        }
+    }
+
     fn is_modules(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Attribute(attribute) => attribute.attr.as_str() == "modules",
@@ -4290,6 +4993,25 @@ fn plain_literal(expr: &Expr) -> bool {
             | Expr::NoneLiteral(_)
             | Expr::EllipsisLiteral(_)
     )
+}
+
+/// An index or a slice of literals (family 7): an int (or a negated one), or a slice whose parts
+/// are absent or such ints. Indexing by it runs no `__index__`.
+fn index_literal(expr: &Expr) -> bool {
+    let int = |expr: &Expr| match expr {
+        Expr::NumberLiteral(number) => number.value.is_int(),
+        Expr::UnaryOp(unary) => {
+            matches!(unary.op, ast::UnaryOp::USub)
+                && matches!(&*unary.operand, Expr::NumberLiteral(n) if n.value.is_int())
+        }
+        _ => false,
+    };
+    match expr {
+        Expr::Slice(slice) => [&slice.lower, &slice.upper, &slice.step]
+            .into_iter()
+            .all(|part| part.as_deref().is_none_or(int)),
+        _ => int(expr),
+    }
 }
 
 /// Whether a call has a `*` or `**` argument: what it hands on no slot names.
@@ -4697,6 +5419,168 @@ fn module_object(value: &Expr, known: &HashSet<&str>) -> bool {
         Expr::Subscript(subscript) => module_object(&subscript.value, known),
         Expr::Name(name) => known.contains(name.id.as_str()) || name.id.as_str() == "__builtins__",
         _ => false,
+    }
+}
+
+/// `getattr(x, NAME)` (two or three arguments, no keyword) whose NAME is no string literal.
+fn computed_getattr_call(call: &ast::ExprCall) -> bool {
+    let args = &call.arguments.args;
+    matches!(call.func.as_ref(), Expr::Name(callee) if callee.id.as_str() == "getattr")
+        && call.arguments.keywords.is_empty()
+        && (2..=3).contains(&args.len())
+        && !args[1].is_string_literal_expr()
+        && !args.iter().any(Expr::is_starred_expr)
+}
+
+/// The names `importlib.util.module_from_spec(spec)` is bound to in a body (`Walker::spec_untouched`):
+/// a plain assignment to one name.
+fn spec_modules<'a>(body: &'a [Stmt], spec: &str) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut stack = vec![body];
+    while let Some(suite) = stack.pop() {
+        for stmt in suite {
+            if let Stmt::Assign(assign) = stmt
+                && let [Expr::Name(target)] = assign.targets.as_slice()
+                && module_from_spec(&assign.value, spec)
+            {
+                out.push(target.id.as_str());
+            }
+            stack.extend(nested_bodies(stmt));
+        }
+    }
+    out
+}
+
+/// `importlib.util.module_from_spec(spec)` (any receiver), with `spec` its one argument.
+fn module_from_spec(value: &Expr, spec: &str) -> bool {
+    let Expr::Call(call) = value else {
+        return false;
+    };
+    callee_text(call).rsplit('.').next() == Some("module_from_spec")
+        && call.arguments.keywords.is_empty()
+        && matches!(call.arguments.args.as_ref(), [Expr::Name(n)] if n.id.as_str() == spec)
+}
+
+/// The uses of a spec name that may change it before its `sys.modules` store
+/// (`Walker::spec_untouched`).
+struct SpecUses<'n> {
+    spec: &'n str,
+    /// A spec with the standard source loader: `.loader`, `is None` and `module_from_spec`.
+    source: bool,
+    before: TextSize,
+    /// The names `module_from_spec(spec)` is bound to: no use before the store.
+    modules: Vec<&'n str>,
+    /// Where the outermost def, lambda or class around the node starts: a use there counts when
+    /// that statement comes before the store (it may run before it); one after cannot.
+    nested: Option<TextSize>,
+    other: bool,
+}
+
+impl SpecUses<'_> {
+    fn counts(&self, at: TextSize) -> bool {
+        self.nested.unwrap_or(at) < self.before
+    }
+
+    fn enter(&mut self, at: TextSize) -> Option<TextSize> {
+        let outer = self.nested;
+        self.nested = Some(outer.unwrap_or(at));
+        outer
+    }
+
+    fn is_spec(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Name(n) if n.id.as_str() == self.spec)
+    }
+}
+
+impl<'a> Visitor<'a> for SpecUses<'_> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {
+                let outer = self.enter(stmt.range().start());
+                visitor::walk_stmt(self, stmt);
+                self.nested = outer;
+            }
+            // `module = importlib.util.module_from_spec(spec)`: the module's binding.
+            Stmt::Assign(assign)
+                if self.source
+                    && matches!(assign.targets.as_slice(), [Expr::Name(_)])
+                    && module_from_spec(&assign.value, self.spec) => {}
+            _ => visitor::walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Lambda(_) => {
+                let outer = self.enter(expr.range().start());
+                visitor::walk_expr(self, expr);
+                self.nested = outer;
+            }
+            Expr::Attribute(attribute)
+                if self.is_spec(&attribute.value)
+                    && attribute.ctx.is_load()
+                    && (attribute.attr.as_str() == "name"
+                        || (self.source && attribute.attr.as_str() == "loader")) => {}
+            Expr::Compare(compare)
+                if self.source
+                    && compare.operands.len() == 2
+                    && self.is_spec(&compare.operands[0])
+                    && compare
+                        .ops
+                        .iter()
+                        .all(|op| matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot))
+                    && compare.operands[1].is_none_literal_expr() => {}
+            Expr::Name(name) if name.ctx != ExprContext::Store => {
+                let id = name.id.as_str();
+                let named = id == self.spec || self.modules.contains(&id);
+                if named && self.counts(name.range.start()) {
+                    self.other = true;
+                }
+            }
+            _ => visitor::walk_expr(self, expr),
+        }
+    }
+}
+
+/// Whether a file has code that may bind a module-level name with no assignment statement
+/// (family 2): `globals`, `exec` or `eval` named anywhere, `vars()` or `locals()` with no
+/// argument, the own module by `__name__` (`sys.modules[__name__]`, `import_module(__name__)`),
+/// or a frame's namespace (`f_globals`, `f_locals`) or a function's (`__globals__`).
+fn namespace_writers(suite: &[Stmt]) -> bool {
+    let mut found = NamespaceWriters::default();
+    found.visit_body(suite);
+    found.found
+}
+
+#[derive(Default)]
+struct NamespaceWriters {
+    found: bool,
+}
+
+impl<'a> Visitor<'a> for NamespaceWriters {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        let own = |key: &Expr| matches!(key, Expr::Name(n) if n.id.as_str() == "__name__");
+        let found = match expr {
+            Expr::Name(name) => matches!(name.id.as_str(), "globals" | "exec" | "eval"),
+            Expr::Call(call) => {
+                let callee = callee_text(call);
+                let last = callee.rsplit('.').next().unwrap_or_default();
+                let bare = call.arguments.args.is_empty() && call.arguments.keywords.is_empty();
+                (matches!(last, "vars" | "locals") && bare)
+                    || (matches!(last, "import_module" | "__import__")
+                        && call.arguments.args.first().is_some_and(own))
+            }
+            Expr::Subscript(subscript) => own(&subscript.slice),
+            Expr::Attribute(attribute) => {
+                matches!(
+                    attribute.attr.as_str(),
+                    "f_globals" | "f_locals" | "__globals__"
+                )
+            }
+            _ => false,
+        };
+        self.found = self.found || found;
+        visitor::walk_expr(self, expr);
     }
 }
 

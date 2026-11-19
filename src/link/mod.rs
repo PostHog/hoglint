@@ -454,11 +454,13 @@ impl Link {
             class_stores: FxHashMap::default(),
             values: FxHashMap::default(),
             touched_classes: FxHashSet::default(),
+            based_classes: FxHashSet::default(),
             touched_modules: FxHashSet::default(),
             handed: Vec::new(),
             touching: FxHashSet::default(),
             poisoned_modules: FxHashSet::default(),
             poison_all: false,
+            monkeypatch: None,
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);

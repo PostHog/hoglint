@@ -3,7 +3,7 @@
 
 use super::LinkConfig;
 use super::facts::{
-    Argument, Assign, COPY_CALLEES, CallRow, ComputedRow, Def, FactSet, FileFacts, Import,
+    Argument, Assign, COPY_CALLEES, CallRow, ComputedRow, Def, DefKind, FactSet, FileFacts, Import,
     LoadForm, Op, V, value as value_tree,
 };
 use super::intern::{EMPTY, Interner, Sid};
@@ -26,7 +26,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 /// The hooks a record's construction invokes with the value it stores (`bare_record`).
-const RECORD_HOOKS: [&str; 5] = [
+const RECORD_HOOKS: [&str; 6] = [
+    "__del__",
     "__setattr__",
     "__getattribute__",
     "__getattr__",
@@ -1331,10 +1332,14 @@ pub struct Producers<'p> {
     pub handed: Vec<(Ent, usize, i32, u32, String)>,
     /// The classes `touched` is deciding, against a loop through record callees.
     pub touching: FxHashSet<Ent>,
+    /// The classes some class statement takes as a base (`#base`, family 5).
+    pub based_classes: FxHashSet<Ent>,
     /// The modules a change through a module value may have rebound any name of
     /// (`module_change`), and whether that is every module.
     pub poisoned_modules: FxHashSet<Sid>,
     pub poison_all: bool,
+    /// Whether some first-party file defines `monkeypatch` (`monkeypatch_defined`), once read.
+    pub monkeypatch: Option<bool>,
 }
 
 /// A value a `!` row names, as the reading file resolves it (`Producers::values`).
@@ -1759,6 +1764,7 @@ impl Producers<'_> {
             }
         }
         let links = self.escape_touches(owner, record, &mut out);
+        self.holder_escapes(owner, &mut out);
         self.foreign_rebinds(owner, &mut out);
         self.import_rebinds(owner, record, &mut out);
         self.loader_namespace(owner, record, &mut out);
@@ -1832,6 +1838,16 @@ impl Producers<'_> {
                         s: self.core.it.intern(&class),
                     };
                     rebound = rebound || !self.stable_class(class, &attribute);
+                }
+                // `$`: the read runs code of the name's items (family 7); `&NAME`: of an operand.
+                if !rebound && relied.split(',').any(|dep| dep == "$") {
+                    let file = self.scopes[owner].file as usize;
+                    let mut text = AssignText::new(self.core.facts.clone(), file);
+                    rebound = !self.inert_items(owner, scope, name, out, &mut text, 0);
+                }
+                for operand in relied.split(',').filter_map(|dep| dep.strip_prefix('&')) {
+                    let operand = V::Chain(self.core.it.intern(operand));
+                    rebound = rebound || !self.inert_value(owner, scope, escape.line, &operand);
                 }
                 if !rebound {
                     continue;
@@ -1917,6 +1933,111 @@ impl Producers<'_> {
             }
         }
         links
+    }
+
+    /// Family 7 (t30's ruling): whether every item a name may hold is proved inert, so comparing,
+    /// hashing, formatting or releasing it runs no first-party code. Every row that binds or
+    /// changes the name must be read (`inert_json`); a binding to another name of the file holds
+    /// that name's items; any other touch (an escape, a binding the reading does not read)
+    /// proves nothing.
+    fn inert_items(
+        &mut self,
+        owner: usize,
+        scope: i32,
+        name: &str,
+        out: &Touches,
+        text: &mut AssignText,
+        depth: usize,
+    ) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let keys = self.escape_keys(owner, scope, name, out);
+        if keys.is_empty() {
+            return false;
+        }
+        let rows: Vec<Touching> = (keys.iter())
+            .flat_map(|key| out[key].1.iter().copied())
+            .collect();
+        rows.into_iter().all(|touching| {
+            let row = touching.row;
+            match touching.touch {
+                Touch::Bind | Touch::Add => {}
+                _ => return false,
+            }
+            // `W = OTHER`: OTHER's items.
+            if touching.touch == Touch::Bind
+                && let Some(V::Chain(other)) = &row.value
+            {
+                let other = self.core.it.s(*other).to_string();
+                if !other.contains('.') && !self.escape_keys(owner, row.s, &other, out).is_empty() {
+                    return self.inert_items(owner, row.s, &other, out, text, depth + 1);
+                }
+            }
+            let Some(json) = text.value(touching.at).cloned() else {
+                return false;
+            };
+            if row.op == Op::Mutate {
+                let J::Object(call) = &json else {
+                    return false;
+                };
+                return call_arguments(call).all(|arg| self.inert_json(owner, row.s, row.l, arg));
+            }
+            self.inert_json(owner, row.s, row.l, &json)
+        })
+    }
+
+    /// Whether a value, as an item or a display of items, is proved inert (family 7): a literal
+    /// of a builtin type, a list, tuple, set or dict display of such, an undecorated function,
+    /// or a class whose creation and metaclass run no first-party code (`holder_runs_code`: no
+    /// decorator but `dataclasses.dataclass`, no class keyword along its first-party lineage).
+    /// A call (an instance), an unknown name or anything else is not.
+    fn inert_json(&mut self, owner: usize, scope: i32, line: u32, json: &J) -> bool {
+        let J::Object(map) = json else {
+            let value = value_tree(&mut self.core.it, json);
+            return self.inert_value(owner, scope, line, &value);
+        };
+        if map.contains_key("s") {
+            return true;
+        }
+        for key in ["list", "tuple", "set"] {
+            if let Some(J::Array(items)) = map.get(key) {
+                return items
+                    .iter()
+                    .all(|item| self.inert_json(owner, scope, line, item));
+            }
+        }
+        if let Some(J::Array(pairs)) = map.get("dict") {
+            return (pairs.iter()).all(|pair| {
+                pair.as_array().is_some_and(|parts| {
+                    (parts.iter())
+                        .all(|part| part.is_null() || self.inert_json(owner, scope, line, part))
+                })
+            });
+        }
+        false
+    }
+
+    /// Whether a leaf value is proved inert (family 7): a literal of a builtin type, an
+    /// undecorated function, or a class whose creation and metaclass run no first-party code
+    /// (`holder_runs_code`).
+    fn inert_value(&mut self, owner: usize, scope: i32, line: u32, value: &V) -> bool {
+        match value {
+            V::Null | V::Scalar | V::Str(..) => true,
+            V::Chain(_) => match self.named_hit(owner, value, scope, line) {
+                Some((HitKind::Def, def)) => {
+                    (self.def_of(def.m, def.s, HitKind::Def)).is_some_and(|(def_owner, idx)| {
+                        let file = self.scopes[def_owner].file as usize;
+                        self.core.facts.files[file].defs[idx as usize]
+                            .dec
+                            .is_empty()
+                    })
+                }
+                Some((HitKind::Class, class)) => !self.holder_runs_code(class, None, 0),
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     /// The key a name a scope uses touches: in a class body the class's own attribute when the
@@ -2264,6 +2385,10 @@ impl Producers<'_> {
                 continue;
             };
             let (base, attribute) = (base.to_string(), attribute.to_string());
+            if base == "?" {
+                self.unknown_store(owner, &attribute);
+                continue;
+            }
             let chain = self.core.it.intern(&base);
             let attribute = self.core.it.intern(&attribute);
             let core = &mut *self.core;
@@ -2291,6 +2416,50 @@ impl Producers<'_> {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// A store into an object no dotted name gives (family 6, `@?.attr`): it may be any class the
+    /// file defines or imports, so each is stored into (`class_stores`): no such class is a
+    /// record class, a stable class or a quiet holder.
+    fn unknown_store(&mut self, owner: usize, attribute: &str) {
+        let facts = self.core.facts.clone();
+        let record = &facts.files[self.scopes[owner].file as usize];
+        let module = self.scopes[owner].module;
+        let attribute = self.core.it.intern(attribute);
+        let mut classes: Vec<Ent> = (record.defs.iter().enumerate())
+            .filter(|(_, def)| def.kind == DefKind::Class)
+            .map(|(idx, _)| Ent {
+                m: module,
+                s: self.scopes[owner].qualnames[idx],
+            })
+            .collect();
+        let (is_package, star) = (self.scopes[owner].is_package, self.settings.k.star);
+        for row in &record.imports {
+            if row.name == Some(star) {
+                continue;
+            }
+            let (bound, _, _) = import_surface(&mut self.core.it, module, is_package, row);
+            let core = &mut *self.core;
+            let names = &self.settings.names;
+            let (found, rest) = core.chain_lookup(
+                names,
+                &mut self.scopes[owner],
+                bound,
+                row.scope,
+                row.line + 1,
+            );
+            if let Some(hit) = found.hit.filter(|_| rest.is_empty())
+                && core.kind(hit) == HitKind::Class
+            {
+                classes.push(core.origin(hit));
+            }
+        }
+        for class in classes {
+            self.class_stores
+                .entry(class)
+                .or_default()
+                .insert(attribute);
         }
     }
 
@@ -2359,6 +2528,15 @@ impl Producers<'_> {
                     }
                 }
             };
+            // A base of a class statement (family 5): a first-party class is touched; no other
+            // value is evidence about the file's records.
+            if marker == "#base" {
+                if let Held::Class(class, _) = held {
+                    self.touched_classes.insert(class);
+                    self.based_classes.insert(class);
+                }
+                continue;
+            }
             match (held, marker.as_str()) {
                 (Held::Class(class, _), callee) if callee.starts_with('@') => {
                     let callee = callee[1..].to_string();
@@ -2390,6 +2568,13 @@ impl Producers<'_> {
     /// `*` is every name: every read that may depend on the module is unread (`module_poisoned`).
     /// A class NAME such a module defines is stored into too.
     fn module_change(&mut self, owner: usize, scope: i32, line: u32, change: &str) {
+        // A key pytest's `monkeypatch` stores or deletes: when some file defines a fixture or a
+        // plugin name `monkeypatch`, the call may be anything, so any module.
+        let change = match change.strip_suffix("?monkeypatch") {
+            Some(_) if self.monkeypatch_defined() => ":*",
+            Some(change) => change,
+            None => change,
+        };
         let Some((module, name)) = change.rsplit_once(':') else {
             return;
         };
@@ -2434,6 +2619,107 @@ impl Producers<'_> {
                 self.class_stores.entry(class).or_default().insert(star);
             }
         }
+    }
+
+    /// A class whose body binds or aliases a name holds it (family 5): a use of the class that
+    /// may run code escapes every name its body binds. A class some class statement takes as a
+    /// base (`#base`: a subclass reaches it through `super()` and attribute lookup), and one
+    /// whose creation or attribute reads may run first-party code (`holder_runs_code`). Other
+    /// uses follow the holder table, in the file (`.*`).
+    fn holder_escapes(&mut self, owner: usize, out: &mut Touches) {
+        let module = self.scopes[owner].module;
+        let keys: Vec<(Sid, String)> = (out.keys())
+            .filter_map(|key| {
+                let (class, _) = self.core.it.s(*key).rsplit_once('.')?;
+                Some((*key, class.to_string()))
+            })
+            .collect();
+        for (key, class) in keys {
+            let class = Ent {
+                m: module,
+                s: self.core.it.intern(&class),
+            };
+            if !(self.based_classes.contains(&class)
+                || self.holder_runs_code(class, Some(owner), 0))
+            {
+                continue;
+            }
+            if let Some((_, rows)) = out.get_mut(&key) {
+                rows.push(Touching {
+                    at: usize::MAX,
+                    row: &ESCAPED,
+                    touch: Touch::Escaped,
+                });
+            }
+        }
+    }
+
+    /// Whether creating a holder class or reading its attributes may run first-party code
+    /// (family 5): a decorator but `dataclasses.dataclass`, a class keyword (a metaclass, or
+    /// arguments a metaclass takes) along its first-party lineage, or a base that resolves to no
+    /// class and is not a library's. A library base's metaclass is the library's.
+    fn holder_runs_code(&mut self, class: Ent, file: Option<usize>, depth: usize) -> bool {
+        if depth > MAX_BASE_DEPTH {
+            return true;
+        }
+        // A nested class (`Outer.Inner`) by its qualified name in the file that holds the key.
+        let nested = file.and_then(|owner| {
+            let scope = &self.scopes[owner];
+            let facts = &self.core.facts.files[scope.file as usize];
+            (0..scope.qualnames.len())
+                .find(|&at| {
+                    scope.qualnames[at] == class.s
+                        && !scope.in_function[at]
+                        && facts.defs[at].kind == DefKind::Class
+                })
+                .map(|at| (owner, at as u32))
+        });
+        let Some((owner, idx)) = nested.or_else(|| self.def_of(class.m, class.s, HitKind::Class))
+        else {
+            return depth == 0;
+        };
+        let facts = self.core.facts.clone();
+        let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
+        if node.keywords || (depth == 0 && !self.dataclass_only(owner, node)) {
+            return true;
+        }
+        node.bases.iter().any(|base| {
+            if let Some((HitKind::Class, base_class)) = self.named_hit(owner, base, node.s, node.l)
+                && self
+                    .def_of(base_class.m, base_class.s, HitKind::Class)
+                    .is_some()
+            {
+                return self.holder_runs_code(base_class, None, depth + 1);
+            }
+            let Some((surface, _)) = self.named(owner, base, node.s, node.l) else {
+                return true;
+            };
+            let surface = self.core.it.intern(&surface);
+            let head = self.core.it.head(surface);
+            !(self.core.is_external(head) || PLAIN_BASES.contains(&self.core.it.s(surface)))
+        })
+    }
+
+    /// Whether some first-party file defines `monkeypatch`: a def or a class of that name in any
+    /// scope, or a module-level binding of it (a fixture or a plugin's name).
+    fn monkeypatch_defined(&mut self) -> bool {
+        if let Some(defined) = self.monkeypatch {
+            return defined;
+        }
+        let facts = self.core.facts.clone();
+        let it = &self.core.it;
+        let defined = facts.files.iter().any(|record| {
+            let def = (record.defs.iter()).any(|def| it.s(def.n) == "monkeypatch");
+            let bound = (record.assigns.iter())
+                .filter(|row| row.s == -1)
+                .any(|row| {
+                    (row.targets.iter())
+                        .any(|t| matches!(t, V::Chain(n) if it.s(*n) == "monkeypatch"))
+                });
+            def || bound
+        });
+        self.monkeypatch = Some(defined);
+        defined
     }
 
     /// Whether a change through a module value may have replaced any of the module's names
@@ -2570,17 +2856,64 @@ impl Producers<'_> {
         let top = record.defs[idx as usize].f | crate::facts::flags::CLASS;
         let first = attribute.split('.').next().unwrap_or_default();
         let it = &self.core.it;
-        let assigned = (record.assigns.iter())
+        let assigned: Vec<&Assign> = (record.assigns.iter())
             .filter(|row| row.s == idx as i32)
             .filter(|row| {
                 (row.targets.iter()).any(|t| matches!(t, V::Chain(n) if it.s(*n) == first))
             })
-            .map(|row| row.f);
-        let defined = (record.defs.iter())
+            .collect();
+        let defined: Vec<&Def> = (record.defs.iter())
             .filter(|def| def.s == idx as i32 && it.s(def.n) == first)
-            .map(|def| def.f);
-        let flags: Vec<u32> = assigned.chain(defined).collect();
-        matches!(flags.as_slice(), [flags] if *flags == top)
+            .collect();
+        let flags: Vec<u32> = (assigned.iter().map(|row| row.f))
+            .chain(defined.iter().map(|def| def.f))
+            .collect();
+        if !matches!(flags.as_slice(), [flags] if *flags == top) {
+            return false;
+        }
+        match (assigned.as_slice(), defined.as_slice()) {
+            // A def or a class: only with no decorator but a trusted builtin.
+            ([], [def]) => {
+                (def.dec.iter()).all(|decorator| self.trusted_decorator(owner, decorator, def))
+            }
+            ([row], []) => self.inert_class_value(owner, row),
+            _ => false,
+        }
+    }
+
+    /// Whether a decorator of a class-body def is a builtin the class read accounts for
+    /// (family 4): `staticmethod`, `classmethod` or `property`, which return a descriptor whose
+    /// class read runs no first-party code.
+    fn trusted_decorator(&mut self, owner: usize, decorator: &V, def: &Def) -> bool {
+        self.named(owner, decorator, def.s, def.l)
+            .is_some_and(|(surface, target)| {
+                let trusted = |name: &str| {
+                    matches!(
+                        name,
+                        "builtins.staticmethod" | "builtins.classmethod" | "builtins.property"
+                    )
+                };
+                trusted(&surface) || trusted(&target)
+            })
+    }
+
+    /// Whether a class-body binding's value runs no first-party code when the class reads it
+    /// (family 4): a literal, a list or tuple display, a function, or a class whose metaclass
+    /// chain has no class keyword (`plain_metaclass`). Anything else (a call, an unknown name, a
+    /// first-party metaclass, which may have `__get__`) makes the class read unread.
+    fn inert_class_value(&mut self, owner: usize, row: &Assign) -> bool {
+        let Some(value) = row.value.as_ref() else {
+            return false;
+        };
+        match value {
+            V::Str(..) | V::Scalar | V::Null | V::Tuple(_) | V::List(_) => true,
+            V::Chain(_) => match self.named_hit(owner, value, row.s, row.l) {
+                Some((HitKind::Def, _)) => true,
+                Some((HitKind::Class, class)) => self.plain_metaclass(class, 0),
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     /// Whether a class and its first-party bases, at any depth, have no class keyword (so no
@@ -3416,9 +3749,10 @@ impl Producers<'_> {
         let Some(rest) = rest else {
             // A class member the lookup lands on (`Base.WORKFLOWS` read in another class body)
             // is stored as one: no reference edge may read it from outside. It is read back
-            // only from a stable class (`stable_class`).
+            // only through the class itself (a class statement's name) from a stable class
+            // (`stable_class`). Through anything else (an instance, `_k = _K()`, another name, a
+            // variable's attribute) it is unread (family 4).
             let member = (self.core.it.s(target.s).rsplit_once('.'))
-                .filter(|_| surface == origin)
                 .map(|(class, attribute)| (class.to_string(), attribute.to_string()));
             if let Some((class, attribute)) = member {
                 let class = Ent {
@@ -3426,7 +3760,10 @@ impl Producers<'_> {
                     s: self.core.it.intern(&class),
                 };
                 let is_class = self.def_of(class.m, class.s, HitKind::Class).is_some();
-                if is_class && !self.stable_class(class, &attribute) {
+                if !is_class
+                    || !self.through_class(at, value, class)
+                    || !self.stable_class(class, &attribute)
+                {
                     out.push(None);
                     return;
                 }
@@ -3453,6 +3790,24 @@ impl Producers<'_> {
         } else if !self.class_defines(target, &rest) {
             out.push(None);
         }
+    }
+
+    /// Whether a chain that lands on a member of `class` reads it through the class itself
+    /// (family 4): what the chain names before the attribute resolves to the class (a class
+    /// statement's name, also across an import). An instance (`_k = _K()`), a variable or any
+    /// other value is no class read. A bare name, read in the class's own body, reads the
+    /// body's namespace.
+    fn through_class(&mut self, at: Place, value: &V, class: Ent) -> bool {
+        let V::Chain(chain) = value else {
+            return false;
+        };
+        let Some((head, _)) = self.core.it.s(*chain).rsplit_once('.') else {
+            return true;
+        };
+        let head = head.to_string();
+        let head = V::Chain(self.core.it.intern(&head));
+        let (_, resolved) = self.lookup_value(at.owner, &head, at.scope, at.line);
+        resolved.res == Res::Resolved && resolved.target == Some(class)
     }
 
     /// A name's lookup where a value reads it. A binding that reads the name it binds is exact

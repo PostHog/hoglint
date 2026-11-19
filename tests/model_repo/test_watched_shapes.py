@@ -26,6 +26,7 @@ from model_repo.shapes_round8_cases import CASES as ROUND8_CASES
 from model_repo.shapes_round9 import ROUND9 as ROUND9_PINNED
 from model_repo.shapes_round9_moves import moved
 from model_repo.shapes_round9b_cases import CASES as ROUND9B
+from model_repo.shapes_round10_cases import CASES as ROUND10
 from model_repo.test_watched import lay_derived, watched
 
 # Round 9 moved these rows (`shapes_round9_moves.py`, each with its cause): the pinned data of
@@ -1481,3 +1482,49 @@ def test_round9b_a_change_through_a_resolved_module_fails_that_module_only(round
     group = round9b["groups"][p]
     assert not group["passes"]
     assert any(ROUND9B[p]["reason"] in text for text in group["reasons"]), group["reasons"]
+
+
+# Round 10 (recheck 8's seven families): each entry narrowed to positive evidence. The twins run
+# together; the loud rows together, as each fails only its own facade; a row whose change may
+# reach every module (`alone`) in an answer of its own.
+ROUND10_ALONE = {p: shape for p, shape in ROUND10.items() if shape.get("alone")}
+ROUND10_QUIET = {p: shape for p, shape in ROUND10.items() if shape["outcome"] == "watched"}
+ROUND10_LOUD = {p: shape for p, shape in ROUND10.items() if shape["outcome"] == "unread" and not shape.get("alone")}
+
+
+@pytest.fixture(scope="module")
+def round10(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND10_QUIET)
+
+
+@pytest.fixture(scope="module")
+def round10_loud(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND10_LOUD)
+
+
+def test_round10_twins_are_complete(round10: dict[str, Any]) -> None:
+    assert round10["complete"], round10["problems"]
+
+
+@pytest.mark.parametrize("p", list(ROUND10_QUIET))
+def test_round10_a_harmless_twin_is_watched(round10: dict[str, Any], p: str) -> None:
+    group = round10["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], (ROUND10[p]["note"], group["reasons"])
+    missing = [probe for probe in ROUND10[p]["probes"] if f"products/{p}/{probe}" not in group["watched"]]
+    assert missing == []
+
+
+@pytest.mark.parametrize("p", list(ROUND10_LOUD))
+def test_round10_an_entry_without_evidence_fails_the_level(round10_loud: dict[str, Any], p: str) -> None:
+    group = round10_loud["groups"][p]
+    assert not group["passes"], ROUND10[p]["note"]
+    assert any(ROUND10[p]["reason"] in text for text in group["reasons"]), group["reasons"]
+
+
+@pytest.mark.parametrize("p", list(ROUND10_ALONE))
+def test_round10_a_change_that_may_reach_every_module_fails_the_level_alone(
+    tmp_path_factory: pytest.TempPathFactory, p: str
+) -> None:
+    group = answer_of(tmp_path_factory, {p: ROUND10[p]})["groups"][p]
+    assert not group["passes"], ROUND10[p]["note"]
+    assert any(ROUND10[p]["reason"] in text for text in group["reasons"]), group["reasons"]

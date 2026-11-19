@@ -265,8 +265,15 @@ These belong to the PostHog preset, not to the engine.
   What the use reading knows of an expression, from one function at bindings and uses alike: whether its type is proved builtin, the tracked lists it may be, hold items of or be an item of (its sources), whether it may be an item, whether it is a record.
   An escape of it is an escape of every source.
 - **Stable class** (`Producers::stable_class` in `src/link/produce.rs`).
-  A class whose attribute read returns what its body binds: metaclass `type` or `abc.ABCMeta` along its lineage, no decorator but `dataclasses.dataclass`, no store into it from any file, every occurrence of it accounted, the attribute bound once at the body's top level.
+  A class whose attribute read returns what its body binds: metaclass `type` or `abc.ABCMeta` along its lineage, no decorator but `dataclasses.dataclass`, no store into it from any file, every occurrence of it accounted, the attribute bound once at the body's top level, to a literal, a list or tuple display, a function (decorated only by `staticmethod`, `classmethod` or `property`) or a class with no class keyword along its lineage (round 10). Read only through a class statement's name.
+- **Inert item, `?$` and `?&NAME` rows** (round 10, `Producers::inert_items` in `src/link/produce.rs`).
+  An operation of T9 to T13 that compares, hashes, formats or releases a list's items writes `name?$`; one with a named operand of a comparing method writes `name?&OPERAND`. The read holds only when every row that binds or changes the list is read and each value (or the operand) is a literal of a builtin type, a display of such, an undecorated function, or a class whose creation and metaclass run no first-party code.
+- **Base use, `#base`** (round 10, a `!VALUE#base` row).
+  A class some class statement takes as a base is touched: a subclass reaches it through `super()` and attribute lookup, so it is no stable class and no quiet holder.
+- **Unknown object store, `@?` row** (round 10, an `escapes` row `@?.ATTR`).
+  A store into an object no dotted name gives (`type(x).attr = v`): it may be any class the file defines or imports, each of which is stored into.
 - **Computed module value, `!+` row** (an `escapes` row `!+MODULE:NAME`).
   A module the code reaches by a name the reading cannot resolve (`import_module(name)`, `sys.modules[key]`, an unnamed function's `__globals__`); a visible change through it binds that member, from another file, in each first-party module it may be (`*`: every name).
+  Round 10: every operation on `sys.modules` writes the keys it may insert, replace, remove or restore (an unknown key, a pass, a store or a teardown is every module); `?monkeypatch` marks a key pytest's `monkeypatch` writes, which holds only when no file defines a fixture or plugin of that name.
 - **Module value, `!` row** (an `escapes` row `!VALUE`).
   A use of a value that may be a module, a class or a function, in a place that is no attribute read and no call; the link resolves it and trusts no record class, `dataclasses.replace` or class read back that it may reach.
