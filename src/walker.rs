@@ -3404,12 +3404,21 @@ impl<'a, 'w> Walker<'a, 'w> {
             return self.emit_modules_use(at, pos);
         }
         match expr {
-            // `patch.dict("sys.modules", ...)`: `sys.modules` named by a string, handed on.
+            // `patch.dict("sys.modules", ...)`: `sys.modules` named by a string, the keys it
+            // stores; handed to anything else, any module.
             Expr::StringLiteral(text)
                 if text.value.to_str() == "sys.modules"
                     && matches!(self.path.last(), Some(Frame::Arg(..) | Frame::Kw(..))) =>
             {
-                self.emit_value_row(at, pos, "+:*".to_string());
+                let keys = match self.path.last() {
+                    Some(Frame::Arg(call, 0)) if self.patch_dict(call) => {
+                        self.patch_dict_keys(call, at.scope)
+                    }
+                    _ => vec![None],
+                };
+                for key in keys {
+                    self.emit_value_row(at, pos, format!("+{}:*", key.unwrap_or_default()));
+                }
             }
             _ if let Some((value, "__self__")) = self.dunder_read(expr) => {
                 if !self.rooted(value) {
@@ -3447,6 +3456,10 @@ impl<'a, 'w> Walker<'a, 'w> {
                     }
                     _ => None,
                 };
+                // Limit 10: `del sys.modules[key]` publishes no value.
+                if subscript.ctx.is_del() {
+                    return;
+                }
                 if !subscript.ctx.is_load() {
                     let module = module.unwrap_or_default();
                     return self.emit_value_row(at, pos, format!("+{module}:*"));
@@ -3582,13 +3595,25 @@ impl<'a, 'w> Walker<'a, 'w> {
                     }
                     "values" | "items" => return self.follow_at(any, at, pos, call_index),
                     "update" | "__ior__" => self.dict_keys(call, at.scope),
-                    "__setitem__" | "setdefault" | "pop" | "__delitem__" => vec![key(self)],
+                    "__setitem__" | "setdefault" => vec![key(self)],
+                    // Limit 10: a removal publishes no value.
+                    "pop" | "popitem" | "__delitem__" | "clear" => return,
                     _ => vec![None],
                 }
             }
             // pytest's `monkeypatch.setitem(sys.modules, KEY, v)` or `delitem`: KEY, also at
             // undo (the old value back, or the key deleted), when the link proves the fixture
             // pytest's own (`?monkeypatch`).
+            // Limit 10: `monkeypatch.delitem` removes its key, and its undo restores it.
+            Some(Frame::Arg(call, 0))
+                if self.pytest_monkeypatch(call, at)
+                    && callee_text(call) == "monkeypatch.delitem" =>
+            {
+                return;
+            }
+            Some(Frame::Arg(call, 0)) if self.patch_dict(call) => {
+                self.patch_dict_keys(call, at.scope)
+            }
             Some(Frame::Arg(call, 0)) if self.pytest_monkeypatch(call, at) => {
                 let key = (call.arguments.args.get(1))
                     .and_then(|key| self.literal_text(key, at.scope, 0));
@@ -3625,6 +3650,38 @@ impl<'a, 'w> Walker<'a, 'w> {
         };
         let parameter = (function.parameters.iter()).any(|p| p.name().as_str() == "monkeypatch");
         parameter && !rebinds(&function.body, "monkeypatch", self.defs)
+    }
+
+    /// `unittest.mock.patch.dict(...)` (or the `mock` backport's), with no `*` argument.
+    fn patch_dict(&self, call: &ast::ExprCall) -> bool {
+        let full = self.resolve(&callee_text(call));
+        matches!(
+            full.as_deref(),
+            Some("unittest.mock.patch.dict" | "mock.patch.dict")
+        ) && !has_star_arguments(call)
+    }
+
+    /// The keys `patch.dict` on `sys.modules` stores (limit 10: its teardown, and `clear=True`,
+    /// remove or restore entries, which publishes no new value): a dict display's keys
+    /// (`values`, positional or by keyword) and the other keywords' names; any other value is
+    /// any key.
+    fn patch_dict_keys(&self, call: &ast::ExprCall, scope: i64) -> Vec<Option<String>> {
+        let keyword = |name: &str| {
+            (call.arguments.keywords.iter())
+                .find(|keyword| keyword.arg.as_ref().is_some_and(|arg| arg.as_str() == name))
+                .map(|keyword| &keyword.value)
+        };
+        let mut keys = match call.arguments.args.get(1).or_else(|| keyword("values")) {
+            Some(values) => self.display_keys(values, scope),
+            None => Vec::new(),
+        };
+        for keyword in call.arguments.keywords.iter() {
+            let name = keyword.arg.as_ref().map(|arg| arg.as_str());
+            if !matches!(name, Some("values" | "clear")) {
+                keys.push(name.map(str::to_string));
+            }
+        }
+        keys
     }
 
     /// The keys `update` (or `|=`) stores: each key of a dict display that resolves

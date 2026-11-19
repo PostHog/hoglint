@@ -190,8 +190,7 @@ add_g(
     + FAKE
     + f'_patcher = patch.dict("sys.modules", {{{TARGET}: _fake}})\n_patcher.start()\n',
     "unread",
-    "`patch.dict` on the string `sys.modules` (strict: its teardown restores a snapshot)",
-    alone=True,
+    "`patch.dict` on the string `sys.modules`: the keys of its values (limit 10: its teardown is not followed)",
 )
 add_g(
     "r10_ok_setdefault_library",
@@ -245,9 +244,9 @@ for name, body, outcome, note, extra in (
     (
         "loop_key",
         '    for name in ["a"]:\n        monkeypatch.delitem(sys.modules, name)\n',
-        "unread",
-        "pytest's monkeypatch, a key no literal gives",
-        {"alone": True},
+        "watched",
+        "limit 10: pytest's monkeypatch removes a key no literal gives; a removal is not followed",
+        {},
     ),
 ):
     add_g(
@@ -263,6 +262,16 @@ for name, body, outcome, note, extra in (
         witness=False,
         **extra,
     )
+
+# Limit 10 (droppable, the owner's call): a removal or a restore publishes no value, so it is not
+# followed; strict (commit 1) each of these may replace a module.
+A_KEY = '"products.{p}.backend.temporal.a"'
+for name, g in {
+    "pop": f"import sys\n\nsys.modules.pop({A_KEY}, None)\n",
+    "del": f"import sys\n\ndel sys.modules[{A_KEY}]\n",
+    "snapshot": "import sys\nfrom unittest.mock import patch\n\nwith patch.dict(sys.modules):\n    pass\n",
+}.items():
+    add_g(f"r10_limit10_{name}", g, "watched", f"limit 10: a removal or a restore ({name}) is not followed")
 
 # 3. `getattr` with a literal is the attribute, dunders too.
 add_g(
