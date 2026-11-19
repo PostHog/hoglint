@@ -66,7 +66,7 @@ ZSTD_LEVEL = 1  # a whole-repo summary shrinks about 20 times at level 1, in a f
 # The parts a reader loads on their own (see store.py), and the fields each part holds.
 SUMMARY_SECTIONS: dict[str, tuple[str, ...]] = {
     "envelope": ("protocol", "envelope", "schema", "growth", "docs", "scope", "with_triples", "advisory", "ledger"),
-    "incompletes": ("incomplete",),
+    "incompletes": ("incomplete", "advisory_incomplete"),
     "findings": ("findings", "lines", "labels", "equality", "exceptions", "modules"),
     "couplings": ("triples", "couplings", "witnesses"),
     "levels": ("levels", "level_failures", "level_claims", "claim_errors"),
@@ -194,6 +194,8 @@ class ScanSummary:
     docs: dict[str, str] = field(default_factory=dict)  # rule -> its doc, for what `check` prints
     findings: StoredFindings = field(default_factory=StoredFindings)
     incomplete: list[IncompleteRecord] = field(default_factory=list)
+    # the unknowns of advisory rules: shown, never blocking, never attributed
+    advisory_incomplete: list[IncompleteRecord] = field(default_factory=list)
     triples: set[Triple] = field(default_factory=set)
     with_triples: bool = False
     scope: frozenset[str] = frozenset()
@@ -240,6 +242,9 @@ class ScanSummary:
         summary.docs = {rule.id: rule.doc for rule in config.rules.values() if rule.doc}
         summary.incomplete = [
             IncompleteRecord.of(item, fingerprint(item.edge), portable) for item in result.incomplete()
+        ]
+        summary.advisory_incomplete = [
+            IncompleteRecord.of(item, fingerprint(item.edge), portable) for item in result.advisory_incomplete()
         ]
         summary.levels = {name: list(level.passing) for name, level in result.levels.items()}
         summary.level_failures = {
@@ -312,6 +317,7 @@ class ScanSummary:
             "docs": dict(sorted(self.docs.items())),
             "findings": self.findings.to_json(),
             "incomplete": [item.to_json() for item in self.incomplete],
+            "advisory_incomplete": [item.to_json() for item in self.advisory_incomplete],
             "triples": sorted(list(triple) for triple in self.triples),
             "with_triples": self.with_triples,
             "scope": sorted(self.scope),
@@ -357,6 +363,7 @@ class ScanSummary:
             docs=dict(data.get("docs", {})),
             findings=StoredFindings.loaded(data.get("findings", [])),
             incomplete=[IncompleteRecord.from_json(item) for item in data.get("incomplete", [])],
+            advisory_incomplete=[IncompleteRecord.from_json(item) for item in data.get("advisory_incomplete", [])],
             triples={(a, b, c, d) for a, b, c, d in data.get("triples", [])},
             with_triples=bool(data.get("with_triples", False)),
             scope=frozenset(data.get("scope", [])),

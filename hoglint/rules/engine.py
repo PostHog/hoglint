@@ -173,6 +173,11 @@ class RunResult:
     def incomplete(self) -> list[IncompleteItem]:
         return [item for run in self.runs.values() for item in run.incomplete if not self.advisory(item.rule)]
 
+    def advisory_incomplete(self) -> list[IncompleteItem]:
+        """The unknowns of advisory rules: they never block, and the report still shows them, so a
+        new unknown of an advisory rule does not go dark."""
+        return [item for run in self.runs.values() for item in run.incomplete if self.advisory(item.rule)]
+
     def blocking_incomplete(self) -> list[IncompleteItem]:
         return [
             item for item in self.incomplete() if item.cause in (IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR)

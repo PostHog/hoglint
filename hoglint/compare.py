@@ -279,6 +279,11 @@ def policy_entries(policy: RawPolicy) -> dict[str, str]:
     return out
 
 
+def blocking(summary: ScanSummary) -> set[LineKey]:
+    """The findings that block: those of a rule that is not advisory."""
+    return {key for key in summary.finding_keys() if key[0] not in summary.advisory}
+
+
 @dataclass(frozen=False, slots=True)
 class Evidence:
     """What changes when only the policy changes, on base code and on head code. Findings are kept
@@ -293,6 +298,11 @@ class Evidence:
         old_keys, new_keys = old.finding_keys(), new.finding_keys()
         self.lost |= old_keys - new_keys
         self.gained |= new_keys - old_keys
+        # A finding that stays but no longer blocks (a rule's `report`, `ledger` or `replace` made
+        # it advisory) is lost all the same; one that starts to block is gained.
+        old_blocking, new_blocking = blocking(old), blocking(new)
+        self.lost |= old_blocking - new_blocking
+        self.gained |= new_blocking - old_blocking
         for name in set(old.levels) | set(new.levels):
             before, after = set(old.levels.get(name, ())), set(new.levels.get(name, ()))
             if after - before:

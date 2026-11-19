@@ -136,6 +136,8 @@ Some words have two meanings; the entry names both.
 - **Report: blocking, advisory** (rule key `report`).
   A blocking rule's new findings fail a check; an advisory rule's findings are a list that blocks nothing.
   `ledger = false` keeps no ledger lines for a rule.
+  An advisory rule's unknowns never block; the report shows them as advisory unknowns.
+  `compare` labels a policy change that stops findings blocking (a rule's `report`, `ledger` or `replace`) a relaxation.
 - **Required file** (layout rule keys `within`, `files`).
   A path each root of `within` must hold.
   An entry may hold `{a,b}` alternatives, a file or a directory, and may end in `: function` or `: class`: the file must then also define a symbol with that declaration.

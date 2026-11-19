@@ -998,6 +998,10 @@ covers     = [
   { cover = "edge.kind == 'import' and src.app_config == true and dst.package == src.package and ('function_local' not in edge.context or edge.app_setup == 'ready') and 'type_only' not in edge.context: surface", why = "the AppConfig module of the product imports this module at setup" },
   { cover = "edge.kind == 'loads' and edge.shape == 'admin' and dst.tier == 'product': dst", why = "the admin autodiscovery of Django imports this module" },
   { cover = "edge.kind == 'import' and edge.autodiscovered == 'admin' and dst.package == src.package and 'type_only' not in edge.context: surface", why = "the admin module of the product imports this module" },
+  { cover = "edge.kind in ['import', 'reference', 'dotted-path'] and 'type_only' not in edge.context and src.wiring == 'registration' and crosses-package and dst.tier == 'product': items", why = "core registers an item of a list, and this file defines the item" },
+  { cover = "registry == 'temporal' and tier == 'product': registered", why = "core loads a declaration by name, and this file defines what it registers" },
+  { cover = "edge.kind == 'import' and (edge.hook_callback != none or edge.app_setup == 'callback') and 'test' not in edge.context and 'type_only' not in edge.context and dst.package == src.package: chain", why = "a hook callback, or a function that ready() defines, imports this module" },
+  { cover = "edge.kind == 'installs' and 'test' not in edge.context and crosses-package and edge.hook == none and edge.callback != none: src", why = "this file hands a hook a callback" },
 ]
 inputs     = { adapter = "turbo", task = "backend:contract-check" }
 identity   = "entity"

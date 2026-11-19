@@ -477,6 +477,11 @@ class CheckReport:
         old_unknowns = len(self.summary.incomplete) - len(self.blocking_unknowns())
         return len(self.advisory()), old_unknowns, self.summary.findings.count(FindingStatus.ACCEPTED)
 
+    def advisory_unknowns_count(self) -> str:
+        """The count of advisory rules' unknowns for the summary lines, when there are any."""
+        count = len(self.summary.advisory_incomplete)
+        return f"{plural(count, 'advisory unknown')}, " if count else ""
+
     def verdict(self, violations: list[FindingRecord], problems: list[Problem]) -> str:
         parts = [plural(len(violations), "new finding")] if violations else []
         parts += [plural(len(problems), "other problem")] if problems else []
@@ -495,7 +500,7 @@ class CheckReport:
         advisory, old_unknowns, accepted = self.counts()
         notes = self.notes()
         if not violations and not problems:
-            line = f"hoglint: no new problems ({advisory} advisory rows, {old_unknowns} old unknowns, {accepted} old findings in the ledger)."
+            line = f"hoglint: no new problems ({advisory} advisory rows, {self.advisory_unknowns_count()}{old_unknowns} old unknowns, {accepted} old findings in the ledger)."
             return "\n".join([line, *notes]) + "\n"
         out = [self.verdict(violations, problems)]
         if violations:
@@ -506,7 +511,8 @@ class CheckReport:
         rest = len(violations) - shown
         hidden = f"{rest} more findings, " if rest else ""
         out.append(
-            f"Not shown: {hidden}{advisory} advisory rows, {old_unknowns} old unknowns, {accepted} old findings in the ledger. "
+            f"Not shown: {hidden}{advisory} advisory rows, {self.advisory_unknowns_count()}{old_unknowns} old unknowns, "
+            f"{accepted} old findings in the ledger. "
             f"Show every row: {self.rerun} --all. Show one rule: {self.rerun} --rule <rule>."
         )
         out.extend(notes)
@@ -591,6 +597,12 @@ class CheckReport:
         unknowns = [(item, cause) for item, cause in self.unknowns() if not self.rule or item.rule == self.rule]
         out.append(f"unknowns ({len(unknowns)})")
         out.extend(self.unknown_line(item, cause) for item, cause in unknowns)
+        advisory_unknowns = [
+            item for item in self.summary.advisory_incomplete if not self.rule or item.rule == self.rule
+        ]
+        if advisory_unknowns:
+            out.append(f"advisory unknowns ({len(advisory_unknowns)})")
+            out.extend(self.unknown_line(item, "advisory") for item in advisory_unknowns)
         if self.attributed is not None:
             counts = Counter(self.causes())
             tally = ", ".join(

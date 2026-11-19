@@ -178,6 +178,27 @@ TWO = (INVOICE, "core.b", "write")
 
 
 @pytest.mark.parametrize(
+    "loosened",
+    [{"report": "advisory"}, {"report": "advisory", "ledger": False}, {"replace": True, "report": "advisory"}],
+)
+def test_a_rule_whose_findings_stop_blocking_relaxes(loosened: dict) -> None:
+    """A rule's `report`, `ledger` or `replace` that keeps its findings but stops them blocking
+    removes them from what blocks: relax, not neutral."""
+    held = scan({ONE: 1, TWO: 1})
+    loose = scan({ONE: 1, TWO: 1})
+    loose.advisory = frozenset({RULE})
+    loose.lines = {}
+    scans = Scans(head=loose, base_head=loose, base=held, head_base=held)
+    ledger = LedgerFile(lines={}, exists=True)
+    base_policy = RawPolicy({"rules": {RULE: {"primitive": "use-shape"}}}, [])
+    head_policy = RawPolicy({"rules": {RULE: {"primitive": "use-shape", **loosened}}}, [])
+    report = Comparer(scans, ledger, ledger, base_policy, head_policy, set(), Renames({})).report()
+    assert {change.entry: (change.label, change.why) for change in report.policy} == {
+        f"rules.{RULE}": ("relax", "2 findings disappear")
+    }
+
+
+@pytest.mark.parametrize(
     "base, base_head, head_base, head, why",
     [
         # only the policy changes: the same two findings appear on base code and on head code

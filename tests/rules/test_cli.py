@@ -443,10 +443,10 @@ def memo_graph(staged: bool, read_error: bool = False) -> Graph:
     return graph.graph
 
 
-def memo_repo(root: Path) -> None:
+def memo_repo(root: Path, config: str = MEMO_CONFIG) -> None:
     write_config(
         root,
-        MEMO_CONFIG,
+        config,
         {
             ".gitignore": "local/\n",
             "CODEOWNERS": "products/search/ @team-search\n",
@@ -567,3 +567,27 @@ def test_a_source_the_run_could_not_read_blocks_and_its_summary_is_never_stored(
     reads_fail.clear()
     check_once(repo, tmp_path / "work", DAY, memo=True, staged=False)
     assert "unreadable" not in capsys.readouterr().out and list(stored.rglob("*.json"))
+
+
+def test_an_advisory_rules_unknowns_stay_in_the_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An advisory rule never blocks, but its unknowns are shown: a new computed import under an
+    advisory rule does not go dark."""
+
+    def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
+        return native_graph(memo_graph(False))
+
+    monkeypatch.setattr(GraphSource, "build", build)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    config = MEMO_CONFIG.replace(
+        'on_unresolved = "incomplete"\nledger = false\n',
+        'on_unresolved = "incomplete"\nreport = "advisory"\nledger = false\n',
+    )
+    assert config != MEMO_CONFIG
+    repo = tmp_path / "repo"
+    memo_repo(repo, config)
+    check_once(repo, tmp_path / "work", DAY, memo=False, staged=False)
+    out = capsys.readouterr().out
+    assert "advisory unknowns (1)" in out
+    assert "dynamic-imports [advisory, " in out

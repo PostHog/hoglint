@@ -1345,6 +1345,16 @@ text = "products/inventory/turbo.json does not watch products/inventory/backend/
 
 [[finding]]
 rule = "wiring-watched"
+identity = ["products/inventory/backend/logic/audit.py"]
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/audit.py: a hook callback, or a function that ready() defines, imports this module"
+
+[[finding]]
+rule = "wiring-watched"
+identity = ["products/inventory/backend/logic/reorder.py"]
+text = "products/inventory/turbo.json does not watch products/inventory/backend/logic/reorder.py: a hook callback, or a function that ready() defines, imports this module"
+
+[[finding]]
+rule = "wiring-watched"
 identity = ["products/inventory/backend/tasks/"]
 text = "products/inventory/turbo.json watches no file in products/inventory/backend/tasks/: core runs this location by name, and one watched file in it is enough"
 
@@ -1922,6 +1932,42 @@ rule = "wiring-watched"
 identity = ["products.reports.backend.stock_receivers|<Call>"]
 kind = "not-modelled"
 text = "cannot place '<Call>' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.racks.backend.temporal|products.racks.backend.temporal.WORKFLOWS"]
+kind = "not-modelled"
+text = "cannot read every item of 'products.racks.backend.temporal.WORKFLOWS', so the modules that define them are unknown"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.racks.backend.temporal|products.racks.backend.temporal.WORKFLOWS"]
+kind = "not-modelled"
+text = "cannot read every item of 'products.racks.backend.temporal.WORKFLOWS', so the modules that define them are unknown"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.gatekeeper.backend.wiring|registry.register_post_delete_hook"]
+kind = "not-modelled"
+text = "cannot place 'registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.gatekeeper.backend.wiring|self.registry.register_post_delete_hook"]
+kind = "not-modelled"
+text = "cannot place 'self.registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.notifications.backend.wiring|registry.register_post_delete_hook"]
+kind = "not-modelled"
+text = "cannot place 'registry.register_post_delete_hook' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.racks.backend.hooks|products.inventory.backend.facade.hooks.register_restock_hook"]
+kind = "not-modelled"
+text = "cannot place 'products.inventory.backend.facade.hooks.register_restock_hook' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"
