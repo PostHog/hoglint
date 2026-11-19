@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from model_repo.harness import copy_tree
+from model_repo.shapes_loads import LOADS
 from model_repo.shapes_round4 import ROUND4
 from model_repo.test_watched import lay_derived, watched
 
@@ -1055,3 +1056,39 @@ def test_round4_an_unread_core_hop_is_a_problem(round4_problems: dict[str, Any])
     problems = " ".join(round4_problems["problems"])
     missing = [p for p in ROUND4_PROBLEMS if p not in problems]
     assert missing == []
+
+
+LOADS_WATCHED = {p: shape for p, shape in LOADS.items() if shape["outcome"] == "watched"}
+LOADS_PROBLEMS = {p: shape for p, shape in LOADS.items() if shape["outcome"] == "problem"}
+COMPUTED = "names a module by a value it computes"
+
+
+@pytest.fixture(scope="module")
+def loads(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, LOADS_WATCHED)
+
+
+@pytest.fixture(scope="module")
+def loads_problems(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, LOADS_PROBLEMS)
+
+
+def test_a_loader_over_a_list_of_paths_keeps_the_answer_complete(loads: dict[str, Any]) -> None:
+    assert loads["complete"], loads["problems"]
+
+
+@pytest.mark.parametrize("p", list(LOADS_WATCHED))
+def test_each_module_a_list_of_paths_names_is_watched(loads: dict[str, Any], p: str) -> None:
+    group = loads["groups"][p]
+    assert group["passes"], group["reasons"]
+    missing = [probe for probe in LOADS[p]["probes"] if f"products/{p}/{probe}" not in group["watched"]]
+    assert missing == []
+
+
+@pytest.mark.parametrize("p", list(LOADS_PROBLEMS))
+def test_any_other_computed_import_in_a_registration_point_is_a_problem(loads_problems: dict[str, Any], p: str) -> None:
+    """A module a registration point loads by a name the link cannot read may be any product's:
+    the unknown is everyone's, so the answer is incomplete."""
+    assert not loads_problems["complete"]
+    found = [problem for problem in loads_problems["problems"] if f"presets.{p} {COMPUTED}" in problem]
+    assert found, loads_problems["problems"]

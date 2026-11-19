@@ -112,7 +112,9 @@ impl Cover {
 /// cover, source module, surface): "not-run" for a cover whose rule did not run, "unplaced" for
 /// an edge it cannot place, "unknown-selection" for a module an entity cover cannot tell it keeps,
 /// "unread-items" for a sequence with an item it cannot read (the surface is the sequence),
-/// "unread-core-items" for one in a list no group owns that a registration point registers.
+/// "unread-core-items" for one in a list no group owns that a registration point registers,
+/// "computed-load" for a module a registration point names by a value the link cannot read
+/// exactly (the surface is that place, in words).
 #[derive(Default)]
 pub struct Required {
     pub paths: Vec<(String, u32, Option<String>)>,
@@ -275,6 +277,9 @@ pub fn required(cx: Cx, covers: &[Cover], inputs: &CoverInputs) -> Required {
                         }
                     }
                 }
+                if *items {
+                    computed_loads(cx, rest, at, &mut out);
+                }
             }
             Cover::Modules {
                 selection,
@@ -368,6 +373,26 @@ impl<'a> Need<'_, 'a> {
         for path in files {
             self.found.entry(path).or_insert((self.at, None));
         }
+    }
+}
+
+/// A module a registration point (a source the selection keeps) names by a value the link
+/// cannot read exactly (`Link::computed_loads`) may be any product's: no group owns it, so the
+/// unknown is everyone's (a problem of the answer). A source the selection may keep counts.
+fn computed_loads(cx: Cx, rest: &Staged, at: u32, out: &mut Required) {
+    for (module, words) in &cx.link.computed_loads {
+        let src = cx.module_endpoint(*module);
+        let env = Env::new(cx, None, src, src);
+        if parts_truth(rest.src(), &env) == Truth::False {
+            continue;
+        }
+        let row = (
+            "computed-load",
+            at,
+            Some(cx.text(*module).to_string()),
+            words.clone(),
+        );
+        out.incomplete.push(row);
     }
 }
 

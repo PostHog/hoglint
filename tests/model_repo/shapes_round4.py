@@ -1,9 +1,13 @@
 """The adversary's round-4 rows (CASES.md `WA14`): each attacked shape, as data for
 `test_watched_shapes.py`, with the answer it must give: `watched` (each probe file is watched and
 the product passes), `unread` (the product cannot pass: something the link cannot read), `problem`
-(an unread item of a core list a registration point registers: the whole answer is incomplete),
-or `kept` (the product passes; a written limit or the call rule keeps the file out, or the case is
-open, as `why` says). Generated from the round's attack script; edit as data."""
+(an unread item of a core list a registration point registers, or a module it loads by a name it
+computes: the whole answer is incomplete),
+or `kept` (the product passes; a written limit or the call rule keeps the file out, as `why`
+says). Generated from the round's attack script; edit as data. The rows that load a module sit in a
+registration point of their own (`ee/hogai/core/agent_modes/presets/<row>.py`): in the worker file
+the computed path of one row made every string of the file a `dotted-path` edge, which other rows
+read as their own."""
 
 from __future__ import annotations
 
@@ -423,10 +427,13 @@ ROUND4: dict[str, dict[str, Any]] = {
             "backend/facade/temporal.py": "from products.r4_b_im_from.backend.temporal.bimfromwf import BImFromWf\n\nWORKFLOWS = [BImFromWf]\n",
         },
         "core": {
-            "posthog/management/commands/start_temporal_worker.py": '\nfrom importlib import import_module as R4_B_IM_FROM_IM\nQUEUES_R4_B_IM_FROM = [("r4_b_im_from", R4_B_IM_FROM_IM("products.r4_b_im_from.backend.facade.temporal").WORKFLOWS, [])]\n'
+            "ee/hogai/core/__init__.py": "# core\n",
+            "ee/hogai/core/agent_modes/__init__.py": "# agent modes\n",
+            "ee/hogai/core/agent_modes/presets/__init__.py": "# presets\n",
+            "ee/hogai/core/agent_modes/presets/r4_b_im_from.py": '\nfrom importlib import import_module as R4_B_IM_FROM_IM\nQUEUES_R4_B_IM_FROM = [("r4_b_im_from", R4_B_IM_FROM_IM("products.r4_b_im_from.backend.facade.temporal").WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/bimfromwf.py"],
-        "outcome": "watched",
+        "outcome": "problem",
         "note": "from importlib import import_module as im",
     },
     "r4_b_im_var": {
@@ -437,11 +444,13 @@ ROUND4: dict[str, dict[str, Any]] = {
             "backend/facade/temporal.py": "from products.r4_b_im_var.backend.temporal.bimvarwf import BImVarWf\n\nWORKFLOWS = [BImVarWf]\n",
         },
         "core": {
-            "posthog/management/commands/start_temporal_worker.py": '\nimport importlib\nR4_B_IM_VAR_MOD = "products.r4_b_im_var.backend.facade.temporal"\nQUEUES_R4_B_IM_VAR = [("r4_b_im_var", importlib.import_module(R4_B_IM_VAR_MOD).WORKFLOWS, [])]\n'
+            "ee/hogai/core/__init__.py": "# core\n",
+            "ee/hogai/core/agent_modes/__init__.py": "# agent modes\n",
+            "ee/hogai/core/agent_modes/presets/__init__.py": "# presets\n",
+            "ee/hogai/core/agent_modes/presets/r4_b_im_var.py": '\nimport importlib\nR4_B_IM_VAR_MOD = "products.r4_b_im_var.backend.facade.temporal"\nQUEUES_R4_B_IM_VAR = [("r4_b_im_var", importlib.import_module(R4_B_IM_VAR_MOD).WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/bimvarwf.py"],
-        "outcome": "kept",
-        "why": "open: an import by a computed name (a design call)",
+        "outcome": "problem",
         "note": "import_module(NAME) with NAME a constant",
     },
     "r4_b_im_fstr": {
@@ -452,11 +461,13 @@ ROUND4: dict[str, dict[str, Any]] = {
             "backend/facade/temporal.py": "from products.r4_b_im_fstr.backend.temporal.bimfstrwf import BImFstrWf\n\nWORKFLOWS = [BImFstrWf]\n",
         },
         "core": {
-            "posthog/management/commands/start_temporal_worker.py": '\nimport importlib\nR4_B_IM_FSTR_P = "r4_b_im_fstr"\nQUEUES_R4_B_IM_FSTR = [("r4_b_im_fstr", importlib.import_module(f"products.{R4_B_IM_FSTR_P}.backend.facade.temporal").WORKFLOWS, [])]\n'
+            "ee/hogai/core/__init__.py": "# core\n",
+            "ee/hogai/core/agent_modes/__init__.py": "# agent modes\n",
+            "ee/hogai/core/agent_modes/presets/__init__.py": "# presets\n",
+            "ee/hogai/core/agent_modes/presets/r4_b_im_fstr.py": '\nimport importlib\nR4_B_IM_FSTR_P = "r4_b_im_fstr"\nQUEUES_R4_B_IM_FSTR = [("r4_b_im_fstr", importlib.import_module(f"products.{R4_B_IM_FSTR_P}.backend.facade.temporal").WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/bimfstrwf.py"],
-        "outcome": "kept",
-        "why": "open: an import by a computed name (a design call)",
+        "outcome": "problem",
         "note": "import_module(f'products.{P}...')",
     },
     "r4_b_dunder_import": {
@@ -579,10 +590,13 @@ ROUND4: dict[str, dict[str, Any]] = {
             "backend/facade/temporal.py": "from products.r4_b_sysmod.backend.temporal.bsysmodwf import BSysmodWf\n\nWORKFLOWS = [BSysmodWf]\n",
         },
         "core": {
-            "posthog/management/commands/start_temporal_worker.py": '\nimport sys\nimport products.r4_b_sysmod.backend.facade.temporal  # noqa: F401\nQUEUES_R4_B_SYSMOD = [("r4_b_sysmod", sys.modules["products.r4_b_sysmod.backend.facade.temporal"].WORKFLOWS, [])]\n'
+            "ee/hogai/core/__init__.py": "# core\n",
+            "ee/hogai/core/agent_modes/__init__.py": "# agent modes\n",
+            "ee/hogai/core/agent_modes/presets/__init__.py": "# presets\n",
+            "ee/hogai/core/agent_modes/presets/r4_b_sysmod.py": '\nimport sys\nimport products.r4_b_sysmod.backend.facade.temporal  # noqa: F401\nQUEUES_R4_B_SYSMOD = [("r4_b_sysmod", sys.modules["products.r4_b_sysmod.backend.facade.temporal"].WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/bsysmodwf.py"],
-        "outcome": "watched",
+        "outcome": "problem",
         "note": "sys.modules['<facade>'].WORKFLOWS",
     },
     "r4_b_sysmod_name": {
@@ -593,11 +607,13 @@ ROUND4: dict[str, dict[str, Any]] = {
             "backend/facade/temporal.py": "from products.r4_b_sysmod_name.backend.temporal.bsysmodnamewf import BSysmodNameWf\n\nWORKFLOWS = [BSysmodNameWf]\n",
         },
         "core": {
-            "posthog/management/commands/start_temporal_worker.py": '\nimport sys\nimport products.r4_b_sysmod_name.backend.facade.temporal  # noqa: F401\nR4_B_SYSMOD_NAME_M = "products.r4_b_sysmod_name.backend.facade.temporal"\nQUEUES_R4_B_SYSMOD_NAME = [("r4_b_sysmod_name", sys.modules[R4_B_SYSMOD_NAME_M].WORKFLOWS, [])]\n'
+            "ee/hogai/core/__init__.py": "# core\n",
+            "ee/hogai/core/agent_modes/__init__.py": "# agent modes\n",
+            "ee/hogai/core/agent_modes/presets/__init__.py": "# presets\n",
+            "ee/hogai/core/agent_modes/presets/r4_b_sysmod_name.py": '\nimport sys\nimport products.r4_b_sysmod_name.backend.facade.temporal  # noqa: F401\nR4_B_SYSMOD_NAME_M = "products.r4_b_sysmod_name.backend.facade.temporal"\nQUEUES_R4_B_SYSMOD_NAME = [("r4_b_sysmod_name", sys.modules[R4_B_SYSMOD_NAME_M].WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/bsysmodnamewf.py"],
-        "outcome": "kept",
-        "why": "open: an import by a computed name (a design call)",
+        "outcome": "problem",
         "note": "sys.modules[NAME].WORKFLOWS",
     },
     "r4_b_moddict": {
@@ -650,10 +666,13 @@ ROUND4: dict[str, dict[str, Any]] = {
             "backend/facade/temporal.py": "from products.r4_b_iutil.backend.temporal.biutilwf import BIutilWf\n\nWORKFLOWS = [BIutilWf]\n",
         },
         "core": {
-            "posthog/management/commands/start_temporal_worker.py": '\nimport importlib.util\nR4_B_IUTIL_SPEC = importlib.util.find_spec("products.r4_b_iutil.backend.facade.temporal")\nR4_B_IUTIL_MOD = importlib.util.module_from_spec(R4_B_IUTIL_SPEC)\nR4_B_IUTIL_SPEC.loader.exec_module(R4_B_IUTIL_MOD)\nQUEUES_R4_B_IUTIL = [("r4_b_iutil", R4_B_IUTIL_MOD.WORKFLOWS, [])]\n'
+            "ee/hogai/core/__init__.py": "# core\n",
+            "ee/hogai/core/agent_modes/__init__.py": "# agent modes\n",
+            "ee/hogai/core/agent_modes/presets/__init__.py": "# presets\n",
+            "ee/hogai/core/agent_modes/presets/r4_b_iutil.py": '\nimport importlib.util\nR4_B_IUTIL_SPEC = importlib.util.find_spec("products.r4_b_iutil.backend.facade.temporal")\nR4_B_IUTIL_MOD = importlib.util.module_from_spec(R4_B_IUTIL_SPEC)\nR4_B_IUTIL_SPEC.loader.exec_module(R4_B_IUTIL_MOD)\nQUEUES_R4_B_IUTIL = [("r4_b_iutil", R4_B_IUTIL_MOD.WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/biutilwf.py"],
-        "outcome": "unread",
+        "outcome": "problem",
         "note": "importlib.util.find_spec / module_from_spec / exec_module",
     },
     "r4_b_inspect": {

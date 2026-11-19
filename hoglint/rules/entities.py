@@ -379,6 +379,13 @@ class CoveragePrimitive(EntityRule):
         item = IncompleteItem(self.spec.id, f"unread|{sequence}", reason, kind=IncompleteKind.NOT_MODELLED)
         self.run.incomplete.append(item)
 
+    def computed_load(self, module: str | None, place: str) -> None:
+        """A module a registration point names by a value the link cannot read exactly: it may be
+        any product's, so it blocks every group and the answer."""
+        reason = f"{module} names a module by a value it computes ({place}), so the modules it registers are unknown"
+        item = IncompleteItem(self.spec.id, f"computed|{module}|{place}", reason, kind=IncompleteKind.NOT_MODELLED)
+        self.run.incomplete.append(item)
+
     def unknown_selection(self, module: str | None, cover: CoverSpec) -> None:
         reason = f"cannot tell whether `{cover.text}` selects {module}"
         self.incomplete(f"{module}|{cover.text}", module, reason, IncompleteKind.UNKNOWN_LABEL)

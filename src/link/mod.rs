@@ -297,6 +297,10 @@ pub struct Link {
     /// (module, module it reads by a computed name) (produce.rs `computed_reads`): the `: items`
     /// cover cannot tell which list such a read registers.
     pub computed_reads: FxHashSet<(Sid, Sid)>,
+    /// Each place a module names a module by a value the link cannot read exactly, by module, in
+    /// words (produce.rs `computed_loads`): in a registration point, the `: items` cover cannot
+    /// tell which module it registers.
+    pub computed_loads: Vec<(Sid, String)>,
     /// Every name a module or a class body binds by assignment, constants too (produce.rs
     /// `bound`): a name a registration point iterates that holds no list is a constant, not
     /// something the link cannot read.
@@ -436,6 +440,8 @@ impl Link {
             attributes: FxHashMap::default(),
             bound: FxHashSet::default(),
             defined: FxHashSet::default(),
+            path_lists: FxHashSet::default(),
+            computed_loads: Vec::new(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
@@ -446,6 +452,7 @@ impl Link {
         let hand_outs = std::mem::take(&mut producers.hand_outs);
         let sequences = std::mem::take(&mut producers.sequences);
         let computed_reads = std::mem::take(&mut producers.computed_reads);
+        let computed_loads = std::mem::take(&mut producers.computed_loads);
         let bound = std::mem::take(&mut producers.bound);
         let defined = std::mem::take(&mut producers.defined);
         let outside_bases = Self::outside_bases(&mut core, &edges, &settings.names.builtins);
@@ -471,6 +478,7 @@ impl Link {
             hand_outs,
             sequences,
             computed_reads,
+            computed_loads,
             bound,
             defined,
             outside_bases,

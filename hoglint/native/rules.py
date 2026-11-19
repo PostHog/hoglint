@@ -535,6 +535,8 @@ class NativeRuleContext(RuleContext):
                 rule.unread_items(module, surface)
             elif what == "unread-core-items":
                 rule.unread_core_items(surface)
+            elif what == "computed-load":
+                rule.computed_load(module, surface)
             else:
                 rule.unplaced(module, surface)
         return {path: (covers[at], module) for path, at, module in paths}

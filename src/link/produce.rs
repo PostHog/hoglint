@@ -3,7 +3,8 @@
 
 use super::LinkConfig;
 use super::facts::{
-    Argument, Assign, COPY_CALLEES, Def, FactSet, FileFacts, Import, Op, V, value as value_tree,
+    Argument, Assign, COPY_CALLEES, ComputedRow, Def, FactSet, FileFacts, Import, Op, V,
+    value as value_tree,
 };
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{
@@ -46,6 +47,17 @@ pub const DOTTED: u8 = 6;
 pub const DYNAMIC: u8 = 7;
 pub const UNPARSED: u8 = 8;
 pub const REBIND: u8 = 9;
+
+/// The standard library's ways to load a module by a name or a file path other than a loader
+/// (`importlib.import_module`, `__import__`): the link does not read their arguments.
+const UNREAD_LOADERS: [&str; 6] = [
+    "importlib.__import__",
+    "importlib.util.find_spec",
+    "importlib.util.spec_from_file_location",
+    "importlib.util.spec_from_loader",
+    "runpy.run_module",
+    "runpy.run_path",
+];
 
 /// One core edge. Strings are interned; `via` and `attrs` are ranges into the store's arenas.
 #[derive(Clone, Copy)]
@@ -746,6 +758,21 @@ fn path_argument(up: &str, settings: &Producing) -> PathArgument {
     PathArgument::None
 }
 
+/// Whether a module-level string is an item of the literal one of `lists` is bound to
+/// (`elt:list assign:NAME`, a tuple or an annotated binding too).
+fn in_element_list(up: &str, lists: &FxHashSet<String>) -> bool {
+    let Some(rest) = up
+        .strip_prefix("elt:list ")
+        .or_else(|| up.strip_prefix("elt:tuple "))
+    else {
+        return false;
+    };
+    let name = rest
+        .strip_prefix("assign:")
+        .or_else(|| rest.strip_prefix("annassign:"));
+    name.is_some_and(|name| lists.contains(name))
+}
+
 /// A value of the module's lazy (PEP 562) map: the entry `dict:val:<name>` of a module-level
 /// assignment, whose text is the module the module loads `<name>` from on first read.
 fn in_lazy_map(up: &str, text: &str, lazy: &[(String, String)]) -> bool {
@@ -1214,6 +1241,12 @@ pub struct Producers<'p> {
     /// The defs and classes the body of each class in `read_classes` defines, as
     /// (module, `Class.NAME`): a property read off an instance is one of them.
     pub defined: FxHashSet<(Sid, Sid)>,
+    /// The module-level names bound to a list or tuple of string literals that the reading reads
+    /// exactly (`holds_paths`), by (module, name).
+    pub path_lists: FxHashSet<(Sid, Sid)>,
+    /// Each place a module names a module by a value the link cannot read exactly, by module, in
+    /// words (`computed_loads`).
+    pub computed_loads: Vec<(Sid, String)>,
 }
 
 /// What each module-level sequence of names holds, by (module, name): per item, the entity its
@@ -1908,10 +1941,33 @@ impl Producers<'_> {
             seen.insert(Ent { m: module, s: key });
             let items = self.name_items(owner, module, *name, rows, reading, &mut text, &mut seen);
             self.bound.insert((module, key));
+            if key == *name && self.holds_paths(*name, rows) {
+                self.path_lists.insert((module, key));
+            }
             if !items.is_empty() {
                 self.sequences.insert((module, key), items);
             }
         }
+    }
+
+    /// Whether a module-level name is a list or tuple of string literals the reading reads
+    /// exactly: one row binds it, to such a literal, and no other row changes it or uses it in a
+    /// way the reading does not understand (`exact`; a tuple cannot change, so a use of it
+    /// counts for nothing).
+    fn holds_paths(&self, name: Sid, rows: &[Touching]) -> bool {
+        let grows = rows.iter().any(|touching| self.grows(touching));
+        if !self.exact(name, rows, grows) {
+            return false;
+        }
+        let mut changes = rows
+            .iter()
+            .filter(|touching| touching.touch != Touch::Escaped);
+        let (Some(binding), None) = (changes.next(), changes.next()) else {
+            return false;
+        };
+        let strings = |items: &[V]| items.iter().all(|item| matches!(item, V::Str(..)));
+        binding.touch == Touch::Bind
+            && matches!(&binding.row.value, Some(V::List(items) | V::Tuple(items)) if strings(items))
     }
 
     /// A registry's attribute that its file binds by an import: the value is built where it is
@@ -4341,8 +4397,9 @@ impl Producers<'_> {
     /// the first argument of a path callee) it is one whether or not it names a module. In a path
     /// place (a loader's first argument, an element of a path callee's argument vector, a path
     /// module such as a settings module, a lazy map's value, a string whose text such a call takes
-    /// through a loop, any string of a file that hands a computed path to one of those callees) it
-    /// is one when it names a module. Anywhere else a string is text, whatever it names.
+    /// through a loop, a string of a module-level list such a call takes an element of, any string
+    /// of a file that hands a computed path to one of those callees) it is one when it names a
+    /// module. Anywhere else a string is text, whatever it names.
     fn strings(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
@@ -4352,6 +4409,7 @@ impl Producers<'_> {
         let lazy = self.lazy_entries(owner);
         let computed = self.hands_computed_path(owner);
         let taken = self.taken_literals(owner);
+        let element_lists = self.element_lists(owner);
         for row in &facts.files[file].strs {
             let patch = patch_role(&row.up, &self.settings.patch_callees);
             let argument = path_argument(&row.up, self.settings);
@@ -4359,10 +4417,12 @@ impl Producers<'_> {
             let lazy_value = row.scope == -1
                 && (row.value.as_deref()).is_some_and(|text| in_lazy_map(&row.up, text, &lazy));
             let taken_value = (row.value.as_deref()).is_some_and(|text| taken.contains(text));
+            let listed_value = row.scope == -1 && in_element_list(&row.up, &element_lists);
             let place = argument == PathArgument::Place
                 || path_module
                 || lazy_value
                 || taken_value
+                || listed_value
                 || computed;
             if !sink && !place {
                 continue;
@@ -4425,6 +4485,14 @@ impl Producers<'_> {
     fn dynamic_imports(&mut self, owner: usize) {
         let facts = self.core.facts.clone();
         let file = self.scopes[owner].file as usize;
+        let loads: FxHashMap<(u32, u32), &ComputedRow> = facts.files[file]
+            .computed
+            .iter()
+            .filter(|load| load.call)
+            .map(|load| ((load.line, load.col), load))
+            .collect();
+        let mut noted = FxHashSet::default();
+        let mut sites = FxHashSet::default();
         for row in &facts.files[file].calls {
             let last = row.callee.rsplit('.').next().unwrap_or("");
             if !self
@@ -4499,7 +4567,134 @@ impl Producers<'_> {
             self.push(
                 DYNAMIC, owner, row.scope, row.line, row.col, ctx, surface, resolved, use_, &attrs,
             );
+            let callee = self.core.it.intern(&row.callee);
+            sites.insert((row.scope, callee, row.line, row.col));
+            // A call the walk repeats per item of a list has a `computed` row: the list decides.
+            let load = loads.get(&(row.line, row.col)).copied();
+            let exact = match load {
+                Some(load) => self.names_paths(owner, load),
+                None => matches!(row.argument, Argument::Literal(_)),
+            };
+            if !exact && noted.insert((row.line, row.col)) {
+                let words = format!("{}(...) at line {}", row.callee, row.line);
+                self.note_computed_load(owner, words, load);
+            }
         }
+        for load in facts.files[file].computed.iter().filter(|load| !load.call) {
+            if !self.names_paths(owner, load) {
+                let words = format!("sys.modules[...] at line {}", load.line);
+                self.note_computed_load(owner, words, Some(load));
+            }
+        }
+        self.loader_uses(owner, &sites);
+    }
+
+    /// A loader the code uses other than by a call the walk records (a call through a name whose
+    /// last name does not tell, as an import alias; the loader handed on or bound to a name), and
+    /// the standard library's other ways to load a module by name (`UNREAD_LOADERS`): the link
+    /// cannot read what such a use loads, so each is a computed load of its module. A `uses` row
+    /// counts a name's uses in a scope; the walk records a `calls` row per call (`sites`, by
+    /// scope, callee, line and column).
+    fn loader_uses(&mut self, owner: usize, sites: &FxHashSet<(i32, Sid, u32, u32)>) {
+        let facts = self.core.facts.clone();
+        let file = self.scopes[owner].file as usize;
+        let mut uses: FxHashMap<(i32, Sid), (u32, u32)> = FxHashMap::default();
+        for row in &facts.files[file].uses {
+            let chain = match self.core.it.s(row.attrs) {
+                "" => row.root,
+                attrs => {
+                    let text = format!("{}{attrs}", self.core.it.s(row.root));
+                    self.core.it.intern(&text)
+                }
+            };
+            let entry = uses.entry((row.scope, chain)).or_insert((0, row.line));
+            entry.0 += row.count;
+            entry.1 = entry.1.min(row.line);
+        }
+        let mut keys: Vec<(i32, Sid)> = uses.keys().copied().collect();
+        keys.sort_unstable();
+        for (scope, chain) in keys {
+            let (count, line) = uses[&(scope, chain)];
+            let core = &mut *self.core;
+            let names = &self.settings.names;
+            let (found, rest) =
+                core.chain_lookup(names, &mut self.scopes[owner], chain, scope, line);
+            let name = core.it.join_all(found.surface, &rest);
+            let origin = match found.hit {
+                Some(hit) if rest.is_empty() => {
+                    let origin = core.origin(hit);
+                    core.ent_sid(origin)
+                }
+                _ => EMPTY,
+            };
+            let named = |names: &[&str]| {
+                names
+                    .iter()
+                    .any(|loader| [name, origin].iter().any(|sid| core.it.s(*sid) == *loader))
+            };
+            let loaders = &self.settings.loaders;
+            let loader = loaders.contains(&name) || loaders.contains(&origin);
+            let unread = named(&UNREAD_LOADERS);
+            if !loader && !unread {
+                continue;
+            }
+            let calls = sites
+                .iter()
+                .filter(|site| site.0 == scope && site.1 == chain)
+                .count();
+            if unread || count as usize > calls {
+                let words = format!("{} at line {line}", self.core.it.s(chain));
+                self.note_computed_load(owner, words, None);
+            }
+        }
+    }
+
+    /// Whether the value a `computed` row hands a loader is an element of a list of dotted paths
+    /// the reading reads exactly (`path_lists`), bound at module level in the loader's own
+    /// module: each of its strings is then a `dotted-path` edge (`strings`), which names the
+    /// module the loader may load. A key of `sys.modules[...]` is never one: no edge names it.
+    fn names_paths(&mut self, owner: usize, load: &ComputedRow) -> bool {
+        if !load.call || load.sequence == EMPTY {
+            return false;
+        }
+        let module = self.scopes[owner].module;
+        let core = &mut *self.core;
+        let scope = &mut self.scopes[owner];
+        let names = &self.settings.names;
+        let (found, rest) = core.chain_lookup(names, scope, load.sequence, load.scope, load.line);
+        let Some(hit) = found.hit.filter(|_| rest.is_empty() && !found.local) else {
+            return false;
+        };
+        let origin = core.origin(hit);
+        origin.m == module && self.path_lists.contains(&(origin.m, origin.s))
+    }
+
+    /// The module-level lists of dotted paths (`path_lists`) of this module that a call of its
+    /// file that takes a path takes an element of (`computed`): each of their strings is a path
+    /// place.
+    fn element_lists(&self, owner: usize) -> FxHashSet<String> {
+        let (file, module) = (self.scopes[owner].file as usize, self.scopes[owner].module);
+        let facts = self.core.facts.clone();
+        let record = &facts.files[file];
+        let takers: FxHashSet<(u32, u32)> = (record.calls.iter())
+            .filter(|row| self.takes_path(&row.callee))
+            .map(|row| (row.line, row.col))
+            .collect();
+        (record.computed.iter())
+            .filter(|load| load.call && takers.contains(&(load.line, load.col)))
+            .filter(|load| self.path_lists.contains(&(module, load.sequence)))
+            .map(|load| self.core.it.s(load.sequence).to_string())
+            .collect()
+    }
+
+    /// A place the module names a module by a value the link cannot read exactly, in words
+    /// (`computed_loads`): where, and the name the value is an element of.
+    fn note_computed_load(&mut self, owner: usize, mut words: String, load: Option<&ComputedRow>) {
+        if let Some(load) = load.filter(|load| load.sequence != EMPTY) {
+            words = format!("{words}, over {}", self.core.it.s(load.sequence));
+        }
+        let module = self.scopes[owner].module;
+        self.computed_loads.push((module, words));
     }
 
     fn unparsed(&mut self, owner: usize) {
