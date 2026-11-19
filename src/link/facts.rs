@@ -211,14 +211,26 @@ pub struct CountRow {
     pub col: u32,
 }
 
-/// A `computed` row: a place the code names a module by a value it computes, as the module
-/// argument of a watched call (`call`) or as any key of `sys.modules[...]`, and the name the
-/// value is an element of (EMPTY for none).
+/// What a `computed` row records (`facts.rs` `Computed`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LoadForm {
+    /// The module argument of a watched call, no string literal.
+    Call,
+    /// A read of `sys.modules`.
+    Modules,
+    /// `exec`, `eval`, or a builtin loader read as a value.
+    Use,
+    /// `importlib.reload(alias)` of a module an import binds; `sequence` is the alias.
+    Reload,
+}
+
+/// A `computed` row: a place the code names a module by a value it computes, how (`form`), and
+/// the name the value is an element of, or the alias `reload` reads (EMPTY for none).
 pub struct ComputedRow {
     pub scope: i32,
     pub line: u32,
     pub col: u32,
-    pub call: bool,
+    pub form: LoadForm,
     pub sequence: Sid,
 }
 
@@ -900,7 +912,12 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
             scope: int(row(r, 0)) as i32,
             line: int(row(r, 2)) as u32,
             col: int(row(r, 3)) as u32,
-            call: text(row(r, 5)) == "call",
+            form: match text(row(r, 5)) {
+                "call" => LoadForm::Call,
+                "sys.modules" => LoadForm::Modules,
+                "reload" => LoadForm::Reload,
+                _ => LoadForm::Use,
+            },
             sequence: it.intern(text(row(r, 6))),
         })
         .collect();

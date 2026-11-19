@@ -7,6 +7,7 @@ its own."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ import pytest
 from model_repo.harness import copy_tree
 from model_repo.shapes_loads import LOADS
 from model_repo.shapes_round4 import ROUND4
+from model_repo.shapes_round5 import ROUND5
 from model_repo.test_watched import lay_derived, watched
 
 CLASS = "class {name}:\n    def run(self, x):\n        return x\n"
@@ -923,6 +925,7 @@ SHAPES.update(ROUND3)
 
 def lay(repo: Path, shapes: dict[str, dict[str, Any]]) -> None:
     core: dict[str, str] = {RECORDS: RECORD_CLASSES}
+    installed: list[str] = []
     for p, shape in shapes.items():
         files = {path: text.format(p=p) for path, text in SKELETON.items()}
         files.update({path: text.replace("{p}", p) for path, text in shape["files"].items()})
@@ -935,13 +938,21 @@ def lay(repo: Path, shapes: dict[str, dict[str, Any]]) -> None:
         default = {} if declares else {WORKER: registered(p)}
         appended = shape["core"] if "core" in shape else default
         for path, text in appended.items():
-            if text not in core.get(path, ""):
+            if path not in core or text not in core[path]:
                 core[path] = core.get(path, "") + text
+        # A product app the row installs: its AppConfig, or the class path it names.
+        if shape.get("installed") is True:
+            installed.append(f"products.{p}.backend.apps.{''.join(part.title() for part in p.split('_'))}Config")
+        elif shape.get("installed"):
+            installed.append(shape["installed"])
     for path, text in core.items():
         target = repo / path
         target.parent.mkdir(parents=True, exist_ok=True)
         before = target.read_text() if target.exists() and path != RECORDS else ""
         target.write_text(before + text)
+    if installed:
+        web = repo / "posthog/settings/web.py"
+        web.write_text(web.read_text() + "\nINSTALLED_APPS += " + json.dumps(installed) + "\n")
 
 
 @pytest.fixture(scope="module")
@@ -1092,3 +1103,49 @@ def test_any_other_computed_import_in_a_registration_point_is_a_problem(loads_pr
     assert not loads_problems["complete"]
     found = [problem for problem in loads_problems["problems"] if f"presets.{p} {COMPUTED}" in problem]
     assert found, loads_problems["problems"]
+
+
+ROUND5_PROBLEMS = {p: shape for p, shape in ROUND5.items() if shape["outcome"] == "problem"}
+ROUND5_OTHERS = {p: shape for p, shape in ROUND5.items() if shape["outcome"] != "problem"}
+
+
+@pytest.fixture(scope="module")
+def round5(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND5_OTHERS)
+
+
+@pytest.fixture(scope="module")
+def round5_problems(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND5_PROBLEMS)
+
+
+def test_round5_without_a_problem_row_is_complete(round5: dict[str, Any]) -> None:
+    assert round5["complete"], round5["problems"]
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND5_OTHERS.items() if shape["outcome"] == "watched"])
+def test_round5_each_file_core_runs_is_watched(round5: dict[str, Any], p: str) -> None:
+    group = round5["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], group["reasons"]
+    missing = [probe for probe in ROUND5[p]["probes"] if f"products/{p}/{probe}" not in group["watched"]]
+    assert missing == []
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND5_OTHERS.items() if shape["outcome"] == "unread"])
+def test_round5_a_use_the_reading_does_not_allow_fails_the_level(round5: dict[str, Any], p: str) -> None:
+    group = round5["groups"][p]
+    assert not group["passes"]
+    assert any("cannot read every item" in reason for reason in group["reasons"]), group["reasons"]
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND5_OTHERS.items() if shape["outcome"] == "kept"])
+def test_round5_a_written_limit_keeps_the_product(round5: dict[str, Any], p: str) -> None:
+    """These pass as the design writes them (`why`); a change here is a change to a limit."""
+    group = round5["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], (ROUND5[p]["why"], group["reasons"])
+
+
+@pytest.mark.parametrize("p", list(ROUND5_PROBLEMS))
+def test_round5_a_problem_row_makes_the_answer_incomplete(round5_problems: dict[str, Any], p: str) -> None:
+    assert not round5_problems["complete"]
+    assert any(p in problem for problem in round5_problems["problems"]), round5_problems["problems"]

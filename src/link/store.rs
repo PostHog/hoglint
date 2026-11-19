@@ -7,8 +7,8 @@
 //! a change to the layout never meets facts written by older code.
 
 use super::facts::{
-    Argument, Assign, CallRow, ComputedRow, CountRow, Def, DefKind, FileFacts, Import, Op, Param,
-    RefRow, SelfAttr, StrRow, TagRow, UseRow, V,
+    Argument, Assign, CallRow, ComputedRow, CountRow, Def, DefKind, FileFacts, Import, LoadForm,
+    Op, Param, RefRow, SelfAttr, StrRow, TagRow, UseRow, V,
 };
 use super::intern::{Interner, Sid};
 use rustc_hash::FxHashMap;
@@ -309,7 +309,12 @@ impl Enc<'_> {
             self.i32(r.scope);
             self.u32(r.line);
             self.u32(r.col);
-            self.u32(u32::from(r.call));
+            self.u32(match r.form {
+                LoadForm::Call => 0,
+                LoadForm::Modules => 1,
+                LoadForm::Use => 2,
+                LoadForm::Reload => 3,
+            });
             self.sid(r.sequence);
         }
     }
@@ -747,7 +752,12 @@ pub fn decode_body(
             scope: d.i32()?,
             line: d.u32()?,
             col: d.u32()?,
-            call: d.u32()? == 1,
+            form: match d.u32()? {
+                0 => LoadForm::Call,
+                1 => LoadForm::Modules,
+                3 => LoadForm::Reload,
+                _ => LoadForm::Use,
+            },
             sequence: d.sid()?,
         });
     }

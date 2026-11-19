@@ -3,8 +3,8 @@
 
 use super::LinkConfig;
 use super::facts::{
-    Argument, Assign, COPY_CALLEES, ComputedRow, Def, FactSet, FileFacts, Import, Op, V,
-    value as value_tree,
+    Argument, Assign, COPY_CALLEES, CallRow, ComputedRow, Def, FactSet, FileFacts, Import,
+    LoadForm, Op, V, value as value_tree,
 };
 use super::intern::{EMPTY, Interner, Sid};
 use super::resolve::{
@@ -1195,6 +1195,35 @@ fn unpacked_targets(target: &V, out: &mut Vec<Sid>) {
     }
 }
 
+/// The names a value holds by object (`Producers::aliases`), and whether it is the same object
+/// (`W`, `W or []`) or an item of a container (`[W]`, `{"w": W}`, `[W] + X`). A star (`[*W]`)
+/// and an operation on the name (`W + X`) copy it.
+fn holds(value: &V, same: bool, out: &mut Vec<(Sid, bool)>) {
+    match value {
+        V::Chain(name) => out.push((*name, same)),
+        V::BoolOp(items) => items.iter().for_each(|item| holds(item, same, out)),
+        V::List(items) | V::Tuple(items) | V::Set(items) => {
+            items.iter().for_each(|item| holds(item, false, out))
+        }
+        V::Dict(entries) => {
+            for (key, item) in entries {
+                if let Some(key) = key {
+                    holds(key, false, out);
+                }
+                holds(item, false, out);
+            }
+        }
+        V::Bin(_, left, right) => {
+            for side in [left, right] {
+                if matches!(**side, V::List(_) | V::Tuple(_) | V::Set(_) | V::Dict(_)) {
+                    holds(side, false, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Builds the core edges of every analyzed file, producer by producer.
 pub struct Producers<'p> {
     pub core: &'p mut Core,
@@ -1580,11 +1609,12 @@ impl Producers<'_> {
         Some(self.core.it.intern(&key))
     }
 
-    /// The rows of a file that touch each name it binds, by key (`binding_key`), in source order.
-    /// After them, each escape of the file (`FileFacts::escapes`) makes its name, and the class
-    /// attributes of a class of that name, `Other`; `*` makes every name `Other`. A name another
-    /// name aliases (`_ALL = W`) is `Other` when the alias is changed in place (`_ALL.append(B)`).
-    /// A bare annotation touches nothing.
+    /// The rows of a file that touch each name it binds, by key (`binding_key`), in source order,
+    /// then what else touches them: escapes (`escape_touches`), star imports after a binding
+    /// (`star_rebinds`), a loader handed a computed name (`loader_namespace`), and aliases
+    /// (`aliases`). Class keys are read for every class, so an alias in any class body counts;
+    /// only those of classes in `read_classes` are kept, unless `all_classes`. A bare annotation
+    /// touches nothing.
     fn touches<'r>(
         &mut self,
         owner: usize,
@@ -1633,63 +1663,222 @@ impl Producers<'_> {
                 }
             }
             for (name, touch) in named {
-                let Some(key) = self.binding_key(owner, row.s, name, all_classes) else {
+                let Some(key) = self.binding_key(owner, row.s, name, true) else {
                     continue;
                 };
                 let entry = out.entry(key).or_insert_with(|| (name, Vec::new()));
                 entry.1.push(Touching { at, row, touch });
             }
         }
-        let mut changed: Vec<(Sid, usize, &'r Assign)> = Vec::new();
-        for (name, rows) in out.values() {
-            if !rows.iter().any(|touching| touching.touch == Touch::Add) {
-                continue;
-            }
-            for touching in rows.iter().filter(|touching| touching.touch == Touch::Bind) {
-                if let Some(V::Chain(aliased)) = &touching.row.value
-                    && aliased != name
-                    && touching.row.s == -1
-                {
-                    changed.push((*aliased, touching.at, touching.row));
-                }
-            }
+        let records = self.escape_touches(owner, record, &mut out);
+        self.star_rebinds(owner, record, &mut out);
+        self.loader_namespace(record, &mut out);
+        self.aliases(&mut out, records);
+        if !all_classes {
+            let module = self.scopes[owner].module;
+            out.retain(|key, _| {
+                let Some((class, _)) = self.core.it.s(*key).rsplit_once('.') else {
+                    return true;
+                };
+                let class = self.core.it.get(class);
+                class.is_some_and(|class| self.read_classes.contains(&(module, class)))
+            });
         }
-        for (aliased, at, row) in changed {
-            if let Some(entry) = out.get_mut(&aliased) {
-                entry.1.push(Touching {
-                    at,
-                    row,
-                    touch: Touch::Other,
-                });
-            }
-        }
+        out
+    }
+
+    /// What each escape of the file (`FileFacts::escapes`) touches:
+    /// - `name` (a class attribute `Class.ATTR` too) is `Escaped`;
+    /// - `name>HOLDERS`, handed to record constructors whose result module-level names hold, is
+    ///   `Escaped`, except in a registry's file, where the declaration reading reads the records
+    ///   its bindings build: there each holder is an alias of the name (returned, for `aliases`);
+    /// - `name.*` (`setattr`, `delattr`) makes every attribute of the class `Escaped`;
+    /// - `=name`, bound again by a form the reading does not read, is `Other`, and `*` makes every
+    ///   name `Other`, a tuple and a constant too.
+    fn escape_touches<'r>(
+        &mut self,
+        owner: usize,
+        record: &'r FileFacts,
+        out: &mut Touches<'r>,
+    ) -> Vec<(Sid, Sid)> {
+        let registry = self.settings.registry_attribute(&record.path).is_some();
+        let mut records = Vec::new();
         for escape in &record.escapes {
-            let name = self.core.it.s(escape.name).to_string();
-            let keys: Vec<Sid> = if name == "*" {
-                out.keys().copied().collect()
-            } else if let Some(class) = name.strip_suffix(".*") {
+            let text = self.core.it.s(escape.name).to_string();
+            let (keys, touch): (Vec<Sid>, Touch) = if text == "*" {
+                (out.keys().copied().collect(), Touch::Other)
+            } else if let Some(name) = text.strip_prefix('=') {
+                (
+                    self.escape_keys(owner, escape.scope, name, out),
+                    Touch::Other,
+                )
+            } else if let Some(class) = text.strip_suffix(".*") {
                 let prefix = format!("{class}.");
-                out.keys()
-                    .copied()
+                let keys = (out.keys().copied())
                     .filter(|key| escape.scope == -1 && self.core.it.s(*key).starts_with(&prefix))
-                    .collect()
+                    .collect();
+                (keys, Touch::Escaped)
             } else {
-                let own = self.binding_key(owner, escape.scope, escape.name, all_classes);
-                own.into_iter()
-                    .filter(|key| out.contains_key(key))
-                    .collect()
+                let (name, holders) = match text.split_once('>') {
+                    Some((name, holders)) => (name, Some(holders)),
+                    None => (text.as_str(), None),
+                };
+                let keys = self.escape_keys(owner, escape.scope, name, out);
+                if let (Some(holders), true) = (holders, registry) {
+                    for holder in holders.split(',') {
+                        for holder in self.escape_keys(owner, escape.scope, holder, out) {
+                            records.extend(keys.iter().map(|&key| (holder, key)));
+                        }
+                    }
+                    continue;
+                }
+                (keys, Touch::Escaped)
             };
             for key in keys {
                 if let Some(entry) = out.get_mut(&key) {
                     entry.1.push(Touching {
                         at: usize::MAX,
                         row: &ESCAPED,
-                        touch: Touch::Escaped,
+                        touch,
                     });
                 }
             }
         }
-        out
+        records
+    }
+
+    /// The key an escaped name of a scope touches, when the file binds it.
+    fn escape_keys(&mut self, owner: usize, scope: i32, name: &str, out: &Touches) -> Vec<Sid> {
+        let name = self.core.it.intern(name);
+        let key = self.binding_key(owner, scope, name, true);
+        key.into_iter()
+            .filter(|key| out.contains_key(key))
+            .collect()
+    }
+
+    /// A star import at module level after a name's first binding that may bind the name (one the
+    /// imported module hands out, or any name when that cannot be told) binds it again: `Other`.
+    fn star_rebinds<'r>(&mut self, owner: usize, record: &'r FileFacts, out: &mut Touches<'r>) {
+        let (module, is_package) = (self.scopes[owner].module, self.scopes[owner].is_package);
+        let star = self.settings.k.star;
+        for row in &record.imports {
+            if row.scope != -1 || row.name != Some(star) {
+                continue;
+            }
+            let (_, _, source) = import_surface(&mut self.core.it, module, is_package, row);
+            let names = source.and_then(|source| star_names(self.core, source));
+            for (key, (_, rows)) in out.iter_mut() {
+                if self.core.it.s(*key).contains('.') {
+                    continue;
+                }
+                let bound_before = (rows.iter())
+                    .any(|touching| touching.touch == Touch::Bind && touching.row.l < row.line);
+                let binds = names.as_ref().is_none_or(|names| names.contains(key));
+                if bound_before && binds {
+                    rows.push(Touching {
+                        at: usize::MAX,
+                        row: &ESCAPED,
+                        touch: Touch::Other,
+                    });
+                }
+            }
+        }
+    }
+
+    /// A loader handed a name it computes (a `computed` row of a loader call that names no list
+    /// it takes an element of) may load this module itself and change or bind again any name of
+    /// it: every name `Other`.
+    fn loader_namespace<'r>(&self, record: &'r FileFacts, out: &mut Touches<'r>) {
+        let loaders: FxHashSet<(u32, u32)> = (record.calls.iter())
+            .filter(|row| names_callee(&row.callee, &self.settings.loader_last_names))
+            .map(|row| (row.line, row.col))
+            .collect();
+        let computed = record.computed.iter().any(|load| {
+            load.form == LoadForm::Call
+                && load.sequence == EMPTY
+                && loaders.contains(&(load.line, load.col))
+        });
+        if !computed {
+            return;
+        }
+        for (_, rows) in out.values_mut() {
+            rows.push(Touching {
+                at: usize::MAX,
+                row: &ESCAPED,
+                touch: Touch::Other,
+            });
+        }
+    }
+
+    /// Aliases. A binding that holds a name's value (`_a = W`, `_X = W or []`, `_L = [W]`,
+    /// `_D = {"w": W}`, an unpacked element, a class attribute `L = W`; `holds`) reads the name
+    /// only as exactly as the holder is read: a holder that is the same object and is changed
+    /// (`_a.append(B)`), or any holder that escapes or is bound again, makes the name `Other`. A
+    /// record in a registry's file (`records`, from `escape_touches`) may hold the name itself.
+    /// An alias of an alias is an alias.
+    fn aliases(&self, out: &mut Touches, records: Vec<(Sid, Sid)>) {
+        let mut links: Vec<(Sid, Sid, bool)> = Vec::new();
+        links.extend(
+            records
+                .into_iter()
+                .map(|(holder, held)| (holder, held, true)),
+        );
+        for (key, (_, rows)) in out.iter() {
+            let class = self
+                .core
+                .it
+                .s(*key)
+                .rsplit_once('.')
+                .map(|(class, _)| class);
+            for touching in rows {
+                let value = match (touching.touch, &touching.row.value) {
+                    (Touch::Bind, Some(value)) => value,
+                    (Touch::Element(index), Some(V::Tuple(values) | V::List(values))) => {
+                        let Some(value) = values.get(index) else {
+                            continue;
+                        };
+                        value
+                    }
+                    _ => continue,
+                };
+                let mut held = Vec::new();
+                holds(value, true, &mut held);
+                for (name, same) in held {
+                    // In a class body, a name is the class's own attribute when it binds one.
+                    let own = class
+                        .map(|class| format!("{class}.{}", self.core.it.s(name)))
+                        .and_then(|own| self.core.it.get(&own))
+                        .filter(|own| out.contains_key(own));
+                    let held = own.unwrap_or(name);
+                    if held != *key && out.contains_key(&held) {
+                        links.push((*key, held, same));
+                    }
+                }
+            }
+        }
+        loop {
+            let mut changed = false;
+            for &(holder, held, same) in &links {
+                let tainted = out[&holder].1.iter().any(|touching| match touching.touch {
+                    Touch::Add => same,
+                    Touch::Other | Touch::Escaped => true,
+                    _ => false,
+                });
+                let rows = &mut out.get_mut(&held).expect("a linked key").1;
+                if !tainted || rows.iter().any(|touching| touching.touch == Touch::Other) {
+                    continue;
+                }
+                rows.push(Touching {
+                    at: usize::MAX,
+                    row: &ESCAPED,
+                    touch: Touch::Other,
+                });
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     /// The names an unpacking binds and how: paired with the elements of a tuple or list value
@@ -1965,7 +2154,12 @@ impl Producers<'_> {
         let (Some(binding), None) = (changes.next(), changes.next()) else {
             return false;
         };
-        let strings = |items: &[V]| items.iter().all(|item| matches!(item, V::Str(..)));
+        // A relative name (`.x`) is read relative to `package=`, which the link does not read.
+        let strings = |items: &[V]| {
+            (items.iter()).all(
+                |item| matches!(item, V::Str(text, _) if !self.core.it.s(*text).starts_with('.')),
+            )
+        };
         binding.touch == Touch::Bind
             && matches!(&binding.row.value, Some(V::List(items) | V::Tuple(items)) if strings(items))
     }
@@ -2557,8 +2751,16 @@ impl Producers<'_> {
             if attrs.starts_with(".__") {
                 self.computed_reads.insert((scope.module, module));
             }
-            if attrs.is_empty() || attrs.starts_with(".?") {
+            // `importlib.reload(alias)` reloads the module the alias names: a read of it.
+            let reloads = (facts.files[file].computed.iter())
+                .filter(|load| load.form == LoadForm::Reload)
+                .filter(|load| load.scope == row.scope && load.sequence == row.root)
+                .count();
+            let handed = attrs.is_empty() && row.count as usize > reloads;
+            if handed || attrs.starts_with(".?") {
                 self.computed_reads.insert((scope.module, module));
+            }
+            if attrs.is_empty() || attrs.starts_with(".?") {
                 continue;
             }
             let export = core.module_path(module).is_some_and(|path| {
@@ -4488,7 +4690,7 @@ impl Producers<'_> {
         let loads: FxHashMap<(u32, u32), &ComputedRow> = facts.files[file]
             .computed
             .iter()
-            .filter(|load| load.call)
+            .filter(|load| load.form == LoadForm::Call)
             .map(|load| ((load.line, load.col), load))
             .collect();
         let mut noted = FxHashSet::default();
@@ -4521,72 +4723,90 @@ impl Producers<'_> {
                 }
                 None => EMPTY,
             };
-            if !self.settings.loaders.contains(&loader) && !self.settings.loaders.contains(&origin)
-            {
+            let is_loader =
+                self.settings.loaders.contains(&loader) || self.settings.loaders.contains(&origin);
+            // A callee that resolves to nothing may still be a loader (a star import): the edges
+            // read its strings by its last name, so the check reads it too.
+            if !is_loader && found.hit.is_some() {
                 continue;
             }
-            let k = &self.settings.k;
-            let ctx = core.contexts(&mut self.scopes[owner], row.flags, row.scope);
-            let mut attrs = vec![(k.loader, loader)];
-            let (surface, resolved) = match &row.argument {
-                Argument::Literal(text) => {
-                    attrs.push((k.argument, core.it.intern("literal")));
-                    let surface = core.it.intern(text);
-                    let resolved = if text.is_empty() || text.starts_with('.') {
-                        UNRESOLVED
-                    } else {
-                        match core.string_dotted(surface) {
-                            None => Resolved {
-                                res: Res::External,
-                                target: Some(Ent {
-                                    m: surface,
-                                    s: EMPTY,
-                                }),
-                                via: None,
-                            },
-                            Some((resolved, _)) => resolved,
-                        }
-                    };
-                    (surface, resolved)
-                }
-                other => {
-                    let text = match other {
-                        Argument::Missing => "missing".to_string(),
-                        Argument::Name(name) => format!("name:{name}"),
-                        Argument::Opaque(what) => format!("expr:{what}"),
-                        _ => "expr".to_string(),
-                    };
-                    attrs.push((k.argument, core.it.intern(&text)));
-                    // No literal name: hoglint does not follow the value, which `literal` says to
-                    // every reader of an unresolved edge.
-                    attrs.push((k.literal, core.it.intern("none")));
-                    (EMPTY, UNRESOLVED)
-                }
-            };
-            let use_ = k.use_call;
-            self.push(
-                DYNAMIC, owner, row.scope, row.line, row.col, ctx, surface, resolved, use_, &attrs,
-            );
-            let callee = self.core.it.intern(&row.callee);
-            sites.insert((row.scope, callee, row.line, row.col));
+            if is_loader {
+                self.loader_edge(owner, row, loader);
+                let callee = self.core.it.intern(&row.callee);
+                sites.insert((row.scope, callee, row.line, row.col));
+            }
             // A call the walk repeats per item of a list has a `computed` row: the list decides.
+            // A relative name (`.x`) is read relative to `package=`, which the link does not read.
             let load = loads.get(&(row.line, row.col)).copied();
             let exact = match load {
                 Some(load) => self.names_paths(owner, load),
-                None => matches!(row.argument, Argument::Literal(_)),
+                None => matches!(&row.argument, Argument::Literal(text) if !text.starts_with('.')),
             };
             if !exact && noted.insert((row.line, row.col)) {
                 let words = format!("{}(...) at line {}", row.callee, row.line);
                 self.note_computed_load(owner, words, load);
             }
         }
-        for load in facts.files[file].computed.iter().filter(|load| !load.call) {
-            if !self.names_paths(owner, load) {
-                let words = format!("sys.modules[...] at line {}", load.line);
-                self.note_computed_load(owner, words, Some(load));
-            }
+        for load in &facts.files[file].computed {
+            let words = match load.form {
+                LoadForm::Call | LoadForm::Reload => continue,
+                LoadForm::Modules => format!("sys.modules at line {}", load.line),
+                LoadForm::Use => {
+                    let name = self.core.it.s(load.sequence);
+                    format!("{name} at line {}", load.line)
+                }
+            };
+            let sequence = (load.form == LoadForm::Modules).then_some(load);
+            self.note_computed_load(owner, words, sequence);
         }
         self.loader_uses(owner, &sites);
+    }
+
+    /// The `dynamic-import` edge of a loader call.
+    fn loader_edge(&mut self, owner: usize, row: &CallRow, loader: Sid) {
+        let core = &mut *self.core;
+        let k = &self.settings.k;
+        let ctx = core.contexts(&mut self.scopes[owner], row.flags, row.scope);
+        let mut attrs = vec![(k.loader, loader)];
+        let (surface, resolved) = match &row.argument {
+            Argument::Literal(text) => {
+                attrs.push((k.argument, core.it.intern("literal")));
+                let surface = core.it.intern(text);
+                let resolved = if text.is_empty() || text.starts_with('.') {
+                    UNRESOLVED
+                } else {
+                    match core.string_dotted(surface) {
+                        None => Resolved {
+                            res: Res::External,
+                            target: Some(Ent {
+                                m: surface,
+                                s: EMPTY,
+                            }),
+                            via: None,
+                        },
+                        Some((resolved, _)) => resolved,
+                    }
+                };
+                (surface, resolved)
+            }
+            other => {
+                let text = match other {
+                    Argument::Missing => "missing".to_string(),
+                    Argument::Name(name) => format!("name:{name}"),
+                    Argument::Opaque(what) => format!("expr:{what}"),
+                    _ => "expr".to_string(),
+                };
+                attrs.push((k.argument, core.it.intern(&text)));
+                // No literal name: hoglint does not follow the value, which `literal` says to
+                // every reader of an unresolved edge.
+                attrs.push((k.literal, core.it.intern("none")));
+                (EMPTY, UNRESOLVED)
+            }
+        };
+        let use_ = k.use_call;
+        self.push(
+            DYNAMIC, owner, row.scope, row.line, row.col, ctx, surface, resolved, use_, &attrs,
+        );
     }
 
     /// A loader the code uses other than by a call the walk records (a call through a name whose
@@ -4654,7 +4874,7 @@ impl Producers<'_> {
     /// module: each of its strings is then a `dotted-path` edge (`strings`), which names the
     /// module the loader may load. A key of `sys.modules[...]` is never one: no edge names it.
     fn names_paths(&mut self, owner: usize, load: &ComputedRow) -> bool {
-        if !load.call || load.sequence == EMPTY {
+        if load.form != LoadForm::Call || load.sequence == EMPTY {
             return false;
         }
         let module = self.scopes[owner].module;
@@ -4681,7 +4901,7 @@ impl Producers<'_> {
             .map(|row| (row.line, row.col))
             .collect();
         (record.computed.iter())
-            .filter(|load| load.call && takers.contains(&(load.line, load.col)))
+            .filter(|load| load.form == LoadForm::Call && takers.contains(&(load.line, load.col)))
             .filter(|load| self.path_lists.contains(&(module, load.sequence)))
             .map(|load| self.core.it.s(load.sequence).to_string())
             .collect()
