@@ -23,7 +23,21 @@ from model_repo.shapes_round7 import ROUND7
 from model_repo.shapes_round7_cases import CASES as ROUND7_CASES
 from model_repo.shapes_round8 import ROUND8
 from model_repo.shapes_round8_cases import CASES as ROUND8_CASES
+from model_repo.shapes_round9 import ROUND9
+from model_repo.shapes_round9_moves import moved
 from model_repo.test_watched import lay_derived, watched
+
+# Round 9 moved these rows (`shapes_round9_moves.py`, each with its cause): the pinned data of
+# rounds 4 to 8 stays as it was, and the overlay says what the round changed.
+LOADS = moved(LOADS)
+ROUND4 = moved(ROUND4)
+ROUND5 = moved(ROUND5)
+ROUND6 = moved(ROUND6)
+ROUND6_CASES = moved(ROUND6_CASES)
+ROUND7 = moved(ROUND7)
+ROUND7_CASES = moved(ROUND7_CASES)
+ROUND8 = moved(ROUND8)
+ROUND8_CASES = moved(ROUND8_CASES)
 
 CLASS = "class {name}:\n    def run(self, x):\n        return x\n"
 FUNCTION = "def {name}(x, mode=None):\n    return x\n"
@@ -927,6 +941,7 @@ ROUND3: dict[str, dict[str, Any]] = {
     },
 }
 SHAPES.update(ROUND3)
+SHAPES = moved(SHAPES)
 
 
 def lay(repo: Path, shapes: dict[str, dict[str, Any]]) -> None:
@@ -1325,3 +1340,32 @@ def test_round8_a_problem_row_makes_the_answer_incomplete_for_its_reason(
         reason,
         round8_problems["problems"],
     )
+
+
+ROUND9_PROBLEMS = {p: shape for p, shape in ROUND9.items() if shape["outcome"] == "problem"}
+ROUND9_OTHERS = {p: shape for p, shape in ROUND9.items() if shape["outcome"] != "problem"}
+
+
+@pytest.fixture(scope="module")
+def round9(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND9_OTHERS)
+
+
+def test_round9_without_a_problem_row_is_complete(round9: dict[str, Any]) -> None:
+    assert round9["complete"], round9["problems"]
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND9_OTHERS.items() if shape["outcome"] == "watched"])
+def test_round9_each_file_core_runs_is_watched(round9: dict[str, Any], p: str) -> None:
+    group = round9["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], group["reasons"]
+    missing = [probe for probe in ROUND9[p]["probes"] if f"products/{p}/{probe}" not in group["watched"]]
+    assert missing == []
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND9_OTHERS.items() if shape["outcome"] == "unread"])
+def test_round9_a_use_no_entry_reads_fails_the_level_for_its_reason(round9: dict[str, Any], p: str) -> None:
+    group = round9["groups"][p]
+    assert not group["passes"]
+    reason = ROUND9[p]["reason"].replace("{p}", p)
+    assert any(reason in text for text in group["reasons"]), (reason, group["reasons"])
