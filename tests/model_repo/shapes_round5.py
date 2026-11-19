@@ -377,7 +377,7 @@ ROUND5: dict[str, dict[str, Any]] = {
             "backend/temporal/__init__.py": "",
             "backend/temporal/gselfimporta.py": "class GSelfImportA:\n    def run(self, x):\n        return x\n",
             "backend/temporal/gselfimportb.py": "class GSelfImportB:\n    def run(self, x):\n        return x\n",
-            "backend/facade/temporal.py": "from products.{P}.backend.facade import temporal as _self\nfrom products.r5_g_self_import.backend.temporal.gselfimporta import GSelfImportA\nfrom products.r5_g_self_import.backend.temporal.gselfimportb import GSelfImportB\n\nWORKFLOWS = [GSelfImportA]\n_self.WORKFLOWS.append(GSelfImportB)\n",
+            "backend/facade/temporal.py": "from products.r5_g_self_import.backend.facade import temporal as _self\nfrom products.r5_g_self_import.backend.temporal.gselfimporta import GSelfImportA\nfrom products.r5_g_self_import.backend.temporal.gselfimportb import GSelfImportB\n\nWORKFLOWS = [GSelfImportA]\n_self.WORKFLOWS.append(GSelfImportB)\n",
         },
         "core": {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r5_g_self_import.backend.facade.temporal import WORKFLOWS as R5_G_SELF_IMPORT_WORKFLOWS\n\nQUEUES_R5_G_SELF_IMPORT = [("r5_g_self_import", R5_G_SELF_IMPORT_WORKFLOWS, [])]\n',

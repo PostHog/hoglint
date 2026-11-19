@@ -242,8 +242,8 @@ LOADS: dict[str, dict[str, Any]] = {
     "ld_alias": case(
         "ld_alias",
         "from importlib import import_module as load_module\n\nMODULES = [PATH]\n\n\ndef load():\n    for path in MODULES:\n        load_module(path)\n",
-        "problem",
-        "the loader under another name (an import alias): the walk records no call of it",
+        "watched",
+        "the loader under another name (an import alias) is the loader (round 6)",
     ),
     "ld_loader_bound": case(
         "ld_loader_bound",

@@ -1169,6 +1169,17 @@ struct Touching<'r> {
     touch: Touch,
 }
 
+/// A holder of a name's value (`Producers::aliases`): a change of the holder taints the held
+/// name when the holder may be the value itself (`same`); escaping or a rebinding the reading
+/// cannot read always does; `record` marks a record (D126), which a second binding taints too.
+#[derive(Clone, Copy)]
+struct Link {
+    holder: Sid,
+    held: Sid,
+    same: bool,
+    record: bool,
+}
+
 /// The rows that touch each name a file binds, by the key `sequences` stores the name under,
 /// with the bare name.
 type Touches<'r> = FxHashMap<Sid, (Sid, Vec<Touching<'r>>)>;
@@ -1191,35 +1202,6 @@ fn unpacked_targets(target: &V, out: &mut Vec<Sid>) {
             }
         }
         V::Star(inner) => unpacked_targets(inner, out),
-        _ => {}
-    }
-}
-
-/// The names a value holds by object (`Producers::aliases`), and whether it is the same object
-/// (`W`, `W or []`) or an item of a container (`[W]`, `{"w": W}`, `[W] + X`). A star (`[*W]`)
-/// and an operation on the name (`W + X`) copy it.
-fn holds(value: &V, same: bool, out: &mut Vec<(Sid, bool)>) {
-    match value {
-        V::Chain(name) => out.push((*name, same)),
-        V::BoolOp(items) => items.iter().for_each(|item| holds(item, same, out)),
-        V::List(items) | V::Tuple(items) | V::Set(items) => {
-            items.iter().for_each(|item| holds(item, false, out))
-        }
-        V::Dict(entries) => {
-            for (key, item) in entries {
-                if let Some(key) = key {
-                    holds(key, false, out);
-                }
-                holds(item, false, out);
-            }
-        }
-        V::Bin(_, left, right) => {
-            for side in [left, right] {
-                if matches!(**side, V::List(_) | V::Tuple(_) | V::Set(_) | V::Dict(_)) {
-                    holds(side, false, out);
-                }
-            }
-        }
         _ => {}
     }
 }
@@ -1540,12 +1522,22 @@ impl Producers<'_> {
 
     /// Whether a row binds or adds a value that can grow in place: a list, set or dict, a
     /// comprehension, an operation on one, a call's result, or another name's value. A constant,
-    /// a tuple and a subscript (a type alias, say) cannot.
+    /// a tuple, a subscript (a type alias, say), a `type` alias and a string method's result
+    /// cannot.
     fn grows(&self, touching: &Touching) -> bool {
-        if !matches!(touching.touch, Touch::Bind | Touch::Add) {
+        // A `type` alias is a type, whatever its value spells.
+        if !matches!(touching.touch, Touch::Bind | Touch::Add) || touching.row.op == Op::TypeAlias {
             return false;
         }
         match &touching.row.value {
+            // A method of a string literal (`"""...""".strip()`) gives a string.
+            Some(V::Call(callee, ..))
+                if matches!(&**callee, V::Attr(receiver, _)
+                if matches!(&**receiver, V::Str(..))
+                    || matches!(&**receiver, V::Opaque(what) if CONSTANT_NODES.contains(&self.core.it.s(*what)))) =>
+            {
+                false
+            }
             Some(V::List(_) | V::Set(_) | V::Dict(_) | V::Bin(..) | V::Call(..) | V::Chain(_)) => {
                 true
             }
@@ -1670,10 +1662,10 @@ impl Producers<'_> {
                 entry.1.push(Touching { at, row, touch });
             }
         }
-        let records = self.escape_touches(owner, record, &mut out);
-        self.star_rebinds(owner, record, &mut out);
-        self.loader_namespace(record, &mut out);
-        self.aliases(&mut out, records);
+        let links = self.escape_touches(owner, record, &mut out);
+        self.import_rebinds(owner, record, &mut out);
+        self.loader_namespace(owner, record, &mut out);
+        self.aliases(&mut out, links);
         if !all_classes {
             let module = self.scopes[owner].module;
             out.retain(|key, _| {
@@ -1687,52 +1679,79 @@ impl Producers<'_> {
         out
     }
 
-    /// What each escape of the file (`FileFacts::escapes`) touches:
-    /// - `name` (a class attribute `Class.ATTR` too) is `Escaped`;
-    /// - `name>HOLDERS`, handed to record constructors whose result module-level names hold, is
-    ///   `Escaped`, except in a registry's file, where the declaration reading reads the records
-    ///   its bindings build: there each holder is an alias of the name (returned, for `aliases`);
-    /// - `name.*` (`setattr`, `delattr`) makes every attribute of the class `Escaped`;
+    /// What each escape of the file (`FileFacts::escapes`) touches, and the aliases it names
+    /// (returned, as (holder, held, same object), for `aliases`):
+    /// - `name` (a class attribute `Class.ATTR` too) is `Escaped`; `name.*` (a class handed on,
+    ///   `setattr`, `delattr`) makes every attribute of the class `Escaped`;
+    /// - `name~TARGETS`: each target may be the name's value itself (`_X = W or []`,
+    ///   `_X = _L[0]`); `name^TARGETS`: each target may hold it (`_L = [W]`, `_M = list(_L)`);
+    /// - `name>TARGETS@CALLEES`: records built by the callees hold it (D126): when every callee is
+    ///   a confirmed class (or `dataclasses.replace`) and the targets are module-level names,
+    ///   each target is an alias; else the name is `Escaped`;
     /// - `=name`, bound again by a form the reading does not read, is `Other`, and `*` makes every
     ///   name `Other`, a tuple and a constant too.
+    ///
+    /// A name a class body uses is the class's own attribute when the class binds one, else the
+    /// module's. A held class this file defines is every attribute its body binds: a holder of
+    /// a holder is a holder.
     fn escape_touches<'r>(
         &mut self,
         owner: usize,
         record: &'r FileFacts,
         out: &mut Touches<'r>,
-    ) -> Vec<(Sid, Sid)> {
-        let registry = self.settings.registry_attribute(&record.path).is_some();
-        let mut records = Vec::new();
+    ) -> Vec<Link> {
+        let mut links = Vec::new();
         for escape in &record.escapes {
             let text = self.core.it.s(escape.name).to_string();
+            let scope = escape.scope;
             let (keys, touch): (Vec<Sid>, Touch) = if text == "*" {
                 (out.keys().copied().collect(), Touch::Other)
             } else if let Some(name) = text.strip_prefix('=') {
-                (
-                    self.escape_keys(owner, escape.scope, name, out),
-                    Touch::Other,
-                )
+                (self.escape_keys(owner, scope, name, out), Touch::Other)
             } else if let Some(class) = text.strip_suffix(".*") {
                 let prefix = format!("{class}.");
                 let keys = (out.keys().copied())
-                    .filter(|key| escape.scope == -1 && self.core.it.s(*key).starts_with(&prefix))
+                    .filter(|key| scope == -1 && self.core.it.s(*key).starts_with(&prefix))
                     .collect();
                 (keys, Touch::Escaped)
-            } else {
-                let (name, holders) = match text.split_once('>') {
-                    Some((name, holders)) => (name, Some(holders)),
-                    None => (text.as_str(), None),
-                };
-                let keys = self.escape_keys(owner, escape.scope, name, out);
-                if let (Some(holders), true) = (holders, registry) {
-                    for holder in holders.split(',') {
-                        for holder in self.escape_keys(owner, escape.scope, holder, out) {
-                            records.extend(keys.iter().map(|&key| (holder, key)));
+            } else if let Some((name, targets)) = text.split_once(['~', '^']) {
+                let same = text.as_bytes()[name.len()] == b'~';
+                let held = self.held_keys(owner, scope, name, out);
+                for target in targets.split(',') {
+                    for holder in self.target_keys(owner, scope, target, out) {
+                        let link = |&held| Link {
+                            holder,
+                            held,
+                            same,
+                            record: false,
+                        };
+                        links.extend(held.iter().map(link));
+                    }
+                }
+                continue;
+            } else if let Some((name, rest)) = text.split_once('>') {
+                let (targets, callees) = rest.split_once('@').unwrap_or((rest, ""));
+                let held = self.held_keys(owner, scope, name, out);
+                let classes = (callees.split(','))
+                    .all(|callee| self.builds_record(owner, scope, escape.line, callee));
+                if !(classes && scope == -1) {
+                    (held, Touch::Escaped)
+                } else {
+                    for target in targets.split(',') {
+                        for holder in self.target_keys(owner, scope, target, out) {
+                            let link = |&held| Link {
+                                holder,
+                                held,
+                                same: true,
+                                record: true,
+                            };
+                            links.extend(held.iter().map(link));
                         }
                     }
                     continue;
                 }
-                (keys, Touch::Escaped)
+            } else {
+                (self.escape_keys(owner, scope, &text, out), Touch::Escaped)
             };
             for key in keys {
                 if let Some(entry) = out.get_mut(&key) {
@@ -1744,11 +1763,41 @@ impl Producers<'_> {
                 }
             }
         }
-        records
+        links
     }
 
-    /// The key an escaped name of a scope touches, when the file binds it.
+    /// The key a name a scope uses touches: in a class body the class's own attribute when the
+    /// file binds one, else the module's name, when the file binds it.
     fn escape_keys(&mut self, owner: usize, scope: i32, name: &str, out: &Touches) -> Vec<Sid> {
+        let name = self.core.it.intern(name);
+        let own = self.binding_key(owner, scope, name, true);
+        if let Some(own) = own.filter(|own| out.contains_key(own)) {
+            return vec![own];
+        }
+        let module = (scope != -1)
+            .then(|| self.binding_key(owner, -1, name, true))
+            .flatten();
+        module
+            .into_iter()
+            .filter(|key| out.contains_key(key))
+            .collect()
+    }
+
+    /// The keys a held name stands for: its own (`escape_keys`), or, for a class this file
+    /// defines (no key of its own), every attribute its body binds (`Class.NAME`).
+    fn held_keys(&mut self, owner: usize, scope: i32, name: &str, out: &Touches) -> Vec<Sid> {
+        let own = self.escape_keys(owner, scope, name, out);
+        if !own.is_empty() || scope != -1 {
+            return own;
+        }
+        let prefix = format!("{name}.");
+        (out.keys().copied())
+            .filter(|key| self.core.it.s(*key).starts_with(&prefix))
+            .collect()
+    }
+
+    /// The key a binding of a scope binds a target under, when the file binds it.
+    fn target_keys(&mut self, owner: usize, scope: i32, name: &str, out: &Touches) -> Vec<Sid> {
         let name = self.core.it.intern(name);
         let key = self.binding_key(owner, scope, name, true);
         key.into_iter()
@@ -1756,25 +1805,51 @@ impl Producers<'_> {
             .collect()
     }
 
-    /// A star import at module level after a name's first binding that may bind the name (one the
-    /// imported module hands out, or any name when that cannot be told) binds it again: `Other`.
-    fn star_rebinds<'r>(&mut self, owner: usize, record: &'r FileFacts, out: &mut Touches<'r>) {
+    /// Whether a callee a record is built by resolves to a class, or is `dataclasses.replace`.
+    fn builds_record(&mut self, owner: usize, scope: i32, line: u32, callee: &str) -> bool {
+        let core = &mut *self.core;
+        let chain = core.it.intern(callee);
+        let names = &self.settings.names;
+        let (found, rest) = core.chain_lookup(names, &mut self.scopes[owner], chain, scope, line);
+        let name = core.it.join_all(found.surface, &rest);
+        if core.it.s(name) == "dataclasses.replace" {
+            return true;
+        }
+        rest.is_empty()
+            && found
+                .hit
+                .is_some_and(|hit| core.kind(hit) == HitKind::Class)
+    }
+
+    /// An import at module level after a name's first binding that may bind the name binds it
+    /// again: `Other`. A named import binds its name; a star import binds what the imported
+    /// module hands out, or any name when that cannot be told. An import of the module itself
+    /// (under any spelling) reaches every name of it: every name `Other`.
+    fn import_rebinds<'r>(&mut self, owner: usize, record: &'r FileFacts, out: &mut Touches<'r>) {
         let (module, is_package) = (self.scopes[owner].module, self.scopes[owner].is_package);
         let star = self.settings.k.star;
         for row in &record.imports {
-            if row.scope != -1 || row.name != Some(star) {
+            let (bound, surface, source) =
+                import_surface(&mut self.core.it, module, is_package, row);
+            let itself = surface == module || (row.name.is_none() && source == Some(module));
+            if row.scope != -1 && !itself {
                 continue;
             }
-            let (_, _, source) = import_surface(&mut self.core.it, module, is_package, row);
-            let names = source.and_then(|source| star_names(self.core, source));
+            let names: Option<Vec<Sid>> = if itself {
+                None
+            } else if row.name == Some(star) {
+                source.and_then(|source| star_names(self.core, source))
+            } else {
+                Some(vec![bound])
+            };
             for (key, (_, rows)) in out.iter_mut() {
-                if self.core.it.s(*key).contains('.') {
+                if !itself && self.core.it.s(*key).contains('.') {
                     continue;
                 }
                 let bound_before = (rows.iter())
                     .any(|touching| touching.touch == Touch::Bind && touching.row.l < row.line);
                 let binds = names.as_ref().is_none_or(|names| names.contains(key));
-                if bound_before && binds {
+                if (itself || bound_before) && binds {
                     rows.push(Touching {
                         at: usize::MAX,
                         row: &ESCAPED,
@@ -1788,11 +1863,15 @@ impl Producers<'_> {
     /// A loader handed a name it computes (a `computed` row of a loader call that names no list
     /// it takes an element of) may load this module itself and change or bind again any name of
     /// it: every name `Other`.
-    fn loader_namespace<'r>(&self, record: &'r FileFacts, out: &mut Touches<'r>) {
-        let loaders: FxHashSet<(u32, u32)> = (record.calls.iter())
-            .filter(|row| names_callee(&row.callee, &self.settings.loader_last_names))
-            .map(|row| (row.line, row.col))
-            .collect();
+    fn loader_namespace<'r>(&mut self, owner: usize, record: &'r FileFacts, out: &mut Touches<'r>) {
+        let mut loaders: FxHashSet<(u32, u32)> = FxHashSet::default();
+        for row in &record.calls {
+            if names_callee(&row.callee, &self.settings.loader_last_names)
+                || self.aliased_loader(owner, row)
+            {
+                loaders.insert((row.line, row.col));
+            }
+        }
         let computed = record.computed.iter().any(|load| {
             load.form == LoadForm::Call
                 && load.sequence == EMPTY
@@ -1810,60 +1889,32 @@ impl Producers<'_> {
         }
     }
 
-    /// Aliases. A binding that holds a name's value (`_a = W`, `_X = W or []`, `_L = [W]`,
-    /// `_D = {"w": W}`, an unpacked element, a class attribute `L = W`; `holds`) reads the name
-    /// only as exactly as the holder is read: a holder that is the same object and is changed
-    /// (`_a.append(B)`), or any holder that escapes or is bound again, makes the name `Other`. A
-    /// record in a registry's file (`records`, from `escape_touches`) may hold the name itself.
-    /// An alias of an alias is an alias.
-    fn aliases(&self, out: &mut Touches, records: Vec<(Sid, Sid)>) {
-        let mut links: Vec<(Sid, Sid, bool)> = Vec::new();
-        links.extend(
-            records
-                .into_iter()
-                .map(|(holder, held)| (holder, held, true)),
-        );
-        for (key, (_, rows)) in out.iter() {
-            let class = self
-                .core
-                .it
-                .s(*key)
-                .rsplit_once('.')
-                .map(|(class, _)| class);
-            for touching in rows {
-                let value = match (touching.touch, &touching.row.value) {
-                    (Touch::Bind, Some(value)) => value,
-                    (Touch::Element(index), Some(V::Tuple(values) | V::List(values))) => {
-                        let Some(value) = values.get(index) else {
-                            continue;
-                        };
-                        value
-                    }
-                    _ => continue,
-                };
-                let mut held = Vec::new();
-                holds(value, true, &mut held);
-                for (name, same) in held {
-                    // In a class body, a name is the class's own attribute when it binds one.
-                    let own = class
-                        .map(|class| format!("{class}.{}", self.core.it.s(name)))
-                        .and_then(|own| self.core.it.get(&own))
-                        .filter(|own| out.contains_key(own));
-                    let held = own.unwrap_or(name);
-                    if held != *key && out.contains_key(&held) {
-                        links.push((*key, held, same));
-                    }
-                }
-            }
-        }
+    /// Aliases (`links`, from `escape_touches`). A name is read only as exactly as each holder of
+    /// its value is: a holder that may be the value itself and is changed (`_a.append(B)`), or
+    /// any holder that escapes or is bound again by a form the reading does not read, makes the
+    /// name `Other`; a record bound a second time does too (D126). An alias of an alias is an
+    /// alias.
+    fn aliases(&self, out: &mut Touches, links: Vec<Link>) {
         loop {
             let mut changed = false;
-            for &(holder, held, same) in &links {
-                let tainted = out[&holder].1.iter().any(|touching| match touching.touch {
-                    Touch::Add => same,
-                    Touch::Other | Touch::Escaped => true,
-                    _ => false,
-                });
+            for link in &links {
+                let Link {
+                    holder,
+                    held,
+                    same,
+                    record,
+                } = *link;
+                let rows = &out[&holder].1;
+                let bindings = rows
+                    .iter()
+                    .filter(|touching| touching.touch == Touch::Bind)
+                    .count();
+                let tainted = (record && bindings > 1)
+                    || rows.iter().any(|touching| match touching.touch {
+                        Touch::Add => same,
+                        Touch::Other | Touch::Escaped => true,
+                        _ => false,
+                    });
                 let rows = &mut out.get_mut(&held).expect("a linked key").1;
                 if !tainted || rows.iter().any(|touching| touching.touch == Touch::Other) {
                     continue;
@@ -4531,6 +4582,30 @@ impl Producers<'_> {
     }
 
     /// Whether a call takes a path as its first argument: a loader, a path callee or a patch callee.
+    /// Whether a call row's callee is a loader under a name its last name does not tell (an import
+    /// alias the extractor watches: `from importlib import import_module as load`).
+    fn aliased_loader(&mut self, owner: usize, row: &CallRow) -> bool {
+        if names_callee(&row.callee, &self.settings.loader_last_names)
+            || row.callee.starts_with('?')
+        {
+            return false;
+        }
+        let core = &mut *self.core;
+        let callee = core.it.intern(&row.callee);
+        let names = &self.settings.names;
+        let scope = &mut self.scopes[owner];
+        let (found, rest) = core.chain_lookup(names, scope, callee, row.scope, row.line);
+        let loader = core.it.join_all(found.surface, &rest);
+        let origin = match found.hit {
+            Some(hit) if rest.is_empty() => {
+                let origin = core.origin(hit);
+                core.ent_sid(origin)
+            }
+            _ => EMPTY,
+        };
+        self.settings.loaders.contains(&loader) || self.settings.loaders.contains(&origin)
+    }
+
     fn takes_path(&self, callee: &str) -> bool {
         let settings = self.settings;
         let takes = names_callee(callee, &settings.path_callees)
@@ -4541,13 +4616,13 @@ impl Producers<'_> {
 
     /// The literal first arguments of the file's calls that take a path. A loop over a literal
     /// sequence gives such a call one row per value, so the sequence's strings are what it takes.
-    fn taken_literals(&self, owner: usize) -> FxHashSet<String> {
+    fn taken_literals(&mut self, owner: usize) -> FxHashSet<String> {
         let file = self.scopes[owner].file as usize;
         let facts = self.core.facts.clone();
         let mut taken = FxHashSet::default();
         for row in &facts.files[file].calls {
             if let Argument::Literal(text) = &row.argument
-                && self.takes_path(&row.callee)
+                && (self.takes_path(&row.callee) || self.aliased_loader(owner, row))
             {
                 taken.insert(text.to_string());
             }
@@ -4564,7 +4639,7 @@ impl Producers<'_> {
         let facts = self.core.facts.clone();
         let table = self.core.table(module);
         for row in &facts.files[file].calls {
-            if !self.takes_path(&row.callee) {
+            if !self.takes_path(&row.callee) && !self.aliased_loader(owner, row) {
                 continue;
             }
             let computed = match &row.argument {
@@ -4696,14 +4771,8 @@ impl Producers<'_> {
         let mut noted = FxHashSet::default();
         let mut sites = FxHashSet::default();
         for row in &facts.files[file].calls {
-            let last = row.callee.rsplit('.').next().unwrap_or("");
-            if !self
-                .settings
-                .loader_last_names
-                .iter()
-                .any(|name| name == last)
-                || row.callee.starts_with('?')
-            {
+            let named = names_callee(&row.callee, &self.settings.loader_last_names);
+            if row.callee.starts_with('?') || !(named || self.aliased_loader(owner, row)) {
                 continue;
             }
             let core = &mut *self.core;
@@ -4892,14 +4961,16 @@ impl Producers<'_> {
     /// The module-level lists of dotted paths (`path_lists`) of this module that a call of its
     /// file that takes a path takes an element of (`computed`): each of their strings is a path
     /// place.
-    fn element_lists(&self, owner: usize) -> FxHashSet<String> {
+    fn element_lists(&mut self, owner: usize) -> FxHashSet<String> {
         let (file, module) = (self.scopes[owner].file as usize, self.scopes[owner].module);
         let facts = self.core.facts.clone();
         let record = &facts.files[file];
-        let takers: FxHashSet<(u32, u32)> = (record.calls.iter())
-            .filter(|row| self.takes_path(&row.callee))
-            .map(|row| (row.line, row.col))
-            .collect();
+        let mut takers: FxHashSet<(u32, u32)> = FxHashSet::default();
+        for row in &record.calls {
+            if self.takes_path(&row.callee) || self.aliased_loader(owner, row) {
+                takers.insert((row.line, row.col));
+            }
+        }
         (record.computed.iter())
             .filter(|load| load.form == LoadForm::Call && takers.contains(&(load.line, load.col)))
             .filter(|load| self.path_lists.contains(&(module, load.sequence)))

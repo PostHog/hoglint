@@ -433,7 +433,7 @@ ROUND4: dict[str, dict[str, Any]] = {
             "ee/hogai/core/agent_modes/presets/r4_b_im_from.py": '\nfrom importlib import import_module as R4_B_IM_FROM_IM\nQUEUES_R4_B_IM_FROM = [("r4_b_im_from", R4_B_IM_FROM_IM("products.r4_b_im_from.backend.facade.temporal").WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/bimfromwf.py"],
-        "outcome": "problem",
+        "outcome": "watched",
         "note": "from importlib import import_module as im",
     },
     "r4_b_im_var": {

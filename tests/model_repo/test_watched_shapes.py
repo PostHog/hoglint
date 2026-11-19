@@ -17,6 +17,8 @@ from model_repo.harness import copy_tree
 from model_repo.shapes_loads import LOADS
 from model_repo.shapes_round4 import ROUND4
 from model_repo.shapes_round5 import ROUND5
+from model_repo.shapes_round6 import ROUND6
+from model_repo.shapes_round6_cases import CASES as ROUND6_CASES
 from model_repo.test_watched import lay_derived, watched
 
 CLASS = "class {name}:\n    def run(self, x):\n        return x\n"
@@ -1149,3 +1151,62 @@ def test_round5_a_written_limit_keeps_the_product(round5: dict[str, Any], p: str
 def test_round5_a_problem_row_makes_the_answer_incomplete(round5_problems: dict[str, Any], p: str) -> None:
     assert not round5_problems["complete"]
     assert any(p in problem for problem in round5_problems["problems"]), round5_problems["problems"]
+
+
+# Round 6: the adversary's recheck-4 rows and the systematic cases (binding forms, reader positions,
+# D126's records). Each unread or problem case pins the reason too, so a broken import cannot earn
+# the answer.
+ROUND6_ALL = {**ROUND6, **ROUND6_CASES}
+ROUND6_PROBLEMS = {p: shape for p, shape in ROUND6_ALL.items() if shape["outcome"] == "problem"}
+ROUND6_OTHERS = {p: shape for p, shape in ROUND6_ALL.items() if shape["outcome"] != "problem"}
+
+
+@pytest.fixture(scope="module")
+def round6(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND6_OTHERS)
+
+
+@pytest.fixture(scope="module")
+def round6_problems(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND6_PROBLEMS)
+
+
+def test_round6_without_a_problem_row_is_complete(round6: dict[str, Any]) -> None:
+    assert round6["complete"], round6["problems"]
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND6_OTHERS.items() if shape["outcome"] == "watched"])
+def test_round6_each_file_core_runs_is_watched(round6: dict[str, Any], p: str) -> None:
+    group = round6["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], group["reasons"]
+    missing = [probe for probe in ROUND6_ALL[p]["probes"] if f"products/{p}/{probe}" not in group["watched"]]
+    assert missing == []
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND6_OTHERS.items() if shape["outcome"] == "unread"])
+def test_round6_a_value_the_reading_cannot_follow_fails_the_level_for_its_reason(
+    round6: dict[str, Any], p: str
+) -> None:
+    group = round6["groups"][p]
+    assert not group["passes"]
+    reason = ROUND6_ALL[p]["reason"]
+    assert any(reason in text for text in group["reasons"]), (reason, group["reasons"])
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND6_OTHERS.items() if shape["outcome"] == "kept"])
+def test_round6_a_written_limit_keeps_the_product(round6: dict[str, Any], p: str) -> None:
+    """These pass as the design writes them (`why`); a change here is a change to a limit."""
+    group = round6["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], (ROUND6_ALL[p]["why"], group["reasons"])
+
+
+@pytest.mark.parametrize("p", list(ROUND6_PROBLEMS))
+def test_round6_a_problem_row_makes_the_answer_incomplete_for_its_reason(
+    round6_problems: dict[str, Any], p: str
+) -> None:
+    assert not round6_problems["complete"]
+    reason = ROUND6_ALL[p]["reason"]
+    assert any(p in problem and reason in problem for problem in round6_problems["problems"]), (
+        reason,
+        round6_problems["problems"],
+    )
