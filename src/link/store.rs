@@ -183,6 +183,7 @@ impl Enc<'_> {
             self.u8(d.kind as u8);
             self.sid(d.n);
             self.values(&d.bases);
+            self.u8(d.keywords as u8);
             self.values(&d.dec);
             self.u32(d.params.len() as u32);
             for p in &d.params {
@@ -562,6 +563,7 @@ pub fn decode_body(
         };
         let name = d.sid()?;
         let bases = d.values()?;
+        let keywords = d.u8()? == 1;
         let dec = d.values()?;
         let np = d.u32()? as usize;
         let mut params = Vec::with_capacity(np);
@@ -599,6 +601,7 @@ pub fn decode_body(
             kind,
             n: name,
             bases,
+            keywords,
             dec,
             params,
             ret,

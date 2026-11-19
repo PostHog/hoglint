@@ -431,6 +431,7 @@ enum Registered {
 ///   `sys.modules["m"]`): the attribute read next, else unread.
 fn registered(cx: Cx, id: u32, src: &Endpoint, dst: &Endpoint) -> Registered {
     match dst.symbol {
+        Symbol::Inside(..) if let Some(list) = rebound_surface(cx, id) => Registered::List(list),
         Symbol::Inside(module, name) => match read_list(cx, id, (module, name)) {
             Registered::List(list) if !cx.link.sequences.contains_key(&list) => {
                 passed_list(cx, id, list)
@@ -453,6 +454,35 @@ fn registered(cx: Cx, id: u32, src: &Endpoint, dst: &Endpoint) -> Registered {
         },
         _ => Registered::Nothing,
     }
+}
+
+/// A module the edge's name passes on its way (the module the code names, or one it passes
+/// through) that binds the name by an import and binds it again by a form the reading cannot read
+/// (`Producers::rebound_imports`): what it hands out is not what the import names, so the list is
+/// unread there, whatever the origin holds.
+fn rebound_surface(cx: Cx, id: u32) -> Option<(Sid, Sid)> {
+    let mut surfaces = Vec::new();
+    cx.dst_endpoints(id, Role::Surface, &mut surfaces);
+    let mut hops = Vec::new();
+    cx.dst_endpoints(id, Role::Via, &mut hops);
+    for endpoint in surfaces.iter().chain(&hops) {
+        let (Some(module), Some(text)) = (endpoint.module, cx.symbol_text(endpoint.symbol)) else {
+            continue;
+        };
+        let Some(name) = text
+            .strip_prefix(cx.text(module))
+            .and_then(|rest| rest.strip_prefix('.'))
+        else {
+            continue;
+        };
+        let Some(name) = cx.link.core.it.get(name) else {
+            continue;
+        };
+        if cx.link.rebound_imports.contains(&(module, name)) {
+            return Some((module, name));
+        }
+    }
+    None
 }
 
 /// When the origin `list` of edge `id` holds no list: the list of a name the code names or passes

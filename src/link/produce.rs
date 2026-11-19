@@ -1176,6 +1176,7 @@ static REBOUND: Assign = Assign {
 };
 
 /// One assignment row that touches a name, and how.
+#[derive(Clone, Copy)]
 struct Touching<'r> {
     at: usize,
     row: &'r Assign,
@@ -1293,6 +1294,9 @@ pub struct Producers<'p> {
     /// Why a name the reading cannot read is unread, when a binding says it, by (module, key):
     /// "bound" (bound more than once) or "rebound" (bound again by a form it cannot read).
     pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
+    /// The names a module binds by an import only and binds again by a form the reading cannot
+    /// read (`rebound_imports`), by (module, name).
+    pub rebound_imports: FxHashSet<(Sid, Sid)>,
 }
 
 /// What each module-level sequence of names holds, by (module, name): per item, the entity its
@@ -1778,7 +1782,19 @@ impl Producers<'_> {
                 let held = self.held_keys(owner, scope, name, out);
                 let classes = (callees.split(','))
                     .all(|callee| self.builds_record(owner, scope, escape.line, callee));
-                if !(classes && scope == -1) {
+                // T4: `dataclasses.replace` copies a record whose class reads its fields with no
+                // first-party code.
+                let replaces = (callees.split(','))
+                    .any(|callee| self.record_callee(owner, scope, escape.line, callee).0);
+                let copied = !replaces
+                    || held.iter().all(|key| {
+                        let rows = out
+                            .get(key)
+                            .map(|(_, rows)| rows.clone())
+                            .unwrap_or_default();
+                        self.plain_record(owner, &rows)
+                    });
+                if !(classes && copied && scope == -1) {
                     (held, Touch::Escaped)
                 } else {
                     for target in targets.split(',') {
@@ -1849,20 +1865,119 @@ impl Producers<'_> {
             .collect()
     }
 
-    /// Whether a callee a record is built by resolves to a class, or is `dataclasses.replace`.
+    /// Whether a callee a record is built by is `dataclasses.replace` (T4: `replace` is true,
+    /// and `plain_record` judges the record it copies) or resolves to a bare record class
+    /// (`bare_record`, T3).
     fn builds_record(&mut self, owner: usize, scope: i32, line: u32, callee: &str) -> bool {
+        let (replace, class) = self.record_callee(owner, scope, line, callee);
+        replace || class.is_some_and(|class| self.bare_record(class))
+    }
+
+    /// What a record's callee is: `dataclasses.replace`, or the class it resolves to.
+    fn record_callee(
+        &mut self,
+        owner: usize,
+        scope: i32,
+        line: u32,
+        callee: &str,
+    ) -> (bool, Option<Ent>) {
         let core = &mut *self.core;
         let chain = core.it.intern(callee);
         let names = &self.settings.names;
         let (found, rest) = core.chain_lookup(names, &mut self.scopes[owner], chain, scope, line);
         let name = core.it.join_all(found.surface, &rest);
         if core.it.s(name) == "dataclasses.replace" {
-            return true;
+            return (true, None);
         }
-        rest.is_empty()
-            && found
-                .hit
-                .is_some_and(|hit| core.kind(hit) == HitKind::Class)
+        let class = found
+            .hit
+            .filter(|hit| rest.is_empty() && core.kind(*hit) == HitKind::Class)
+            .map(|hit| core.origin(hit));
+        (false, class)
+    }
+
+    /// T3's class: bare, so building a record runs no code but its constructor's body (limit 1):
+    /// no base, no class keyword (no metaclass), and each decorator `dataclasses.dataclass` (with
+    /// any arguments) or a first-party function (a function body, limit 1). A `__new__` it
+    /// defines is a constructor body too. Anything else escapes.
+    fn bare_record(&mut self, class: Ent) -> bool {
+        let Some((owner, idx)) = self.def_of(class.m, class.s, HitKind::Class) else {
+            return false;
+        };
+        let facts = self.core.facts.clone();
+        let node = &facts.files[self.scopes[owner].file as usize].defs[idx as usize];
+        if !node.bases.is_empty() || node.keywords {
+            return false;
+        }
+        node.dec.iter().all(|decorator| {
+            let callee = match decorator {
+                V::Call(callee, ..) => &**callee,
+                decorator => decorator,
+            };
+            let core = &mut *self.core;
+            let Some(found) = core.value_lookup(
+                &self.settings.names,
+                &mut self.scopes[owner],
+                callee,
+                node.s,
+                node.l,
+            ) else {
+                return false;
+            };
+            let resolved = core.classify_lookup(found);
+            let target = resolved.target.map(|target| core.ent_sid(target));
+            let dataclass = core.it.s(found.surface) == "dataclasses.dataclass"
+                || target.is_some_and(|target| core.it.s(target) == "dataclasses.dataclass");
+            let function = resolved.res == Res::Resolved
+                && found.hit.is_some_and(|hit| core.kind(hit) == HitKind::Def);
+            dataclass || function
+        })
+    }
+
+    /// T4's record: one built by a bare record class (`bare_record`) whose body defines no
+    /// function but `__init__`, `__post_init__` and `__new__`, and binds no attribute to a call
+    /// but `field(...)`, so `dataclasses.replace` reads its fields with no first-party code (no
+    /// `__getattr__`, `__getattribute__`, property or descriptor). The record is the name a
+    /// binding row of `rows` binds to a call; one copied by `replace` itself is not judged again.
+    fn plain_record(&mut self, owner: usize, rows: &[Touching]) -> bool {
+        let mut binds = rows.iter().filter(|touching| touching.touch == Touch::Bind);
+        let (Some(bind), None) = (binds.next(), binds.next()) else {
+            return false;
+        };
+        let Some(V::Call(callee, ..)) = bind.row.value.as_ref() else {
+            return false;
+        };
+        let V::Chain(callee) = &**callee else {
+            return false;
+        };
+        let callee = self.core.it.s(*callee).to_string();
+        let (_, Some(class)) = self.record_callee(owner, bind.row.s, bind.row.l, &callee) else {
+            return false;
+        };
+        if !self.bare_record(class) {
+            return false;
+        }
+        let Some((class_owner, idx)) = self.def_of(class.m, class.s, HitKind::Class) else {
+            return false;
+        };
+        let facts = self.core.facts.clone();
+        let record = &facts.files[self.scopes[class_owner].file as usize];
+        let methods = (record.defs.iter())
+            .filter(|def| def.s == idx as i32)
+            .all(|def| {
+                matches!(
+                    self.core.it.s(def.n),
+                    "__init__" | "__post_init__" | "__new__"
+                )
+            });
+        let fields = (record.assigns.iter())
+            .filter(|row| row.s == idx as i32)
+            .all(|row| match &row.value {
+                Some(V::Call(callee, ..)) => matches!(&**callee, V::Chain(name)
+                    if matches!(self.core.it.s(*name), "field" | "dataclasses.field")),
+                _ => true,
+            });
+        methods && fields
     }
 
     /// An import at module level after a name's first binding that may bind the name binds it
@@ -2212,6 +2327,7 @@ impl Producers<'_> {
         {
             self.imported_declaration(owner, module, attribute);
         }
+        self.rebound_imports(owner, record, &touches);
         let mut text = AssignText::new(facts.clone(), file);
         let mut keys: Vec<Sid> = touches.keys().copied().collect();
         keys.sort_unstable();
@@ -2237,6 +2353,44 @@ impl Producers<'_> {
             if !items.is_empty() {
                 self.sequences.insert((module, key), items);
             }
+        }
+    }
+
+    /// A name a module binds by an import at module level and binds again by a form the reading
+    /// cannot read (`=name`: a `def`, a `class`, a `for` target, an import in a function that
+    /// declares it global): what the module hands out under the name is not what the import
+    /// names, so its list is unread at this module (`bound` "rebound"), which the item cover reads
+    /// before following the import (`coverage::rebound_surface`). A name bound by an assignment
+    /// and then by an import is not one: the link follows the import.
+    fn rebound_imports(&mut self, owner: usize, record: &FileFacts, touches: &Touches) {
+        let module = self.scopes[owner].module;
+        let is_package = self.scopes[owner].is_package;
+        let mut imported = FxHashSet::default();
+        for row in &record.imports {
+            if row.scope != -1 {
+                continue;
+            }
+            let (bound, _, _) = import_surface(&mut self.core.it, module, is_package, row);
+            imported.insert(bound);
+        }
+        for escape in &record.escapes {
+            if escape.scope != -1 {
+                continue;
+            }
+            let text = self.core.it.s(escape.name);
+            let Some(name) = text.strip_prefix('=') else {
+                continue;
+            };
+            let Some(name) = self.core.it.get(name) else {
+                continue;
+            };
+            if touches.contains_key(&name) || !imported.contains(&name) {
+                continue;
+            }
+            self.sequences.insert((module, name), vec![None]);
+            self.unread_causes.insert((module, name), "rebound");
+            self.rebound_imports.insert((module, name));
+            self.bound.insert((module, name));
         }
     }
 
@@ -4846,7 +5000,9 @@ impl Producers<'_> {
                 self.settings.loaders.contains(&loader) || self.settings.loaders.contains(&origin);
             // A callee that resolves to nothing may still be a loader (a star import): the edges
             // read its strings by its last name, so the check reads it too.
-            if !is_loader && found.hit.is_some() {
+            // A loader named on any other receiver (`pkgutil.importlib.import_module`) is read like
+            // one: its argument must name its modules exactly.
+            if !is_loader && found.hit.is_some() && !named {
                 continue;
             }
             if is_loader {

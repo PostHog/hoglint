@@ -100,6 +100,8 @@ pub struct Def {
     pub kind: DefKind,
     pub n: Sid,
     pub bases: Vec<V>,
+    /// Whether a class statement passes keywords (`metaclass=`, a base's class arguments).
+    pub keywords: bool,
     pub dec: Vec<V>,
     pub params: Vec<Param>,
     pub ret: Option<V>,
@@ -778,6 +780,7 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
                 kind,
                 n: it.intern(text(&d["n"])),
                 bases,
+                keywords: d["kw"].as_array().is_some_and(|kw| !kw.is_empty()),
                 dec,
                 params,
                 ret,

@@ -304,6 +304,9 @@ pub struct Link {
     /// Why a name the reading cannot read is unread, when a binding says it (produce.rs
     /// `unread_causes`).
     pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
+    /// The names a module binds by an import only and binds again by a form the reading cannot
+    /// read (produce.rs `rebound_imports`): the item cover reads them before the import.
+    pub rebound_imports: FxHashSet<(Sid, Sid)>,
     /// Every name a module or a class body binds by assignment, constants too (produce.rs
     /// `bound`): a name a registration point iterates that holds no list is a constant, not
     /// something the link cannot read.
@@ -446,6 +449,7 @@ impl Link {
             path_lists: FxHashSet::default(),
             computed_loads: Vec::new(),
             unread_causes: FxHashMap::default(),
+            rebound_imports: FxHashSet::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
@@ -458,6 +462,7 @@ impl Link {
         let computed_reads = std::mem::take(&mut producers.computed_reads);
         let computed_loads = std::mem::take(&mut producers.computed_loads);
         let unread_causes = std::mem::take(&mut producers.unread_causes);
+        let rebound_imports = std::mem::take(&mut producers.rebound_imports);
         let bound = std::mem::take(&mut producers.bound);
         let defined = std::mem::take(&mut producers.defined);
         let outside_bases = Self::outside_bases(&mut core, &edges, &settings.names.builtins);
@@ -485,6 +490,7 @@ impl Link {
             computed_reads,
             computed_loads,
             unread_causes,
+            rebound_imports,
             bound,
             defined,
             outside_bases,
