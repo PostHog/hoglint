@@ -457,6 +457,8 @@ impl Link {
             touched_modules: FxHashSet::default(),
             handed: Vec::new(),
             touching: FxHashSet::default(),
+            poisoned_modules: FxHashSet::default(),
+            poison_all: false,
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);

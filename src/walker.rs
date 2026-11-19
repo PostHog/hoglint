@@ -210,6 +210,56 @@ enum Aliased<'a> {
     Unknown,
 }
 
+/// A module value (round 9b, `Walker::follow`): the module a literal names (`.` the file's own;
+/// None any), and what of it the value is.
+#[derive(Clone, Debug, PartialEq)]
+struct Tracked {
+    module: Option<String>,
+    member: Member,
+}
+
+/// What of a module a value is (`Tracked`).
+#[derive(Clone, Debug, PartialEq)]
+enum Member {
+    /// The module itself.
+    Module,
+    /// Its namespace dict (`f.__globals__`, `m.__dict__`, `vars(m)`).
+    Namespace,
+    /// The member a literal names.
+    Name(String),
+    /// A member no literal names.
+    Unknown,
+}
+
+/// Where a module value goes (`Walker::module_use`).
+enum ModuleUse<'a> {
+    Read,
+    Alias(Vec<&'a str>),
+    Changed(Member),
+    Handed,
+}
+
+/// The methods of a module's member that change it, through a module value (`Walker::follow`).
+const MODULE_MUTATORS: [&str; 17] = [
+    "append",
+    "extend",
+    "insert",
+    "update",
+    "add",
+    "remove",
+    "pop",
+    "popitem",
+    "clear",
+    "sort",
+    "reverse",
+    "discard",
+    "setdefault",
+    "__setitem__",
+    "__delitem__",
+    "__setattr__",
+    "__delattr__",
+];
+
 /// A binding the inventory found: the identity and how it binds.
 type Found<'a> = (Identity<'a>, Bind<'a>);
 
@@ -454,6 +504,10 @@ pub struct Walker<'a, 'w> {
     relied: RefCell<Vec<String>>,
     /// Whether the file star-imports a first-party module, which may bind any bare name.
     star_first_party: bool,
+    /// The module's statements, for `literal_text`.
+    suite: &'a [Stmt],
+    /// The names bound to a module value, by scope (`follow`).
+    computed: HashMap<(i64, &'a str), Tracked>,
     /// The `!` rows written, by scope and text (`emit_value_row`).
     values_seen: HashSet<(i64, String)>,
     /// The names each function declares `global`, by its scope (`emit_global`).
@@ -504,6 +558,8 @@ impl<'a, 'w> Walker<'a, 'w> {
             star_import: false,
             relied: RefCell::new(Vec::new()),
             star_first_party: false,
+            suite: &[],
+            computed: HashMap::new(),
             values_seen: HashSet::new(),
             globals: HashMap::new(),
             config,
@@ -515,6 +571,7 @@ impl<'a, 'w> Walker<'a, 'w> {
     }
 
     pub fn run(mut self, suite: &'a [Stmt]) -> Walk {
+        self.suite = suite;
         if self.wants_any(&[Kind::Escapes, Kind::Computed, Kind::Derived]) {
             self.bindings(suite);
         }
@@ -2947,6 +3004,7 @@ impl<'a, 'w> Walker<'a, 'w> {
         let mut index = self.stack.len() - 1;
         let mut text = id.to_string();
         let mut dunder = false;
+        let mut through = false;
         while index > 0 {
             let Expr::Attribute(attribute) = self.stack[index - 1].0 else {
                 break;
@@ -2956,6 +3014,9 @@ impl<'a, 'w> Walker<'a, 'w> {
                 !(attr.starts_with("__") && attr.ends_with("__")) || PLAIN_DUNDERS.contains(&attr);
             if !plain || !attribute.ctx.is_load() {
                 dunder = matches!(attr, "__self__" | "__dict__" | "__globals__");
+                // Through a namespace: the chain from here reaches `__dict__`, `__globals__` or
+                // `__self__` (`f.__globals__`, `C.__init__.__globals__`).
+                through = !plain && self.reaches_namespace(index - 1);
                 break;
             }
             text = format!("{text}.{attr}");
@@ -2972,9 +3033,24 @@ impl<'a, 'w> Walker<'a, 'w> {
         // `sys.modules["m"]`: the module a literal key names, whatever reads it.
         if let Some(Frame::SubValue(subscript)) = frames.last()
             && self.is_modules(self.stack[index].0)
-            && let Expr::StringLiteral(key) = &*subscript.slice
         {
-            return self.emit_value_row(at, pos, format!(":{}", key.value.to_str()));
+            match &*subscript.slice {
+                Expr::StringLiteral(key) => {
+                    return self.emit_value_row(at, pos, format!(":{}", key.value.to_str()));
+                }
+                // The file's own module, and `follow` reads what is done with it.
+                Expr::Name(key)
+                    if key.id.as_str() == "__name__" && !self.binds_name("__name__") =>
+                {
+                    return self.emit_value_row(at, pos, ".".to_string());
+                }
+                // Any module: `follow` reads what is done with it; the file's records fail.
+                _ => return self.emit_value_row(at, pos, "*".to_string()),
+            }
+        }
+        // Through a dunder (`f.__globals__`, `C.__dict__`): what the value's namespace reaches.
+        if through {
+            return self.emit_value_row(at, pos, format!("{text}%"));
         }
         let Some(marker) = self.accounted(frames, at) else {
             return;
@@ -2982,25 +3058,88 @@ impl<'a, 'w> Walker<'a, 'w> {
         self.emit_value_row(at, pos, format!("{text}{marker}"));
     }
 
-    /// A value only a call or an import names: `x.__globals__` or `x.__self__` of anything but
-    /// a name `emit_module_value` reads (any module); `globals()`, and `vars()` at module level
-    /// (the file's own module); a call of `__import__` or `import_module` whose result is no
-    /// attribute read and no call (the module a literal first argument names, else any).
+    /// A value only a call or an import names. `x.__self__` of anything but a name
+    /// `emit_module_value` reads is any module (the file's own records). `globals()`, and
+    /// `vars()` at module level, are the file's own module. A call of `__import__` or
+    /// `import_module`, `sys.modules[key]` and `x.__globals__` of a value no root names are
+    /// module values (round 9b, `follow`): a literal names the module, anything else may be any
+    /// module. A store into `sys.modules[key]` replaces the module a literal key names (every
+    /// read of it is unread), the file's own for `__name__`, any for another key.
     fn emit_computed_value(&mut self, expr: &'a Expr, at: At) {
         if !self.wants(Kind::Escapes) || at.flags & TYPE_ONLY != 0 {
             return;
         }
         let pos = self.lines.pos(expr.range().start());
+        let any = Tracked {
+            module: None,
+            member: Member::Module,
+        };
         match expr {
-            Expr::Attribute(attribute)
-                if matches!(attribute.attr.as_str(), "__globals__" | "__self__") =>
-            {
-                let mut head = &*attribute.value;
-                while let Expr::Attribute(inner) = head {
-                    head = &inner.value;
-                }
-                if !matches!(head, Expr::Name(_)) {
+            Expr::Attribute(attribute) if attribute.attr.as_str() == "__self__" => {
+                if !self.rooted(&attribute.value) {
                     self.emit_value_row(at, pos, "*".to_string());
+                }
+            }
+            Expr::Attribute(attribute)
+                if attribute.attr.as_str() == "__globals__" && attribute.ctx.is_load() =>
+            {
+                // A function the file names: its module (`@` and the name, which the link
+                // resolves); anything else: any module.
+                let tracked = match dotted_name(&attribute.value) {
+                    Some(named) if self.rooted(&attribute.value) => Tracked {
+                        module: Some(format!("@{named}")),
+                        member: Member::Module,
+                    },
+                    _ => {
+                        self.emit_value_row(at, pos, "*".to_string());
+                        any
+                    }
+                };
+                let tracked = Tracked {
+                    member: Member::Namespace,
+                    ..tracked
+                };
+                self.follow(tracked, at, pos);
+            }
+            Expr::Subscript(subscript) if self.is_modules(&subscript.value) => {
+                let module = match &*subscript.slice {
+                    key if self.literal_text(key, at.scope, 0).is_some() => {
+                        self.literal_text(key, at.scope, 0)
+                    }
+                    Expr::Name(name)
+                        if name.id.as_str() == "__name__" && !self.binds_name("__name__") =>
+                    {
+                        Some(".".to_string())
+                    }
+                    _ => None,
+                };
+                if !subscript.ctx.is_load() {
+                    let module = module.unwrap_or_default();
+                    return self.emit_value_row(at, pos, format!("+{module}:*"));
+                }
+                if module.as_deref() == Some(".") {
+                    return self.emit_value_row(at, pos, ".".to_string());
+                }
+                self.follow(
+                    Tracked {
+                        module,
+                        member: Member::Module,
+                    },
+                    at,
+                    pos,
+                );
+            }
+            Expr::Name(name) if name.ctx == ExprContext::Load => {
+                let id = name.id.as_str();
+                let tracked = (self.computed.get(&(at.scope, id)))
+                    .or_else(|| {
+                        (at.scope != -1 && !self.binds_locally(at.scope, id))
+                            .then(|| self.computed.get(&(-1, id)))
+                            .flatten()
+                    })
+                    .cloned();
+                if let Some(tracked) = tracked {
+                    self.follow(tracked, at, pos);
                 }
             }
             Expr::Call(call) => {
@@ -3020,6 +3159,15 @@ impl<'a, 'w> Walker<'a, 'w> {
                 if !matches!(last, "__import__" | "import_module") {
                     return;
                 }
+                let module = match call.arguments.args.first() {
+                    Some(Expr::StringLiteral(literal))
+                        if !literal.value.to_str().starts_with('.') =>
+                    {
+                        Some(literal.value.to_str().to_string())
+                    }
+                    _ => None,
+                };
+                // The file's own records: a use that is no attribute read and no call.
                 let mut index = self.stack.len() - 1;
                 while index > 0 {
                     match self.stack[index - 1].0 {
@@ -3034,16 +3182,314 @@ impl<'a, 'w> Walker<'a, 'w> {
                     }
                 }
                 let frames = &self.path[..self.stack[index].1];
-                if self.accounted(frames, at).is_none() {
-                    return;
+                if self.accounted(frames, at).is_some() {
+                    let row = match &module {
+                        Some(module) => format!(":{module}"),
+                        None => "*".to_string(),
+                    };
+                    self.emit_value_row(at, pos, row);
                 }
-                let module = match call.arguments.args.first() {
-                    Some(Expr::StringLiteral(literal)) => format!(":{}", literal.value.to_str()),
-                    _ => "*".to_string(),
-                };
-                self.emit_value_row(at, pos, module);
+                self.follow(
+                    Tracked {
+                        module,
+                        member: Member::Module,
+                    },
+                    at,
+                    pos,
+                );
             }
             _ => {}
+        }
+    }
+
+    /// The text a key names (round 9b, t30's ruling on the stop): a string literal; a name bound
+    /// once in `scope` (the module, or a function's body), by an assignment of a text this
+    /// resolves; or `spec.name`, `spec` bound once there to
+    /// `importlib.util.spec_from_file_location(<key>, ...)` or `spec_from_loader(<key>, ...)`,
+    /// whose name the standard library sets from that first argument.
+    fn literal_text(&self, expr: &Expr, scope: i64, depth: usize) -> Option<String> {
+        if depth > 8 {
+            return None;
+        }
+        match expr {
+            Expr::StringLiteral(literal) => Some(literal.value.to_str().to_string()),
+            Expr::Name(name) => {
+                let value = self.bound_once(scope, name.id.as_str())?;
+                self.literal_text(value, scope, depth + 1)
+            }
+            Expr::Attribute(attribute) if attribute.attr.as_str() == "name" => {
+                let Expr::Name(spec) = &*attribute.value else {
+                    return None;
+                };
+                let Expr::Call(call) = self.bound_once(scope, spec.id.as_str())? else {
+                    return None;
+                };
+                let callee = callee_text(call);
+                let last = callee.rsplit('.').next().unwrap_or_default();
+                if !matches!(last, "spec_from_file_location" | "spec_from_loader") {
+                    return None;
+                }
+                self.literal_text(call.arguments.args.first()?, scope, depth + 1)
+            }
+            _ => None,
+        }
+    }
+
+    /// The value of the one plain assignment that binds `id` in `scope` (the module, or a
+    /// function's body outside the defs and classes it holds), when nothing else binds it there:
+    /// no import, parameter, other statement or `global`. A function that binds it nowhere reads
+    /// the module's.
+    fn bound_once(&self, scope: i64, id: &str) -> Option<&'a Expr> {
+        let body: &'a [Stmt] = if scope == -1 {
+            if self.others.get(id) != Some(&1) || self.bound.contains_key(id) {
+                return None;
+            }
+            self.suite
+        } else {
+            let DefNode::Func(function) = self.defs.entries[scope as usize].node else {
+                return None;
+            };
+            let parameter = function.parameters.iter().any(|p| p.name().as_str() == id);
+            if parameter || declared_global(&function.body).contains(id) {
+                return None;
+            }
+            &function.body
+        };
+        let mut found: Vec<&'a Stmt> = Vec::new();
+        let mut stack: Vec<&'a [Stmt]> = vec![body];
+        while let Some(suite) = stack.pop() {
+            for stmt in suite {
+                let mut names = Vec::new();
+                statement_bindings(stmt, &mut names);
+                if names.contains(&id) {
+                    found.push(stmt);
+                }
+                stack.extend(nested_bodies(stmt));
+            }
+        }
+        // A name the function does not bind reads the module's.
+        if found.is_empty() && scope != -1 {
+            return self.bound_once(-1, id);
+        }
+        match found.as_slice() {
+            [Stmt::Assign(assign)] => match assign.targets.as_slice() {
+                [Expr::Name(target)] if target.id.as_str() == id => Some(&assign.value),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Whether an expression's head is a name `emit_module_value` reads (an import, a module-level
+    /// class or def, a builtin): what it reaches is named by that row.
+    fn rooted(&self, expr: &Expr) -> bool {
+        let mut head = expr;
+        while let Expr::Attribute(inner) = head {
+            head = &inner.value;
+        }
+        let Expr::Name(name) = head else {
+            return false;
+        };
+        let id = name.id.as_str();
+        let defined = (self.defs.entries.iter()).any(|entry| {
+            entry.parent == -1
+                && match entry.node {
+                    DefNode::Func(f) => f.name.as_str() == id,
+                    DefNode::Class(c) => c.name.as_str() == id,
+                }
+        });
+        self.bound.contains_key(id)
+            || defined
+            || !(self.binds_name(id) || self.parameters.contains(id) || self.star_import)
+    }
+
+    /// Round 9b (t30's ruling on open point 1): a module value, followed through attribute and
+    /// subscript reads, `getattr` and `vars` from the expression just walked (the top of
+    /// `stack`), and judged where it goes (`module_use`). A change through it (a store, a `del`,
+    /// `setattr`, a mutating method of a member, a namespace write) is a binding of that member in
+    /// each first-party module it may be (`!+MODULE:NAME`; an empty module is any, `*` any
+    /// member). A name bound to it keeps it (`computed`). Any other use hands it on: at module
+    /// level, in a class body or a header, every read that may depend on the module is unread
+    /// (`!+MODULE:*`); in a function body the reading does not follow the handoff (limit 9's
+    /// sentence, waiting on the owner), and the file's own records fail closed (`!*`).
+    fn follow(&mut self, tracked: Tracked, at: At, pos: (i64, i64)) {
+        let mut index = self.stack.len() - 1;
+        let mut member = tracked.member.clone();
+        let mut method: Option<&'a str> = None;
+        while index > 0 {
+            let child = self.stack[index].0;
+            let next = match self.stack[index - 1].0 {
+                Expr::Attribute(a) if a.ctx.is_load() => {
+                    let attr = a.attr.as_str();
+                    match member {
+                        // A name or a path: no namespace.
+                        Member::Module if PLAIN_DUNDERS.contains(&attr) => return,
+                        Member::Module if attr == "__dict__" => Member::Namespace,
+                        Member::Module if attr.starts_with("__") && attr.ends_with("__") => {
+                            method = Some(attr);
+                            Member::Unknown
+                        }
+                        Member::Module => Member::Name(attr.to_string()),
+                        _ => {
+                            method = Some(attr);
+                            member.clone()
+                        }
+                    }
+                }
+                Expr::Subscript(s) if std::ptr::eq(&*s.value, child) && s.ctx.is_load() => {
+                    method = None;
+                    match (&member, &*s.slice) {
+                        (Member::Namespace, Expr::StringLiteral(key)) => {
+                            Member::Name(key.value.to_str().to_string())
+                        }
+                        (Member::Module | Member::Namespace, _) => Member::Unknown,
+                        _ => member.clone(),
+                    }
+                }
+                // `hasattr(m, "NAME")`: a truth value, a read of that member.
+                Expr::Call(call)
+                    if call
+                        .arguments
+                        .args
+                        .first()
+                        .is_some_and(|a| std::ptr::eq(a, child))
+                        && callee_text(call) == "hasattr"
+                        && !self.binds_name("hasattr")
+                        && matches!(call.arguments.args.get(1), Some(Expr::StringLiteral(_))) =>
+                {
+                    return;
+                }
+                Expr::Call(call)
+                    if call
+                        .arguments
+                        .args
+                        .first()
+                        .is_some_and(|a| std::ptr::eq(a, child))
+                        && matches!(callee_text(call).as_str(), "getattr" | "vars")
+                        && !self.binds_name(&callee_text(call)) =>
+                {
+                    method = None;
+                    match (
+                        &member,
+                        callee_text(call).as_str(),
+                        call.arguments.args.get(1),
+                    ) {
+                        (Member::Module, "getattr", Some(Expr::StringLiteral(name))) => {
+                            Member::Name(name.value.to_str().to_string())
+                        }
+                        (Member::Module, "vars", _) => Member::Namespace,
+                        (Member::Module | Member::Namespace, _, _) => Member::Unknown,
+                        _ => member.clone(),
+                    }
+                }
+                _ => break,
+            };
+            member = next;
+            index -= 1;
+        }
+        let frames = &self.path[..self.stack[index].1];
+        let parent = index.checked_sub(1).map(|i| self.stack[i].0);
+        let module = tracked.module.clone().unwrap_or_default();
+        let function = at.scope >= 0 && !self.defs.is_class(at.scope);
+        let changed = |member: &Member| match member {
+            Member::Name(name) => format!("+{module}:{name}"),
+            _ => format!("+{module}:*"),
+        };
+        match self.module_use(frames, parent, &member, method) {
+            ModuleUse::Read => {}
+            ModuleUse::Alias(names) => {
+                for name in names {
+                    let kept = Tracked {
+                        module: tracked.module.clone(),
+                        member: member.clone(),
+                    };
+                    self.computed.insert((at.scope, name), kept);
+                }
+            }
+            ModuleUse::Changed(changed_member) => {
+                let row = changed(&changed_member);
+                self.emit_value_row(at, pos, row);
+            }
+            ModuleUse::Handed if function => self.emit_value_row(at, pos, "*".to_string()),
+            // A module a literal or a name proves is no computed value: only a change counts.
+            ModuleUse::Handed if tracked.module.is_some() => {}
+            ModuleUse::Handed => self.emit_value_row(at, pos, "+:*".to_string()),
+        }
+    }
+
+    /// Where a module value, or a member read from it, goes (its frames, innermost last, and the
+    /// expression around it): read (a call of it, a test, a statement, `is`), bound to names, a
+    /// change of a member (the member it is, or the attribute or key a store, `del`, `setattr`
+    /// or `delattr` names on the module; a mutating method of a member; any member of a
+    /// namespace), or handed on.
+    fn module_use(
+        &self,
+        frames: &[Frame<'a>],
+        parent: Option<&'a Expr>,
+        member: &Member,
+        method: Option<&str>,
+    ) -> ModuleUse<'a> {
+        let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
+        let Some(first) = up(1) else {
+            return ModuleUse::Read;
+        };
+        // The member a store or `setattr` names: a literal attribute of the module, a literal key
+        // of its namespace, or the member the value is.
+        let named = |text: Option<&Expr>, namespace: bool| match (member, text) {
+            (Member::Module, Some(Expr::StringLiteral(key))) if !namespace => {
+                Member::Name(key.value.to_str().to_string())
+            }
+            (Member::Namespace, Some(Expr::StringLiteral(key))) if namespace => {
+                Member::Name(key.value.to_str().to_string())
+            }
+            (Member::Module | Member::Namespace, _) => Member::Unknown,
+            (other, _) => other.clone(),
+        };
+        match first {
+            Frame::CallFunc(_) => match (method, member) {
+                (Some(name), Member::Namespace) if MODULE_MUTATORS.contains(&name) => {
+                    ModuleUse::Changed(Member::Unknown)
+                }
+                (Some(name), _) if MODULE_MUTATORS.contains(&name) => {
+                    ModuleUse::Changed(member.clone())
+                }
+                (Some(_), Member::Unknown | Member::Namespace) => ModuleUse::Handed,
+                _ => ModuleUse::Read,
+            },
+            Frame::Attr(attr) => match parent {
+                Some(Expr::Attribute(a)) if !a.ctx.is_load() => ModuleUse::Changed(match member {
+                    Member::Module => Member::Name(attr.to_string()),
+                    Member::Namespace => Member::Unknown,
+                    other => other.clone(),
+                }),
+                _ => ModuleUse::Handed,
+            },
+            Frame::SubValue(subscript) if !subscript.ctx.is_load() => {
+                ModuleUse::Changed(named(Some(&subscript.slice), true))
+            }
+            Frame::Arg(call, 0)
+                if matches!(callee_text(call).as_str(), "setattr" | "delattr")
+                    && !self.binds_name(&callee_text(call)) =>
+            {
+                ModuleUse::Changed(named(call.arguments.args.get(1), false))
+            }
+            Frame::AssignValue(targets) => {
+                let names: Option<Vec<&'a str>> = (targets.iter())
+                    .map(|target| target.as_name_expr().map(|name| name.id.as_str()))
+                    .collect();
+                names.map_or(ModuleUse::Handed, ModuleUse::Alias)
+            }
+            Frame::AnnAssignValue(Expr::Name(name)) => ModuleUse::Alias(vec![name.id.as_str()]),
+            Frame::Terminal("expr" | "if-test" | "while-test" | "assert")
+            | Frame::Step("ifexp:test" | "comp:if")
+            | Frame::Op("unary:", "not") => ModuleUse::Read,
+            Frame::Operand("cmp:", _, Expr::Compare(compare))
+                if (compare.ops.iter())
+                    .all(|op| matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot)) =>
+            {
+                ModuleUse::Read
+            }
+            _ => ModuleUse::Handed,
         }
     }
 
@@ -3118,6 +3564,26 @@ impl<'a, 'w> Walker<'a, 'w> {
             };
             dotted_name(callee).is_some_and(|name| name.rsplit('.').next() == Some("dataclass"))
         })
+    }
+
+    /// Whether the attribute chain read from the expression at `stack[index]` outward reaches a
+    /// namespace: `__dict__`, `__globals__` or `__self__`.
+    fn reaches_namespace(&self, mut index: usize) -> bool {
+        loop {
+            let Expr::Attribute(attribute) = self.stack[index].0 else {
+                return false;
+            };
+            if matches!(
+                attribute.attr.as_str(),
+                "__dict__" | "__globals__" | "__self__"
+            ) {
+                return true;
+            }
+            let Some(outer) = index.checked_sub(1) else {
+                return false;
+            };
+            index = outer;
+        }
     }
 
     /// One `!` row, once per text and scope in the file.

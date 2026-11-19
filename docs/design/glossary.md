@@ -266,5 +266,7 @@ These belong to the PostHog preset, not to the engine.
   An escape of it is an escape of every source.
 - **Stable class** (`Producers::stable_class` in `src/link/produce.rs`).
   A class whose attribute read returns what its body binds: metaclass `type` or `abc.ABCMeta` along its lineage, no decorator but `dataclasses.dataclass`, no store into it from any file, every occurrence of it accounted, the attribute bound once at the body's top level.
+- **Computed module value, `!+` row** (an `escapes` row `!+MODULE:NAME`).
+  A module the code reaches by a name the reading cannot resolve (`import_module(name)`, `sys.modules[key]`, an unnamed function's `__globals__`); a visible change through it binds that member, from another file, in each first-party module it may be (`*`: every name).
 - **Module value, `!` row** (an `escapes` row `!VALUE`).
   A use of a value that may be a module, a class or a function, in a place that is no attribute read and no call; the link resolves it and trusts no record class, `dataclasses.replace` or class read back that it may reach.

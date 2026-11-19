@@ -1331,6 +1331,10 @@ pub struct Producers<'p> {
     pub handed: Vec<(Ent, usize, i32, u32, String)>,
     /// The classes `touched` is deciding, against a loop through record callees.
     pub touching: FxHashSet<Ent>,
+    /// The modules a change through a module value may have rebound any name of
+    /// (`module_change`), and whether that is every module.
+    pub poisoned_modules: FxHashSet<Sid>,
+    pub poison_all: bool,
 }
 
 /// A value a `!` row names, as the reading file resolves it (`Producers::values`).
@@ -2002,6 +2006,7 @@ impl Producers<'_> {
         if self.class_stores.contains_key(&class)
             || self.touched(class)
             || self.module_touched(class.m)
+            || self.module_poisoned(class.m)
         {
             return false;
         }
@@ -2307,6 +2312,11 @@ impl Producers<'_> {
             let Some(text) = self.core.it.s(escape.name).strip_prefix('!') else {
                 continue;
             };
+            if let Some(change) = text.strip_prefix('+') {
+                let change = change.to_string();
+                self.module_change(owner, escape.scope, escape.line, &change);
+                continue;
+            }
             let (text, marker) = match text.find(['@', '#', '%']) {
                 Some(at) => (text[..at].to_string(), text[at..].to_string()),
                 None => (text.to_string(), String::new()),
@@ -2372,6 +2382,65 @@ impl Producers<'_> {
             }
             self.values.entry(owner).or_default().push(held);
         }
+    }
+
+    /// A change through a module value (round 9b, `!+MODULE:NAME`): a binding of NAME, from
+    /// another file, in each first-party module the value may be: the module a literal names
+    /// (`.` the file's own, `@chain` the module of what the chain names here), else every module.
+    /// `*` is every name: every read that may depend on the module is unread (`module_poisoned`).
+    /// A class NAME such a module defines is stored into too.
+    fn module_change(&mut self, owner: usize, scope: i32, line: u32, change: &str) {
+        let Some((module, name)) = change.rsplit_once(':') else {
+            return;
+        };
+        let modules: Vec<Sid> = if module.is_empty() {
+            (self.scopes.iter()).map(|scope| scope.module).collect()
+        } else if module == "." {
+            vec![self.scopes[owner].module]
+        } else if let Some(chain) = module.strip_prefix('@') {
+            let chain = self.core.it.intern(chain);
+            let core = &mut *self.core;
+            let names = &self.settings.names;
+            let (found, rest) =
+                core.chain_lookup(names, &mut self.scopes[owner], chain, scope, line);
+            let head = core.it.head(found.surface);
+            match found.hit.filter(|_| rest.is_empty()) {
+                Some(hit) => vec![core.origin(hit).m],
+                // A library's function: no first-party module.
+                None if core.is_external(head) => return,
+                None => (self.scopes.iter()).map(|scope| scope.module).collect(),
+            }
+        } else {
+            let module = self.core.it.intern(module);
+            if !self.core.exists(module) {
+                return;
+            }
+            vec![module]
+        };
+        if module.is_empty() && name == "*" {
+            self.poison_all = true;
+        }
+        let name_sid = self.core.it.intern(name);
+        for module in modules {
+            self.foreign.entry(module).or_default().insert(name_sid);
+            if name == "*" {
+                self.poisoned_modules.insert(module);
+            } else if self.def_of(module, name_sid, HitKind::Class).is_some() {
+                let class = Ent {
+                    m: module,
+                    s: name_sid,
+                };
+                let star = self.core.it.intern("*");
+                self.class_stores.entry(class).or_default().insert(star);
+            }
+        }
+    }
+
+    /// Whether a change through a module value may have replaced any of the module's names
+    /// (`module_change` with `*`): every read that may depend on it is unread.
+    fn module_poisoned(&self, module: Sid) -> bool {
+        self.poison_all
+            || (self.poisoned_modules.iter()).any(|poisoned| self.within(*poisoned, module))
     }
 
     /// Whether some file uses the class where no entry accounts for it (`values`): a `!` row
@@ -2491,6 +2560,7 @@ impl Producers<'_> {
         };
         if self.class_stores.contains_key(&class)
             || self.touched(class)
+            || self.module_poisoned(class.m)
             || !self.stable_lineage(class, 0)
         {
             return false;
@@ -2577,13 +2647,17 @@ impl Producers<'_> {
                     .foreign
                     .get(&module)
                     .is_some_and(|names| any(names, text)),
-                Some((class, attribute)) => it.get(class).is_some_and(|class| {
-                    let class = Ent {
-                        m: module,
-                        s: class,
-                    };
-                    (self.class_stores.get(&class)).is_some_and(|names| any(names, attribute))
-                }),
+                Some((class, attribute)) => {
+                    self.module_poisoned(module)
+                        || it.get(class).is_some_and(|class| {
+                            let class = Ent {
+                                m: module,
+                                s: class,
+                            };
+                            (self.class_stores.get(&class))
+                                .is_some_and(|names| any(names, attribute))
+                        })
+                }
             };
             if stored {
                 rows.push(Touching {
