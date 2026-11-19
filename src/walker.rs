@@ -66,9 +66,9 @@ fn name_id(expr: &Expr) -> &str {
 /// to a name's items (`emit_mutation`).
 const MUTATORS: [&str; 5] = ["append", "extend", "insert", "update", "add"];
 
-/// Calls handed a name that read it and change no value they are handed, by the callee's last
-/// name: copies and the read-only builtins.
-const READING_CALLEES: [&str; 27] = [
+/// Builtins that read a value they are handed and change nothing: copies, counts, tests and
+/// formatting.
+const READING_BUILTINS: [&str; 24] = [
     "list",
     "tuple",
     "set",
@@ -92,10 +92,16 @@ const READING_CALLEES: [&str; 27] = [
     "repr",
     "str",
     "bool",
-    "chain",
-    "replace",
-    "copy",
-    "deepcopy",
+    "id",
+];
+
+/// The standard library's functions that read a value they are handed and change nothing, by the
+/// full name an import resolves them to.
+const READING_STDLIB: [&str; 4] = [
+    "itertools.chain",
+    "itertools.chain.from_iterable",
+    "copy.copy",
+    "copy.deepcopy",
 ];
 
 /// Methods of a list, set or dict that read it, or only take items out of it.
@@ -104,95 +110,51 @@ const READING_METHODS: [&str; 13] = [
     "discard", "sort", "reverse",
 ];
 
-/// Whether the item reading understands a load of a name with this use-site context (`climb`'s
-/// chain and escape steps): one that cannot change what the name holds, or one it reads as a
-/// change (a module-level `name.append(x)` statement, a subscript store). Anything else, such
-/// as handing the name to a call, an attribute store, or another method, is not understood.
-fn understood_use(chain: &str, up: &str, module_level: bool) -> bool {
-    let first = up.split(' ').next().unwrap_or_default();
-    if chain.is_empty() {
-        if let Some(call) = first.strip_prefix("arg:") {
-            let callee = call.split_once(':').map_or("", |(_, callee)| callee);
-            let last = callee.rsplit('.').next().unwrap_or_default();
-            return READING_CALLEES.contains(&last);
-        }
-        let parts = [
-            "elt:",
-            "star",
-            "dict:",
-            "bin:",
-            "bool:",
-            "ifexp:",
-            "cmp:",
-            "unary:",
-            "assign:",
-            "annassign:",
-            "augassign:",
-            "comp:",
-            "slice",
-            "await",
-            "kw:**:",
-        ];
-        let terminals = [
-            "expr",
-            "for-iter",
-            "if-test",
-            "while-test",
-            "assert",
-            "assert-msg",
-            "return",
-            "case",
-            "match",
-            "annotation",
-            "returns",
-            "except",
-            "raise",
-        ];
-        let headers = ["base:", "classkw:", "param-ann:"];
-        if headers.iter().any(|header| first.starts_with(header)) {
-            return true;
-        }
-        return parts.iter().any(|part| first.starts_with(part)) || terminals.contains(&first);
-    }
-    if chain.starts_with("()") {
-        return true;
-    }
-    if chain == "[]" {
-        return !first.starts_with("augassign-target");
-    }
-    let Some(attrs) = chain.strip_prefix('.') else {
-        return false;
-    };
-    match attrs.split_once("()") {
-        // One method called on the name.
-        Some((method, "")) if !method.contains('.') => {
-            let statement = module_level && first == "expr";
-            READING_METHODS.contains(&method) || (statement && MUTATORS.contains(&method))
-        }
-        Some(_) => false,
-        // An attribute read, not a store.
-        None => !attrs.contains('[') && !first.ends_with("-target") && first != "del",
-    }
-}
+/// Escape steps (`climb`) that read the value they hold and hand nothing on: a statement of the
+/// bare value, a test, an index, formatting, a type position, a decorator.
+const READING_STEPS: [&str; 16] = [
+    "expr",
+    "if-test",
+    "while-test",
+    "assert",
+    "assert-msg",
+    "ifexp:test",
+    "comp:if",
+    "case",
+    "case-guard",
+    "match",
+    "annotation",
+    "returns",
+    "except",
+    "slice",
+    "slice-part",
+    "decorator",
+];
 
-/// What a use the item reading does not understand makes unread: the name itself when the code
-/// hands it on or calls another method of it (`W.setdefault(...)`); `name.ATTR` when it changes
-/// an attribute of it (`Reg.WORKFLOWS = ...`, `Reg.WORKFLOWS.append(B)`); `name.*`, every
-/// attribute, when it is handed to `setattr` or `delattr`.
-fn escaped_name(id: &str, chain: &str, first: &str) -> String {
-    let callee = first.strip_prefix("arg:0:").unwrap_or_default();
-    if chain.is_empty() && matches!(callee, "setattr" | "delattr") {
-        return format!("{id}.*");
-    }
-    let Some(attrs) = chain.strip_prefix('.') else {
-        return id.to_string();
-    };
-    let attribute = attrs.split(['.', '(', '[']).next().unwrap_or_default();
-    let called = attrs[attribute.len()..] == *"()";
-    if attribute.is_empty() || called {
-        return id.to_string();
-    }
-    format!("{id}.{attribute}")
+/// Prefixes of escape steps that read the value they hold: comparisons, unary operators,
+/// formatting, class bases and type positions.
+const READING_PREFIXES: [&str; 7] = [
+    "cmp:",
+    "unary:",
+    "fstr",
+    "tstr",
+    "base:",
+    "param-ann:",
+    "typealias:",
+];
+
+/// Where the escape steps of a load take the value (`Walker::place`).
+enum Place<'s> {
+    /// They read it: it is neither changed nor handed on as the same object.
+    Read,
+    /// They bind it, itself or inside a list, tuple, set, dict or `or`, to module-level or
+    /// class-body names: the link reads those names as aliases of it.
+    Held,
+    /// They hand it to record constructors (`record_callee`) whose result module-level or
+    /// class-body names hold: in a registry's file, the link reads those names as aliases.
+    Record(&'s str),
+    /// Anything else: it escapes.
+    Escape,
 }
 
 /// Where a node sits: its scope, the def whose header holds it (-1 = none), and the flags of
@@ -934,21 +896,55 @@ impl<'a, 'w> Walker<'a, 'w> {
         });
     }
 
-    /// The `escapes` rows of a name node: a load at module level or in a class body, of a name
-    /// no import binds, in a position the item reading does not understand (`understood_use`);
-    /// `globals()` and `sys.modules[__name__]`, which reach every name of the module (`*`); and a
-    /// store of a name a function declares `global` that is no assignment (a `for` target, say),
-    /// sited at module level.
+    /// An `escapes` row of `*` at `pos`: code that reaches every name of the module, so any of
+    /// them may be changed or bound again.
+    fn emit_everything(&mut self, pos: (i64, i64)) {
+        if !self.wants(Kind::Escapes) {
+            return;
+        }
+        let module = At {
+            scope: -1,
+            header: -1,
+            flags: 0,
+        };
+        self.out.escapes.push(Tag {
+            site: module.site(pos),
+            name: "*".to_string(),
+        });
+    }
+
+    /// The `escapes` rows of a name node at module level or in a class body:
+    /// - a load of a name no import binds that is not a read (`escape_of`);
+    /// - a store or a delete of a name by a form that writes no `assigns` row (a `for` or `with`
+    ///   target, a walrus, `del`): `=name`, bound again by a form the reading does not read;
+    /// - in a function, a store of a name it declares `global` that is no assignment, sited at
+    ///   module level.
     fn emit_use(&mut self, name: &ast::ExprName, at: At) {
         if !self.wants(Kind::Escapes) {
             return;
         }
         let id = name.id.as_str();
         let (chain, up) = climb(&self.path);
-        let first = up.split(' ').next().unwrap_or_default();
+        let steps: Vec<&str> = up.split(' ').filter(|step| !step.is_empty()).collect();
+        let first = steps.first().copied().unwrap_or_default();
         if name.ctx != ExprContext::Load {
+            let assigned = steps.iter().any(|step| {
+                matches!(
+                    *step,
+                    "assign-target"
+                        | "annassign-target"
+                        | "augassign-target"
+                        | "typealias-target"
+                        | "comp:target"
+                )
+            });
+            if self.emits_assign(at.scope) {
+                if !assigned {
+                    self.emit_escape(name, at, &format!("={id}"));
+                }
+                return;
+            }
             let global = at.scope != -1
-                && !self.emits_assign(at.scope)
                 && self
                     .globals
                     .get(&at.scope)
@@ -963,25 +959,211 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             return;
         }
-        if !self.emits_assign(at.scope) {
+        if !self.emits_assign(at.scope) || self.bound.contains_key(id) {
             return;
         }
-        let everything =
-            (id == "globals" && chain == "()") || (id == "__name__" && first == "slice");
-        if everything {
-            self.emit_escape(name, at, "*");
-            return;
+        if let Some(escaped) = self.escape_of(id, &chain, &steps, at) {
+            self.emit_escape(name, at, &escaped);
         }
-        if id.starts_with("__")
-            || self.bound.contains_key(id)
-            || understood_use(&chain, &up, at.scope == -1)
-        {
-            return;
+    }
+
+    /// The full name a dotted name of the code stands for: through the import that binds its
+    /// head (`import sys as s`: `s.modules` is `sys.modules`), or a builtin's (`builtins.len`)
+    /// when the file binds the head nowhere; None for a name the file binds itself or a relative
+    /// import.
+    fn resolve(&self, dotted: &str) -> Option<String> {
+        let (head, rest) = match dotted.split_once('.') {
+            Some((head, rest)) => (head, Some(rest)),
+            None => (dotted, None),
+        };
+        let base = match self.bound.get(head) {
+            Some(binding) => binding.origin()?,
+            None if self.binds_name(head) => return None,
+            None => format!("builtins.{head}"),
+        };
+        Some(match rest {
+            Some(rest) => format!("{base}.{rest}"),
+            None => base,
+        })
+    }
+
+    /// Whether the file binds a name itself anywhere: a store, a def or a class.
+    fn binds_name(&self, name: &str) -> bool {
+        self.stored.contains(name)
+            || self.defs.entries.iter().any(|entry| match entry.node {
+                DefNode::Func(f) => f.name.as_str() == name,
+                DefNode::Class(c) => c.name.as_str() == name,
+            })
+    }
+
+    /// Whether a callee, resolved through the imports, is a builtin or a standard library function
+    /// that reads what it is handed (`READING_BUILTINS`, `READING_STDLIB`).
+    fn reading_callee(&self, callee: &str) -> bool {
+        let Some(full) = self.resolve(callee) else {
+            return false;
+        };
+        match full.strip_prefix("builtins.") {
+            Some(builtin) => READING_BUILTINS.contains(&builtin),
+            None => READING_STDLIB.contains(&full.as_str()),
         }
-        self.emit_escape(name, at, &escaped_name(id, &chain, first));
+    }
+
+    /// Whether a callee builds a record: a first-party class an import binds
+    /// (`QueueBinding(...)`, `registration.QueueBinding(...)`), or `dataclasses.replace`.
+    fn record_callee(&self, callee: &str) -> bool {
+        if self.resolve(callee).as_deref() == Some("dataclasses.replace") {
+            return true;
+        }
+        let head = callee.split('.').next().unwrap_or_default();
+        let last = callee.rsplit('.').next().unwrap_or_default();
+        let first_party = self
+            .bound
+            .get(head)
+            .is_some_and(|binding| binding.first_party);
+        first_party && last.starts_with(|c: char| c.is_ascii_uppercase())
+    }
+
+    /// The def index of the class named `name` directly in the scope `parent` (-1: the module).
+    fn class_in(&self, parent: i64, name: &str) -> Option<i64> {
+        (self.defs.entries.iter().enumerate()).find_map(|(index, entry)| match entry.node {
+            DefNode::Class(c) if entry.parent == parent && c.name.as_str() == name => {
+                Some(index as i64)
+            }
+            _ => None,
+        })
+    }
+
+    /// Where the escape steps of a bare value (innermost first) take it: a read only when it can
+    /// neither change the value nor hand the same object on (an allow-list). It is read as an
+    /// iteration source, unpacked into a new container (`[*W]`), by a reading callee
+    /// (`reading_callee`), a test, a comparison, formatting or a type position. Inside a list,
+    /// tuple, set, dict or `or`, bound to names, it is held: the link reads the names as aliases.
+    /// Handed to any other call whose result such a binding holds, it is a record. Anything else
+    /// escapes: a conditional's branch, a comprehension's element, `return`, a lambda, a walrus,
+    /// a class keyword, a default, a `with`.
+    fn place<'s>(&self, steps: &[&'s str]) -> Place<'s> {
+        let mut holding = false;
+        let mut called = false;
+        let mut records = true;
+        for &step in steps {
+            let unpacks = step == "star" || step == "dict:**" || step.starts_with("kw:**:");
+            if unpacks || step.starts_with("bin:") {
+                if !holding && !called {
+                    return Place::Read;
+                }
+                continue;
+            }
+            if step.starts_with("elt:") || step.starts_with("dict:") || step.starts_with("bool:") {
+                holding = true;
+                continue;
+            }
+            if let Some(call) = step
+                .strip_prefix("arg:")
+                .or_else(|| step.strip_prefix("kw:"))
+            {
+                let callee = call.split_once(':').map_or("", |(_, callee)| callee);
+                if !holding && !called && self.reading_callee(callee) {
+                    return Place::Read;
+                }
+                records &= self.record_callee(callee);
+                called = true;
+                holding = true;
+                continue;
+            }
+            if matches!(step, "for-iter" | "comp:iter") || step.starts_with("augassign:") {
+                return if holding || called {
+                    Place::Escape
+                } else {
+                    Place::Read
+                };
+            }
+            let targets = step
+                .strip_prefix("assign:")
+                .or_else(|| step.strip_prefix("annassign:"));
+            if let Some(targets) = targets {
+                let names = targets
+                    .split(',')
+                    .all(|target| target == "()" || is_identifier(target));
+                return match (names, called, records) {
+                    (false, _, _) | (true, true, false) => Place::Escape,
+                    (true, false, _) => Place::Held,
+                    (true, true, true) => Place::Record(targets),
+                };
+            }
+            let reads = READING_STEPS.contains(&step)
+                || READING_PREFIXES
+                    .iter()
+                    .any(|prefix| step.starts_with(prefix));
+            return if reads && !called {
+                Place::Read
+            } else {
+                Place::Escape
+            };
+        }
+        if called { Place::Escape } else { Place::Read }
+    }
+
+    /// The escape a load of `id` at module level or in a class body makes, or None for a read
+    /// (`place`): `id`, or `id>NAMES` for records bound to NAMES; `id.*` when handed to `setattr`
+    /// or `delattr`. Of its chain: a call (`Class()`) and an element (`W[0]`) read; a subscript
+    /// store at module level is a change the reading reads; a reading method reads, and a
+    /// changing one (`append`) is a change the reading reads as a module-level statement on a
+    /// bare name; an
+    /// attribute of a class this file defines is a name of its own (`Reg.WORKFLOWS`); any other
+    /// attribute (`W.append` unbound) and anything past an element or a method escapes.
+    fn escape_of(&self, id: &str, chain: &str, steps: &[&str], at: At) -> Option<String> {
+        let first = steps.first().copied().unwrap_or_default();
+        let module_level = at.scope == -1;
+        if chain.is_empty() {
+            let callee = first.strip_prefix("arg:0:").unwrap_or_default();
+            if matches!(callee, "setattr" | "delattr") {
+                return Some(format!("{id}.*"));
+            }
+            return match self.place(steps) {
+                Place::Read | Place::Held => None,
+                Place::Record(holder) => Some(format!("{id}>{holder}")),
+                Place::Escape => Some(id.to_string()),
+            };
+        }
+        if chain.starts_with("()") {
+            return None;
+        }
+        if let Some(rest) = chain.strip_prefix("[]") {
+            let store = matches!(first, "assign-target" | "annassign-target");
+            let changes = first == "augassign-target" || (store && !module_level);
+            return (!rest.is_empty() || changes).then(|| id.to_string());
+        }
+        let attrs = chain.strip_prefix('.')?;
+        let attribute = attrs.split(['.', '(', '[']).next().unwrap_or_default();
+        let rest = &attrs[attribute.len()..];
+        let class = self.class_path(id);
+        if class.is_some() && !attribute.is_empty() && !rest.starts_with("()") {
+            let name = format!("{id}.{attribute}");
+            return self.escape_of(&name, rest, steps, at);
+        }
+        match rest {
+            "()" => {
+                // The walk writes a module-level change of a bare name as a row (`emit_mutation`).
+                let statement = module_level && first == "expr" && !id.contains('.');
+                let reads = READING_METHODS.contains(&attribute)
+                    || (statement && MUTATORS.contains(&attribute));
+                (!reads).then(|| id.to_string())
+            }
+            _ => Some(id.to_string()),
+        }
+    }
+
+    /// The def index of the class a dotted name of this file names (`Outer.Inner`), else None.
+    fn class_path(&self, dotted: &str) -> Option<i64> {
+        let mut parent = -1;
+        for part in dotted.split('.') {
+            parent = self.class_in(parent, part)?;
+        }
+        Some(parent)
     }
 
     fn expr(&mut self, expr: &'a Expr, at: At) {
+        self.emit_module_reads(expr, at);
         match expr {
             Expr::Call(call) => {
                 self.emit_call(call, at);
@@ -1096,7 +1278,6 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             Expr::Attribute(a) => self.child(Frame::Attr(a.attr.as_str()), &a.value, at),
             Expr::Subscript(s) => {
-                self.emit_module_key(s, at);
                 self.child(Frame::SubValue, &s.value, at);
                 self.child(Frame::Step("slice"), &s.slice, at);
             }
@@ -1293,36 +1474,18 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
-    /// `sys.modules[key]`, read by any key: no edge names a key of `sys.modules`, so it names a
-    /// module the link cannot read, whatever the key.
-    fn emit_module_key(&mut self, s: &'a ast::ExprSubscript, at: At) {
-        if !self.wants(Kind::Computed) || s.ctx != ExprContext::Load {
-            return;
-        }
-        let Expr::Attribute(attribute) = &*s.value else {
-            return;
-        };
-        let sys = matches!(&*attribute.value, Expr::Name(name) if name.id.as_str() == "sys");
-        if !sys || attribute.attr.as_str() != "modules" {
-            return;
-        }
-        let pos = self.lines.pos(s.range().start());
-        let sequence = self.sequence_of(&s.slice, at.scope).unwrap_or_default();
-        self.out.computed.push(Computed {
-            site: at.site(pos),
-            form: "sys.modules",
-            sequence,
-        });
-    }
-
     fn emit_call(&mut self, call: &'a ast::ExprCall, at: At) {
         let (want_callees, want_calls) = (self.wants(Kind::Callees), self.wants(Kind::Calls));
         let want_computed = self.wants(Kind::Computed);
-        if !want_callees && !want_calls && !want_computed {
+        let want_escapes = self.wants(Kind::Escapes);
+        if !want_callees && !want_calls && !want_computed && !want_escapes {
             return;
         }
         let callee = callee_text(call);
         let (l, c) = self.lines.pos(call.range().start());
+        if want_computed || want_escapes {
+            self.emit_namespace_call(call, &callee, at, (l, c));
+        }
         if want_callees {
             let key = TextKey {
                 scope: at.scope,
@@ -1353,6 +1516,114 @@ impl<'a, 'w> Walker<'a, 'w> {
         };
         let rows = self.loop_rows(row, at.scope);
         self.out.calls.extend(rows);
+    }
+
+    /// A call that reaches the module's names or loads code the link cannot read:
+    /// - `globals()`, and `locals()` or `vars()` with no argument, at module level or in a class
+    ///   body: the `*` escape;
+    /// - `exec` and `eval`, anywhere: the `*` escape and a `computed` row (`use`);
+    /// - `importlib.reload(alias)` of a module an import binds, as a statement: a `computed` row
+    ///   (`reload`) that names the alias, so the link reads it as a read of that module.
+    fn emit_namespace_call(
+        &mut self,
+        call: &'a ast::ExprCall,
+        callee: &str,
+        at: At,
+        pos: (i64, i64),
+    ) {
+        let Some(full) = self.resolve(callee) else {
+            return;
+        };
+        let bare = call.arguments.args.is_empty() && call.arguments.keywords.is_empty();
+        let namespace = self.emits_assign(at.scope);
+        match full.as_str() {
+            "builtins.globals" if namespace => self.emit_everything(pos),
+            "builtins.locals" | "builtins.vars" if namespace && bare => self.emit_everything(pos),
+            "builtins.exec" | "builtins.eval" => {
+                self.emit_everything(pos);
+                let name = full.trim_start_matches("builtins.").to_string();
+                self.push_computed(at, pos, "use", name);
+            }
+            "importlib.reload" => {
+                // The reloaded module is the alias's own; a result read further (`.WORKFLOWS`)
+                // names nothing the link reads.
+                let statement = matches!(self.path.last(), Some(Frame::Terminal("expr")));
+                if let Some(Expr::Name(alias)) = call.arguments.args.first()
+                    && self.bound.contains_key(alias.id.as_str())
+                    && statement
+                {
+                    self.push_computed(at, pos, "reload", alias.id.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A `computed` row at `pos`, when the configuration asks for them.
+    fn push_computed(&mut self, at: At, pos: (i64, i64), form: &'static str, sequence: String) {
+        if !self.wants(Kind::Computed) {
+            return;
+        }
+        self.out.computed.push(Computed {
+            site: at.site(pos),
+            form,
+            sequence,
+        });
+    }
+
+    /// `sys.modules`, resolved through the imports (`import sys as s`, `from sys import
+    /// modules`), read in any way: a `computed` row, as no edge names a key of it, and the `*`
+    /// escape unless it is a subscript by a string literal (it may be this module). A builtin
+    /// loader or `exec`/`eval` read as a value (`load = __import__`) is a `computed` row (`use`):
+    /// the link cannot read what it loads.
+    fn emit_module_reads(&mut self, expr: &'a Expr, at: At) {
+        if !self.wants_any(&[Kind::Computed, Kind::Escapes]) {
+            return;
+        }
+        if let Expr::Subscript(s) = expr
+            && self.names_modules(&s.value)
+        {
+            let pos = self.lines.pos(s.range().start());
+            let sequence = self.sequence_of(&s.slice, at.scope).unwrap_or_default();
+            self.push_computed(at, pos, "sys.modules", sequence);
+            if !s.slice.is_string_literal_expr() {
+                self.emit_everything(pos);
+            }
+            return;
+        }
+        let in_subscript = matches!(self.path.last(), Some(Frame::SubValue));
+        if self.names_modules(expr) && !in_subscript {
+            let pos = self.lines.pos(expr.range().start());
+            self.push_computed(at, pos, "sys.modules", String::new());
+            self.emit_everything(pos);
+            return;
+        }
+        let Expr::Name(name) = expr else {
+            return;
+        };
+        let called = matches!(self.path.last(), Some(Frame::CallFunc));
+        let builtin = self.resolve(name.id.as_str());
+        let loads = matches!(
+            builtin.as_deref(),
+            Some("builtins.__import__" | "builtins.exec" | "builtins.eval")
+        );
+        if loads && !called && name.ctx == ExprContext::Load {
+            let pos = self.lines.pos(name.range.start());
+            self.push_computed(at, pos, "use", name.id.to_string());
+        }
+    }
+
+    /// Whether an expression is `sys.modules`, resolved through the imports.
+    fn names_modules(&self, expr: &Expr) -> bool {
+        let dotted = match expr {
+            Expr::Name(name) => name.id.to_string(),
+            Expr::Attribute(attribute) => match &*attribute.value {
+                Expr::Name(head) => format!("{}.{}", head.id.as_str(), attribute.attr.as_str()),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        self.resolve(&dotted).as_deref() == Some("sys.modules")
     }
 
     fn emit_string(&mut self, lit: &'a ast::ExprStringLiteral, at: At) {

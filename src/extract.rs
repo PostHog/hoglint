@@ -64,7 +64,9 @@ impl<'s, 'c> FileFacts<'s, 'c> {
     fn collect(&self, suite: &'s [ruff_python_ast::Stmt]) -> Facts {
         let kinds = self.config.kinds;
         let (defs, bound) = DefTable::build(suite, self.src, &self.lines, self.config);
-        let stored = if kinds.has(Kind::Derived) {
+        // Derived names read stores; escapes and computed rows tell a builtin from a name the file
+        // binds itself.
+        let stored = if kinds.any(&[Kind::Derived, Kind::Escapes, Kind::Computed]) {
             stored_names(suite)
         } else {
             HashSet::new()

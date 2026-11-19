@@ -83,17 +83,33 @@ pub struct DefTable<'a> {
     index: HashMap<u32, usize>,
 }
 
-/// An import-bound name: whether it looks like a class, whether it is first-party, and whether
-/// it binds a hook name under another name (`ExtractConfig::watch_hooks`).
+/// An import-bound name: whether it looks like a class, whether it is first-party, whether it
+/// binds a hook name under another name (`ExtractConfig::watch_hooks`), and what the first import
+/// that binds it imports: the module and, for `from module import member`, the member (`module`
+/// is empty for a relative import).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Binding {
+pub struct Binding<'a> {
     pub class_like: bool,
     pub first_party: bool,
     pub hook_alias: bool,
+    pub module: &'a str,
+    pub member: &'a str,
 }
 
-/// Bound name -> binding; a name bound twice ORs both flags. Shadowing is ignored.
-pub type Bound<'a> = HashMap<&'a str, Binding>;
+impl Binding<'_> {
+    /// The full name the binding stands for (`sys`, `sys.modules`), or None for a relative import.
+    pub fn origin(&self) -> Option<String> {
+        match (self.module, self.member) {
+            ("", _) => None,
+            (module, "") => Some(module.to_string()),
+            (module, member) => Some(format!("{module}.{member}")),
+        }
+    }
+}
+
+/// Bound name -> binding; a name bound twice ORs both flags and keeps the first origin.
+/// Shadowing is ignored.
+pub type Bound<'a> = HashMap<&'a str, Binding<'a>>;
 
 fn skip_back_blank(src: &[u8], mut at: usize) -> usize {
     while at > 0 && matches!(src[at - 1], b' ' | b'\t' | b'\x0c' | b'\n' | b'\\') {
@@ -139,10 +155,21 @@ struct Collector<'a, 'c> {
 }
 
 impl<'a> Collector<'a, '_> {
-    fn bind(&mut self, name: &'a str, class_like: bool, first_party: bool) {
+    fn bind(
+        &mut self,
+        name: &'a str,
+        class_like: bool,
+        first_party: bool,
+        (module, member): (&'a str, &'a str),
+    ) {
+        let fresh = !self.bound.contains_key(name);
         let old = self.bound.entry(name).or_default();
         old.class_like |= class_like;
         old.first_party |= first_party;
+        if fresh {
+            old.module = module;
+            old.member = member;
+        }
     }
 
     fn bind_hook_alias(&mut self, name: &'a str) {
@@ -171,7 +198,8 @@ impl<'a> Collector<'a, '_> {
                     let head = name.split('.').next().unwrap_or("");
                     let bound = alias.asname.as_ref().map(|a| a.as_str()).unwrap_or(head);
                     let first_party = self.config.is_first_party(name);
-                    self.bind(bound, false, first_party);
+                    let module = if alias.asname.is_some() { name } else { head };
+                    self.bind(bound, false, first_party, (module, ""));
                 }
             }
             Stmt::ImportFrom(i) => {
@@ -184,7 +212,8 @@ impl<'a> Collector<'a, '_> {
                     }
                     let bound = alias.asname.as_ref().map(|a| a.as_str()).unwrap_or(name);
                     let class_like = name.starts_with(|c: char| c.is_ascii_uppercase());
-                    self.bind(bound, class_like, first_party);
+                    let module = if i.level > 0 { "" } else { module };
+                    self.bind(bound, class_like, first_party, (module, name));
                     if bound != name && self.config.is_hook(name) {
                         self.bind_hook_alias(bound);
                     }
