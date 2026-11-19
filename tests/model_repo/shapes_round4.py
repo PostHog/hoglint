@@ -1094,8 +1094,8 @@ ROUND4: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r4_d_setattr_ext.backend.facade.temporal import WORKFLOWS as R4_D_SETATTR_EXT_WORKFLOWS\n\nQUEUES_R4_D_SETATTR_EXT = [("r4_d_setattr_ext", R4_D_SETATTR_EXT_WORKFLOWS, [])]\n'
         },
         "probes": ["backend/temporal/dsetattrexta.py", "backend/temporal/dsetattrextb.py"],
-        "outcome": "kept",
-        "why": "limit 1: another module changes the list",
+        "outcome": "unread",
+        "reason": "products.r4_d_setattr_ext.backend.facade.temporal.WORKFLOWS",
         "note": "another product module: setattr(temporal, 'W', temporal.W + [B])",
     },
     "r4_d_attr_ext": {
@@ -1111,8 +1111,8 @@ ROUND4: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r4_d_attr_ext.backend.facade.temporal import WORKFLOWS as R4_D_ATTR_EXT_WORKFLOWS\n\nQUEUES_R4_D_ATTR_EXT = [("r4_d_attr_ext", R4_D_ATTR_EXT_WORKFLOWS, [])]\n'
         },
         "probes": ["backend/temporal/dattrexta.py", "backend/temporal/dattrextb.py"],
-        "outcome": "kept",
-        "why": "limit 1: another module changes the list",
+        "outcome": "unread",
+        "reason": "products.r4_d_attr_ext.backend.facade.temporal.WORKFLOWS",
         "note": "another product module: temporal.W = temporal.W + [B]",
     },
     "r4_d_append_ext": {

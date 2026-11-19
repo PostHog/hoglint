@@ -159,7 +159,7 @@ READER_POSITIONS: list[tuple[str, str, str, str]] = [
     ("all", "all(X)", "", "read"),
     ("repr", "repr(X)", "", "read"),
     ("str", "str(X)", "", "read"),
-    ("id", "id(X)", "", "read"),
+    ("id", "id(X)", "", "address"),
     ("hash", "hash(X)", "", "read"),
     ("print", "print(X)", "", "read"),
     ("json_dumps", "json.dumps(X, default=repr)", "import json\n", "library"),
@@ -198,8 +198,11 @@ DIRECT = {
     "read": "watched",
     "library": "unread",
     "iterator": "unread",
-    "item": "watched",
+    # Round 8: a name bound to an item keeps where it came from, and a method of it hands the item on.
+    "item": "unread",
     "may be": "unread",
+    # Round 8: `id`'s integer gives the object back (`ctypes`), so it is no reader.
+    "address": "unread",
 }
 THROUGH_HOLDER = {
     "copy": "unread",
@@ -208,6 +211,7 @@ THROUGH_HOLDER = {
     "iterator": "unread",
     "item": "unread",
     "may be": "unread",
+    "address": "unread",
 }
 
 

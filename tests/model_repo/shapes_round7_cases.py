@@ -82,7 +82,8 @@ ENTRIES: list[tuple[str, str, str, str, tuple[str, ...]]] = [
     # T6
     ("t6_len", "_X = len(X)\n", "", "watched", ("a",)),
     ("t6_bool", "_X = bool(X)\n", "", "watched", ("a",)),
-    ("t6_id", "_X = id(X)\n", "", "watched", ("a",)),
+    # Round 8: `id` is no reader (`ctypes` turns its integer back into the object).
+    ("t6_id", "_X = id(X)\n", "", "unread", ("a",)),
     ("t6_hash", "_X = hash(tuple(X))\n", "", "watched", ("a",)),
     ("t6_repr", "_X = repr(X)\n", "", "watched", ("a",)),
     ("t6_str", "_X = str(X)\n", "", "watched", ("a",)),
@@ -217,7 +218,8 @@ RECORDS: list[tuple[str, str, str, str]] = [
     ("t3_class_holder", "plain", "\n\nclass _K:\n    L = WORKFLOWS\n\n\nBINDING = Rec(workflows=_K)\n", "watched"),
     ("t3_dataclass", "dataclass", "BINDING = Rec(workflows=WORKFLOWS)\n", "watched"),
     ("t3_dataclass_args", "dataclass_args", "BINDING = Rec(workflows=WORKFLOWS)\n", "watched"),
-    ("t3_function_decorator", "function_decorator", "BINDING = Rec(workflows=WORKFLOWS)\n", "watched"),
+    # Round 8: a first-party decorator may return anything, so the class is not bare.
+    ("t3_function_decorator", "function_decorator", "BINDING = Rec(workflows=WORKFLOWS)\n", "unread"),
     ("t3_new", "new", "BINDING = Rec(workflows=WORKFLOWS)\n", "watched"),
     ("t3_other_decorator", "other_decorator", "BINDING = Rec(workflows=WORKFLOWS)\n", "unread"),
     ("t3_base", "base", "BINDING = Rec(workflows=WORKFLOWS)\n", "unread"),

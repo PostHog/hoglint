@@ -1952,7 +1952,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r6_n_getattr_only.backend.facade.temporal import WORKFLOWS as R6_N_GETATTR_ONLY_WORKFLOWS\n\nQUEUES_R6_N_GETATTR_ONLY = [("r6_n_getattr_only", R6_N_GETATTR_ONLY_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/ngetattronlya.py"],
-        "outcome": "watched",
+        "outcome": "unread",
+        "reason": "products.r6_n_getattr_only.backend.facade.temporal.TEMPORAL",
         "note": "control: a module __getattr__ that serves another name",
     },
     "r6_t_except_as": {
@@ -2520,7 +2521,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r6_o_id.backend.facade.temporal import WORKFLOWS as R6_O_ID_WORKFLOWS\n\nQUEUES_R6_O_ID = [("r6_o_id", R6_O_ID_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/oida.py"],
-        "outcome": "watched",
+        "outcome": "unread",
+        "reason": "products.r6_o_id.backend.facade.temporal.WORKFLOWS",
         "note": "id(W)",
     },
     "r6_o_hash_tuple": {

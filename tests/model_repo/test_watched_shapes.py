@@ -21,6 +21,8 @@ from model_repo.shapes_round6 import ROUND6
 from model_repo.shapes_round6_cases import CASES as ROUND6_CASES
 from model_repo.shapes_round7 import ROUND7
 from model_repo.shapes_round7_cases import CASES as ROUND7_CASES
+from model_repo.shapes_round8 import ROUND8
+from model_repo.shapes_round8_cases import CASES as ROUND8_CASES
 from model_repo.test_watched import lay_derived, watched
 
 CLASS = "class {name}:\n    def run(self, x):\n        return x\n"
@@ -1267,4 +1269,59 @@ def test_round7_a_problem_row_makes_the_answer_incomplete_for_its_reason(
     assert any(p in problem and reason in problem for problem in round7_problems["problems"]), (
         reason,
         round7_problems["problems"],
+    )
+
+
+ROUND8_ALL = {**ROUND8, **ROUND8_CASES}
+ROUND8_PROBLEMS = {p: shape for p, shape in ROUND8_ALL.items() if shape["outcome"] == "problem"}
+ROUND8_OTHERS = {p: shape for p, shape in ROUND8_ALL.items() if shape["outcome"] != "problem"}
+
+
+@pytest.fixture(scope="module")
+def round8(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND8_OTHERS)
+
+
+@pytest.fixture(scope="module")
+def round8_problems(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND8_PROBLEMS)
+
+
+def test_round8_without_a_problem_row_is_complete(round8: dict[str, Any]) -> None:
+    assert round8["complete"], round8["problems"]
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND8_OTHERS.items() if shape["outcome"] == "watched"])
+def test_round8_each_file_core_runs_is_watched(round8: dict[str, Any], p: str) -> None:
+    group = round8["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], group["reasons"]
+    missing = [probe for probe in ROUND8_ALL[p]["probes"] if f"products/{p}/{probe}" not in group["watched"]]
+    assert missing == []
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND8_OTHERS.items() if shape["outcome"] == "unread"])
+def test_round8_a_use_no_entry_reads_fails_the_level_for_its_reason(round8: dict[str, Any], p: str) -> None:
+    group = round8["groups"][p]
+    assert not group["passes"]
+    reason = ROUND8_ALL[p]["reason"].replace("{p}", p)
+    words = ROUND8_ALL[p].get("words", "")
+    assert any(reason in text and words in text for text in group["reasons"]), (reason, group["reasons"])
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND8_OTHERS.items() if shape["outcome"] == "kept"])
+def test_round8_a_written_limit_keeps_the_product(round8: dict[str, Any], p: str) -> None:
+    """These pass as the design writes them (`why`); a change here is a change to a limit."""
+    group = round8["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], (ROUND8_ALL[p]["why"], group["reasons"])
+
+
+@pytest.mark.parametrize("p", list(ROUND8_PROBLEMS))
+def test_round8_a_problem_row_makes_the_answer_incomplete_for_its_reason(
+    round8_problems: dict[str, Any], p: str
+) -> None:
+    assert not round8_problems["complete"]
+    reason = ROUND8_ALL[p]["reason"]
+    assert any(p in problem and reason in problem for problem in round8_problems["problems"]), (
+        reason,
+        round8_problems["problems"],
     )
