@@ -23,8 +23,9 @@ from model_repo.shapes_round7 import ROUND7
 from model_repo.shapes_round7_cases import CASES as ROUND7_CASES
 from model_repo.shapes_round8 import ROUND8
 from model_repo.shapes_round8_cases import CASES as ROUND8_CASES
-from model_repo.shapes_round9 import ROUND9
+from model_repo.shapes_round9 import ROUND9 as ROUND9_PINNED
 from model_repo.shapes_round9_moves import moved
+from model_repo.shapes_round9b_cases import CASES as ROUND9B
 from model_repo.test_watched import lay_derived, watched
 
 # Round 9 moved these rows (`shapes_round9_moves.py`, each with its cause): the pinned data of
@@ -38,6 +39,7 @@ ROUND7 = moved(ROUND7)
 ROUND7_CASES = moved(ROUND7_CASES)
 ROUND8 = moved(ROUND8)
 ROUND8_CASES = moved(ROUND8_CASES)
+ROUND9 = moved(ROUND9_PINNED)
 
 CLASS = "class {name}:\n    def run(self, x):\n        return x\n"
 FUNCTION = "def {name}(x, mode=None):\n    return x\n"
@@ -1044,7 +1046,7 @@ def answer_of(tmp_path_factory: pytest.TempPathFactory, shapes: dict[str, dict[s
 
 
 ROUND4_PROBLEMS = {p: shape for p, shape in ROUND4.items() if shape["outcome"] == "problem"}
-ROUND4_OTHERS = {p: shape for p, shape in ROUND4.items() if shape["outcome"] != "problem"}
+ROUND4_OTHERS = {p: shape for p, shape in ROUND4.items() if shape["outcome"] != "problem" and not shape.get("alone")}
 
 
 @pytest.fixture(scope="module")
@@ -1127,7 +1129,7 @@ def test_any_other_computed_import_in_a_registration_point_is_a_problem(loads_pr
 
 
 ROUND5_PROBLEMS = {p: shape for p, shape in ROUND5.items() if shape["outcome"] == "problem"}
-ROUND5_OTHERS = {p: shape for p, shape in ROUND5.items() if shape["outcome"] != "problem"}
+ROUND5_OTHERS = {p: shape for p, shape in ROUND5.items() if shape["outcome"] != "problem" and not shape.get("alone")}
 
 
 @pytest.fixture(scope="module")
@@ -1177,7 +1179,9 @@ def test_round5_a_problem_row_makes_the_answer_incomplete(round5_problems: dict[
 # the answer.
 ROUND6_ALL = {**ROUND6, **ROUND6_CASES}
 ROUND6_PROBLEMS = {p: shape for p, shape in ROUND6_ALL.items() if shape["outcome"] == "problem"}
-ROUND6_OTHERS = {p: shape for p, shape in ROUND6_ALL.items() if shape["outcome"] != "problem"}
+ROUND6_OTHERS = {
+    p: shape for p, shape in ROUND6_ALL.items() if shape["outcome"] != "problem" and not shape.get("alone")
+}
 
 
 @pytest.fixture(scope="module")
@@ -1235,7 +1239,9 @@ def test_round6_a_problem_row_makes_the_answer_incomplete_for_its_reason(
 # holders, and each slot no entry names). Each unread or problem case pins the reason too.
 ROUND7_ALL = {**ROUND7, **ROUND7_CASES}
 ROUND7_PROBLEMS = {p: shape for p, shape in ROUND7_ALL.items() if shape["outcome"] == "problem"}
-ROUND7_OTHERS = {p: shape for p, shape in ROUND7_ALL.items() if shape["outcome"] != "problem"}
+ROUND7_OTHERS = {
+    p: shape for p, shape in ROUND7_ALL.items() if shape["outcome"] != "problem" and not shape.get("alone")
+}
 
 
 @pytest.fixture(scope="module")
@@ -1289,7 +1295,9 @@ def test_round7_a_problem_row_makes_the_answer_incomplete_for_its_reason(
 
 ROUND8_ALL = {**ROUND8, **ROUND8_CASES}
 ROUND8_PROBLEMS = {p: shape for p, shape in ROUND8_ALL.items() if shape["outcome"] == "problem"}
-ROUND8_OTHERS = {p: shape for p, shape in ROUND8_ALL.items() if shape["outcome"] != "problem"}
+ROUND8_OTHERS = {
+    p: shape for p, shape in ROUND8_ALL.items() if shape["outcome"] != "problem" and not shape.get("alone")
+}
 
 
 @pytest.fixture(scope="module")
@@ -1343,7 +1351,7 @@ def test_round8_a_problem_row_makes_the_answer_incomplete_for_its_reason(
 
 
 ROUND9_PROBLEMS = {p: shape for p, shape in ROUND9.items() if shape["outcome"] == "problem"}
-ROUND9_OTHERS = {p: shape for p, shape in ROUND9.items() if shape["outcome"] != "problem"}
+ROUND9_OTHERS = {p: shape for p, shape in ROUND9.items() if shape["outcome"] != "problem" and not shape.get("alone")}
 
 
 @pytest.fixture(scope="module")
@@ -1369,3 +1377,107 @@ def test_round9_a_use_no_entry_reads_fails_the_level_for_its_reason(round9: dict
     assert not group["passes"]
     reason = ROUND9[p]["reason"].replace("{p}", p)
     assert any(reason in text for text in group["reasons"]), (reason, group["reasons"])
+
+
+# Round 9b: a change through a module value the reading cannot name counts in every module, so
+# the rows that change one run apart from the quiet ones (the twins and the limit rows), and rows
+# that make every read a module value may reach unread run alone (`alone`).
+ROUND9B_PROBLEMS = {p: shape for p, shape in ROUND9B.items() if shape["outcome"] == "problem"}
+ROUND9B_ALONE = {p: shape for p, shape in ROUND9B.items() if shape.get("alone")}
+ROUND9B_QUIET = {
+    p: shape for p, shape in ROUND9B.items() if shape["outcome"] in ("watched", "kept") or shape.get("quiet")
+}
+ROUND9B_LOUD = {
+    p: shape
+    for p, shape in ROUND9B.items()
+    if shape["outcome"] == "unread" and not shape.get("alone") and not shape.get("quiet")
+}
+
+
+@pytest.fixture(scope="module")
+def round9b(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND9B_QUIET)
+
+
+@pytest.fixture(scope="module")
+def round9b_loud(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND9B_LOUD)
+
+
+@pytest.fixture(scope="module")
+def round9b_problems(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    return answer_of(tmp_path_factory, ROUND9B_PROBLEMS)
+
+
+def test_round9b_without_a_problem_row_is_complete(round9b: dict[str, Any]) -> None:
+    assert round9b["complete"], round9b["problems"]
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND9B_QUIET.items() if shape["outcome"] == "watched"])
+def test_round9b_each_file_core_runs_is_watched(round9b: dict[str, Any], p: str) -> None:
+    group = round9b["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], group["reasons"]
+    missing = [probe for probe in ROUND9B[p]["probes"] if f"products/{p}/{probe}" not in group["watched"]]
+    assert missing == []
+
+
+@pytest.mark.parametrize("p", list(ROUND9B_LOUD))
+def test_round9b_a_change_through_a_module_value_fails_the_level(round9b_loud: dict[str, Any], p: str) -> None:
+    group = round9b_loud["groups"][p]
+    assert not group["passes"]
+    reason = ROUND9B[p]["reason"]
+    assert any(reason in text for text in group["reasons"]), (reason, group["reasons"])
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND9B_QUIET.items() if shape["outcome"] == "kept"])
+def test_round9b_a_function_body_handoff_is_the_limit(round9b: dict[str, Any], p: str) -> None:
+    """Limit 9's round 9b sentence (`why`), waiting on the owner; a change here is a change to it."""
+    group = round9b["groups"].get(p, {"passes": True, "watched": {}, "reasons": []})
+    assert group["passes"], (ROUND9B[p]["why"], group["reasons"])
+
+
+@pytest.mark.parametrize("p", list(ROUND9B_ALONE))
+def test_round9b_an_unknown_member_or_a_handoff_at_import_fails_every_dependent_read(
+    tmp_path_factory: pytest.TempPathFactory, p: str
+) -> None:
+    group = answer_of(tmp_path_factory, {p: ROUND9B[p]})["groups"][p]
+    assert not group["passes"]
+    assert any(ROUND9B[p]["reason"] in text for text in group["reasons"]), group["reasons"]
+
+
+@pytest.mark.parametrize("p", list(ROUND9B_PROBLEMS))
+def test_round9b_a_computed_import_in_a_registration_point_is_a_problem(
+    round9b_problems: dict[str, Any], p: str
+) -> None:
+    assert not round9b_problems["complete"]
+    assert any(ROUND9B[p]["reason"] in problem for problem in round9b_problems["problems"]), round9b_problems[
+        "problems"
+    ]
+
+
+# Rows of rounds 5 to 9 whose change reaches every module (round 9b, `alone` in
+# `shapes_round9_moves.py`), each in an answer of its own.
+ALONE = {
+    p: shape
+    for rows in (ROUND5, ROUND6_ALL, ROUND7_ALL, ROUND8_ALL, ROUND9)
+    for p, shape in rows.items()
+    if shape.get("alone")
+}
+
+
+@pytest.mark.parametrize("p", list(ALONE))
+def test_a_row_whose_change_reaches_every_module_fails_the_level_alone(
+    tmp_path_factory: pytest.TempPathFactory, p: str
+) -> None:
+    group = answer_of(tmp_path_factory, {p: ALONE[p]})["groups"][p]
+    assert not group["passes"]
+    reason = ALONE[p].get("reason", f"products.{p}.backend.facade.temporal.WORKFLOWS").replace("{p}", p)
+    assert any(reason in text for text in group["reasons"]), (reason, group["reasons"])
+
+
+@pytest.mark.parametrize("p", [p for p, shape in ROUND9B_QUIET.items() if shape["outcome"] == "unread"])
+def test_round9b_a_change_through_a_resolved_module_fails_that_module_only(round9b: dict[str, Any], p: str) -> None:
+    """In the quiet run: the twins and the limit rows next to it stay as they are."""
+    group = round9b["groups"][p]
+    assert not group["passes"]
+    assert any(ROUND9B[p]["reason"] in text for text in group["reasons"]), group["reasons"]

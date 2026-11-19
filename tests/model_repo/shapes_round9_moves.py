@@ -1,7 +1,9 @@
 """The rows of rounds 4 to 8 whose answer round 9 moves (`engine/brief-watched-round9.md`), each
 with what it gives now (`outcome` and `reason`, or `unread` for the first shapes) and why (`moved`).
 Every move but one is a read the round no longer makes: it fails closed. The pinned data stays as it
-was; `moved` lays this over it."""
+was; `moved` lays this over it. Round 9b (`moved9b`) moves the `__globals__` rows limit 9 kept to
+unread, and marks `alone` the rows whose change reaches every module: they run in an answer of
+their own."""
 
 from __future__ import annotations
 
@@ -31,6 +33,16 @@ MOVES: dict[str, dict[str, Any]] = {
         "body binds it once; this body binds it twice",
         "outcome": "unread",
         "reason": "products.r4_e_body_rebind.backend.facade.temporal.Registration.WORKFLOWS",
+    },
+    "r5_g_import_module_self": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a computed module value "
+        "counts in every module, so the row runs alone",
+    },
+    "r5_g_sysmod_spec": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a computed module value counts "
+        "in every module, so the row runs alone",
     },
     "r5_g_tuple_holds_list": {
         "moved": "round 9 A: the holder's escape also lands on _BASE, the root list, which the answer names first",
@@ -72,6 +84,27 @@ MOVES: dict[str, dict[str, Any]] = {
         "outcome": "unread",
         "reason": "products.r6_g_builtins_patch_init.backend.facade.temporal.WORKFLOWS",
     },
+    "r6_h_func_globals_env": {
+        "moved9b": "round 9b (open point 1): a visible change through a function's "
+        "`__globals__` is a change of its module's list, no longer limit 9; in "
+        "a registration point the list is a problem of the answer",
+        "outcome": "problem",
+        "reason": "r6_h_func_globals_env",
+    },
+    "r6_n_func_globals": {
+        "moved9b": "round 9b (open point 1): a visible change through a function's "
+        "`__globals__` is a change of its module's list, no longer limit 9",
+        "outcome": "unread",
+        "reason": "products.r6_n_func_globals.backend.facade.temporal.WORKFLOWS",
+    },
+    "r6_n_lambda_globals": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a visible change through a function's "
+        "`__globals__` is a change of its module's list, no longer limit 9; a "
+        "lambda's `__globals__` names no module, so the row runs alone",
+        "outcome": "unread",
+        "reason": "products.r6_n_lambda_globals.backend.facade.temporal.WORKFLOWS",
+    },
     "r6_o_dict_fromkeys": {
         "moved": "round 9 B: the builtin copy readers (T5) are dropped",
         "outcome": "unread",
@@ -103,6 +136,12 @@ MOVES: dict[str, dict[str, Any]] = {
         "builtins (T8) are dropped",
         "outcome": "unread",
         "reason": "products.r6_o_zip_dict.backend.facade.temporal.WORKFLOWS",
+    },
+    "r6_t_func_globals": {
+        "moved9b": "round 9b (open point 1): a visible change through a function's "
+        "`__globals__` is a change of its module's list, no longer limit 9",
+        "outcome": "unread",
+        "reason": "products.r6_t_func_globals.backend.facade.temporal.WORKFLOWS",
     },
     "r6r_all": {
         "moved": "round 9 B: the builtin scalar readers (T6) are dropped",
@@ -682,6 +721,51 @@ MOVES: dict[str, dict[str, Any]] = {
         "moved": "round 9 B: the builtin scalar readers (T6) are dropped",
         "outcome": "unread",
         "reason": "products.r8b_relist_read.backend.facade.temporal.WORKFLOWS",
+    },
+    "r9_g4_bound": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a `__globals__` no name gives counts "
+        "in every module, so the row runs alone",
+    },
+    "r9_g4_bound_globals": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a `__globals__` no name gives "
+        "counts in every module, so the row runs alone",
+    },
+    "r9_g4_class_method": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a `__globals__` no name gives "
+        "counts in every module, so the row runs alone",
+    },
+    "r9_g4_copy_idx_globals": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a `__globals__` no name "
+        "gives counts in every module, so the row runs alone",
+    },
+    "r9_g4_direct": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a `__globals__` no name gives counts "
+        "in every module, so the row runs alone",
+    },
+    "r9_g4_for": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a `__globals__` no name gives counts in "
+        "every module, so the row runs alone",
+    },
+    "r9_g4_get": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a `__globals__` no name gives counts in "
+        "every module, so the row runs alone",
+    },
+    "r9_g4_max_globals": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a `__globals__` no name gives "
+        "counts in every module, so the row runs alone",
+    },
+    "r9_g4_store_globals": {
+        "alone": True,
+        "moved9b": "round 9b (open point 1): a change through a `__globals__` no name gives "
+        "counts in every module, so the row runs alone",
     },
 }
 
