@@ -533,6 +533,10 @@ class NativeRuleContext(RuleContext):
                 rule.unknown_selection(module, covers[at])
             elif what == "unread-items":
                 rule.unread_items(module, surface)
+            elif what == "unread-bound":
+                rule.unread_items(module, surface, "it is bound more than once")
+            elif what == "unread-rebound":
+                rule.unread_items(module, surface, "it is bound again by a form the reading cannot read")
             elif what == "unread-core-items":
                 rule.unread_core_items(surface)
             elif what == "computed-load":

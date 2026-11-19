@@ -301,6 +301,9 @@ pub struct Link {
     /// words (produce.rs `computed_loads`): in a registration point, the `: items` cover cannot
     /// tell which module it registers.
     pub computed_loads: Vec<(Sid, String)>,
+    /// Why a name the reading cannot read is unread, when a binding says it (produce.rs
+    /// `unread_causes`).
+    pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
     /// Every name a module or a class body binds by assignment, constants too (produce.rs
     /// `bound`): a name a registration point iterates that holds no list is a constant, not
     /// something the link cannot read.
@@ -442,6 +445,7 @@ impl Link {
             defined: FxHashSet::default(),
             path_lists: FxHashSet::default(),
             computed_loads: Vec::new(),
+            unread_causes: FxHashMap::default(),
         };
         producers.run();
         let mut edges = std::mem::take(&mut producers.edges);
@@ -453,6 +457,7 @@ impl Link {
         let sequences = std::mem::take(&mut producers.sequences);
         let computed_reads = std::mem::take(&mut producers.computed_reads);
         let computed_loads = std::mem::take(&mut producers.computed_loads);
+        let unread_causes = std::mem::take(&mut producers.unread_causes);
         let bound = std::mem::take(&mut producers.bound);
         let defined = std::mem::take(&mut producers.defined);
         let outside_bases = Self::outside_bases(&mut core, &edges, &settings.names.builtins);
@@ -479,6 +484,7 @@ impl Link {
             sequences,
             computed_reads,
             computed_loads,
+            unread_causes,
             bound,
             defined,
             outside_bases,

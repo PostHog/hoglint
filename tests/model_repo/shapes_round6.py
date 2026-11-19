@@ -1975,7 +1975,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/texceptasa.py", "backend/temporal/texceptasb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_except_as.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_except_as.backend.facade.temporal.WORKFLOWS' (it is bound again by a form the reading cannot read)",
         "note": "tuple W; except _E as W (W is deleted after the handler: the import then fails)",
     },
     "r6_t_match_capture": {
@@ -1998,7 +1998,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tmatchcapturea.py", "backend/temporal/tmatchcaptureb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_match_capture.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_match_capture.backend.facade.temporal.WORKFLOWS' (it is bound again by a form the reading cannot read)",
         "note": "tuple W; match (A, B): case W: (a capture binds W)",
     },
     "r6_t_import_as": {
@@ -2045,7 +2045,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tclassmetaitera.py", "backend/temporal/tclassmetaiterb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_class_meta_iter.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_class_meta_iter.backend.facade.temporal.WORKFLOWS' (it is bound again by a form the reading cannot read)",
         "note": "tuple W; class W(metaclass=_Meta) whose iteration gives A, B",
     },
     "r6_t_def_decorated": {
@@ -2068,7 +2068,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tdefdecorateda.py", "backend/temporal/tdefdecoratedb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_def_decorated.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_def_decorated.backend.facade.temporal.WORKFLOWS' (it is bound again by a form the reading cannot read)",
         "note": "tuple W; @_call def W(): return (A, B) (W is the tuple (A, B))",
     },
     "r6_t_type_stmt": {
@@ -2091,7 +2091,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/ttypestmta.py", "backend/temporal/ttypestmtb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_type_stmt.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_type_stmt.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
         "note": "tuple W; type W = (A, B)",
     },
     "r6_t_second_annassign": {
@@ -2114,7 +2114,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tsecondannassigna.py", "backend/temporal/tsecondannassignb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_second_annassign.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_second_annassign.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
         "note": "tuple W; W: tuple = (A, B)",
     },
     "r6_t_global_func_assign": {
@@ -2137,7 +2137,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tglobalfuncassigna.py", "backend/temporal/tglobalfuncassignb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_global_func_assign.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_global_func_assign.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
         "note": "tuple W; a function rebinds global W, called at module level",
     },
     "r6_t_global_func_for": {
@@ -2160,7 +2160,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tglobalfuncfora.py", "backend/temporal/tglobalfuncforb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_global_func_for.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_global_func_for.backend.facade.temporal.WORKFLOWS' (it is bound again by a form the reading cannot read)",
         "note": "tuple W; a function rebinds global W as a for target, called at module level",
     },
     "r6_t_del_rebind": {
@@ -2183,7 +2183,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tdelrebinda.py", "backend/temporal/tdelrebindb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_del_rebind.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_del_rebind.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
         "note": "tuple W; del W; W = (A, B)",
     },
     "r6_t_class_global": {
@@ -2206,7 +2206,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tclassglobala.py", "backend/temporal/tclassglobalb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_class_global.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_class_global.backend.facade.temporal.WORKFLOWS' (it is bound again by a form the reading cannot read)",
         "note": "tuple W; class _C: global W; W = (A, B) (the class body rebinds the module's W)",
     },
     "r6_g_class_global_list": {
@@ -2229,7 +2229,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/gclassgloballista.py", "backend/temporal/gclassgloballistb.py"],
         "outcome": "unread",
-        "reason": "products.r6_g_class_global_list.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_g_class_global_list.backend.facade.temporal.WORKFLOWS' (it is bound again by a form the reading cannot read)",
         "note": "list W; class _C: global W; W = [A, B]",
     },
     "r6_t_class_global_for": {
@@ -2252,7 +2252,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tclassglobalfora.py", "backend/temporal/tclassglobalforb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_class_global_for.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_class_global_for.backend.facade.temporal.WORKFLOWS' (it is bound again by a form the reading cannot read)",
         "note": "tuple W; class _C: global W; for W in [(A, B)]",
     },
     "r6_t_walrus_comp": {
@@ -2275,7 +2275,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/twalruscompa.py", "backend/temporal/twalruscompb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_walrus_comp.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_walrus_comp.backend.facade.temporal.WORKFLOWS' (it is bound again by a form the reading cannot read)",
         "note": "tuple W; [(W := (A, B)) for _ in [0]] (the walrus binds the module's W)",
     },
     "r6_t_unpack_target": {
@@ -2298,7 +2298,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tunpacktargeta.py", "backend/temporal/tunpacktargetb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_unpack_target.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_unpack_target.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
         "note": "tuple W; (W,) = ((A, B),)",
     },
     "r6_t_list_target": {
@@ -2321,7 +2321,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tlisttargeta.py", "backend/temporal/tlisttargetb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_list_target.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_list_target.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
         "note": "tuple W; [W] = [(A, B)]",
     },
     "r6_t_star_target": {
@@ -2344,7 +2344,7 @@ ROUND6: dict[str, dict[str, Any]] = {
         },
         "probes": ["backend/temporal/tstartargeta.py", "backend/temporal/tstartargetb.py"],
         "outcome": "unread",
-        "reason": "products.r6_t_star_target.backend.facade.temporal.WORKFLOWS",
+        "reason": "products.r6_t_star_target.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
         "note": "tuple W; *W, = (A, B)",
     },
     "r6_t_globals_alias": {
@@ -3624,7 +3624,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "ee/hogai/core/agent_modes/presets/r6_h_func_globals_env.py": 'import importlib\nimport os\n\nMODULES = ["products.r6_h_func_globals_env.backend.temporal.health_checks.check"]\n\n\ndef _f():\n    pass\n\n\n_f.__globals__["MODULES"].append(os.environ["X"])\n\n\ndef load():\n    for m in MODULES:\n        importlib.import_module(m)\n',
         },
         "probes": ["backend/temporal/health_checks/check.py"],
-        "outcome": "watched",
+        "outcome": "kept",
+        "why": "limit 9: a function's __globals__",
         "note": "_f.__globals__['MODULES'].append(computed)",
     },
     "r6_h_class_global_env": {

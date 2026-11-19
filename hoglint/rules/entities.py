@@ -366,8 +366,9 @@ class CoveragePrimitive(EntityRule):
         reason = f"cannot place {surface!r} for coverage"
         self.incomplete(f"{module}|{surface}", module, reason, IncompleteKind.NOT_MODELLED)
 
-    def unread_items(self, module: str | None, sequence: str) -> None:
-        reason = f"cannot read every item of {sequence!r}, so the modules that define them are unknown"
+    def unread_items(self, module: str | None, sequence: str, cause: str = "") -> None:
+        why = f" ({cause})" if cause else ""
+        reason = f"cannot read every item of {sequence!r}{why}, so the modules that define them are unknown"
         self.incomplete(f"{module}|{sequence}", module, reason, IncompleteKind.NOT_MODELLED)
 
     def unread_core_items(self, sequence: str) -> None:

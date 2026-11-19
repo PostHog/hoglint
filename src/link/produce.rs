@@ -1162,6 +1162,19 @@ static ESCAPED: Assign = Assign {
     ann: None,
 };
 
+/// The row a binding the reading cannot read touches a name with (`=name`, an import after a
+/// binding): no value; `unread_cause` tells it apart from an escape.
+static REBOUND: Assign = Assign {
+    s: -1,
+    l: 0,
+    c: 0,
+    f: 0,
+    op: Op::Other,
+    targets: Vec::new(),
+    value: None,
+    ann: None,
+};
+
 /// One assignment row that touches a name, and how.
 struct Touching<'r> {
     at: usize,
@@ -1204,6 +1217,25 @@ fn unpacked_targets(target: &V, out: &mut Vec<Sid>) {
         V::Star(inner) => unpacked_targets(inner, out),
         _ => {}
     }
+}
+
+/// Why a name's rows do not read exactly, when a binding says it: bound more than once
+/// (`bound`), or bound again by a form the reading cannot read (`rebound`: `=name`, an import
+/// after a binding); None for any other cause (an escape, an alias, `*`, a block).
+fn unread_cause(rows: &[Touching]) -> Option<&'static str> {
+    let bindings = (rows.iter())
+        .filter(|t| {
+            matches!(
+                t.touch,
+                Touch::Bind | Touch::Element(_) | Touch::Elements(..)
+            )
+        })
+        .count();
+    if bindings > 1 {
+        return Some("bound");
+    }
+    let rebound = |t: &&Touching| t.touch == Touch::Other && std::ptr::eq(t.row, &REBOUND);
+    rows.iter().any(|t| rebound(&t)).then_some("rebound")
 }
 
 /// Builds the core edges of every analyzed file, producer by producer.
@@ -1258,6 +1290,9 @@ pub struct Producers<'p> {
     /// Each place a module names a module by a value the link cannot read exactly, by module, in
     /// words (`computed_loads`).
     pub computed_loads: Vec<(Sid, String)>,
+    /// Why a name the reading cannot read is unread, when a binding says it, by (module, key):
+    /// "bound" (bound more than once) or "rebound" (bound again by a form it cannot read).
+    pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
 }
 
 /// What each module-level sequence of names holds, by (module, name): per item, the entity its
@@ -1707,7 +1742,16 @@ impl Producers<'_> {
             let (keys, touch): (Vec<Sid>, Touch) = if text == "*" {
                 (out.keys().copied().collect(), Touch::Other)
             } else if let Some(name) = text.strip_prefix('=') {
-                (self.escape_keys(owner, scope, name, out), Touch::Other)
+                for key in self.escape_keys(owner, scope, name, out) {
+                    if let Some(entry) = out.get_mut(&key) {
+                        entry.1.push(Touching {
+                            at: usize::MAX,
+                            row: &REBOUND,
+                            touch: Touch::Other,
+                        });
+                    }
+                }
+                continue;
             } else if let Some(class) = text.strip_suffix(".*") {
                 let prefix = format!("{class}.");
                 let keys = (out.keys().copied())
@@ -1850,9 +1894,10 @@ impl Producers<'_> {
                     .any(|touching| touching.touch == Touch::Bind && touching.row.l < row.line);
                 let binds = names.as_ref().is_none_or(|names| names.contains(key));
                 if (itself || bound_before) && binds {
+                    let row = if itself { &ESCAPED } else { &REBOUND };
                     rows.push(Touching {
                         at: usize::MAX,
-                        row: &ESCAPED,
+                        row,
                         touch: Touch::Other,
                     });
                 }
@@ -2181,6 +2226,11 @@ impl Producers<'_> {
             seen.insert(Ent { m: module, s: key });
             let items = self.name_items(owner, module, *name, rows, reading, &mut text, &mut seen);
             self.bound.insert((module, key));
+            if items.contains(&None)
+                && let Some(cause) = unread_cause(rows)
+            {
+                self.unread_causes.insert((module, key), cause);
+            }
             if key == *name && self.holds_paths(*name, rows) {
                 self.path_lists.insert((module, key));
             }

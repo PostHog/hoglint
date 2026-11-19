@@ -112,6 +112,8 @@ impl Cover {
 /// cover, source module, surface): "not-run" for a cover whose rule did not run, "unplaced" for
 /// an edge it cannot place, "unknown-selection" for a module an entity cover cannot tell it keeps,
 /// "unread-items" for a sequence with an item it cannot read (the surface is the sequence),
+/// "unread-bound" and "unread-rebound" for one bound more than once, or bound again by a form the
+/// reading cannot read,
 /// "unread-core-items" for one in a list no group owns that a registration point registers,
 /// "computed-load" for a module a registration point names by a value the link cannot read
 /// exactly (the surface is that place, in words).
@@ -600,7 +602,12 @@ fn sequence_files(
                 // The unknown is the list's product's: its set may miss the item.
                 let named = format!("{}.{}", cx.text(list.0), cx.text(list.1));
                 let module = Some(cx.text(list.0).to_string());
-                out.incomplete.push(("unread-items", at, module, named));
+                let what = match cx.link.unread_causes.get(&list) {
+                    Some(&"bound") => "unread-bound",
+                    Some(&"rebound") => "unread-rebound",
+                    _ => "unread-items",
+                };
+                out.incomplete.push((what, at, module, named));
                 continue;
             };
             need(ent.m);

@@ -110,6 +110,11 @@ BINDING_FORMS: list[tuple[str, str, str, str]] = [
     ),
 ]
 MORE = "from products.{p}.backend.temporal.b import BFlow\n\nOTHER = (BFlow,)\n"
+# The cause an unread tuple's reason names: an assignment the reading reads binds it more than once;
+# any other form binds it again by a form the reading cannot read.
+ASSIGNMENT_FORMS = {"assign", "annassign", "unpack", "star_target", "type", "del", "function_global_assign"}
+BOUND = "it is bound more than once"
+REBOUND = "it is bound again by a form the reading cannot read"
 
 
 def binding_cases() -> dict[str, dict[str, Any]]:
@@ -118,6 +123,8 @@ def binding_cases() -> dict[str, dict[str, Any]]:
         p = f"r6f_{form}"
         body = "WORKFLOWS = (AFlow,)\n" + binding
         case = facade_case(p, body, direct, f"a tuple bound again by {form}", more=MORE)
+        if direct == "unread":
+            case["reason"] += "' (" + (BOUND if form in ASSIGNMENT_FORMS else REBOUND) + ")"
         if direct == "imported":
             case["outcome"] = "watched"
             case["probes"] = ["backend/temporal/more.py"]
