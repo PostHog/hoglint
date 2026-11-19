@@ -84,6 +84,9 @@ struct Shape {
     /// class, a second class statement, a decorator or a metaclass may replace what the body
     /// binds, so it is never T13's other operand.
     class_alias: bool,
+    /// The lists a re-list's items come from (`_Z = [*W]`, `_Z = W + [x]`, `_Z += W`), each a
+    /// name of a scope: an item of the identity is an item of each of them.
+    relist: Vec<(String, i64)>,
 }
 
 /// One binding of an identity, as the inventory reads it (`Walker::survey`).
@@ -116,6 +119,16 @@ impl<'a> Bind<'a> {
 
 /// A module-level or class-body binding identity: (scope, name).
 type Identity<'a> = (i64, &'a str);
+
+/// What a name a store goes through stands for (`Walker::alias_target`).
+enum Aliased<'a> {
+    /// No name assigns it a name: itself.
+    No,
+    /// The name its chain of plain assignments reaches.
+    To(&'a str),
+    /// A chain that does not reach exactly one name: any module.
+    Unknown,
+}
 
 /// A marker in an alias's groups (`Bind::Alias`): one of the names is a class attribute.
 const CLASS_ALIAS: Identity<'static> = (-2, "");
@@ -358,9 +371,20 @@ pub struct Walker<'a, 'w> {
     statement: Option<&'a Expr>,
     /// What the file patches (`patched_names`).
     patched: Patched<'a>,
+    /// The re-lists the inventory found: each binding identity and the lists its value takes
+    /// items of (`relist_sources`), joined into `Shape::relist` by `settle`.
+    relists: Vec<(Identity<'a>, Vec<(String, i64)>)>,
     /// Whether the file stores into a module the patch check cannot name (`survey`): every
     /// callee may be patched.
     patched_any: bool,
+    /// The names the file binds, in any scope, by a plain assignment of a name an import binds
+    /// or of another such name (`_g = _f`): they may hold a module object.
+    name_aliases: HashSet<&'a str>,
+    /// The module-level statements `name = other` outside any block, by name.
+    top_aliases: HashMap<&'a str, &'a str>,
+    /// The heads the file stores into (`Patched::heads` and `Patched::items`), each name
+    /// assigned a name replaced by the name it reaches (`alias_target`).
+    patched_heads: HashSet<&'a str>,
     /// Every binding the file makes in any scope by a form other than an import, by name and how
     /// many (`OtherBindings`): a callee with one has no unique, still-valid binding.
     others: HashMap<&'a str, usize>,
@@ -412,7 +436,11 @@ impl<'a, 'w> Walker<'a, 'w> {
             modules_aliases: HashSet::new(),
             statement: None,
             patched: Patched::default(),
+            relists: Vec::new(),
             patched_any: false,
+            name_aliases: HashSet::new(),
+            top_aliases: HashMap::new(),
+            patched_heads: HashSet::new(),
             others: HashMap::new(),
             parameters: HashSet::new(),
             star_import: false,
@@ -479,7 +507,51 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// stand for `sys.modules`; what the file patches; a first-party star import.
     fn survey(&mut self, suite: &'a [Stmt]) {
         self.patched = patched_names(suite);
-        self.patched_any = self.patches_unnamed(suite);
+        let mut bindings = ValueBindings::default();
+        bindings.visit_body(suite);
+        // The names assigned, in any scope, a name an import binds or another such name: they
+        // may hold a module object.
+        let assigned: Vec<(&'a str, &'a str)> = (bindings.pairs.iter())
+            .filter_map(|(name, value)| value.as_name_expr().map(|v| (*name, v.id.as_str())))
+            .collect();
+        loop {
+            let before = self.name_aliases.len();
+            for (name, value) in &assigned {
+                if self.bound.contains_key(value) || self.name_aliases.contains(value) {
+                    self.name_aliases.insert(name);
+                }
+            }
+            if self.name_aliases.len() == before {
+                break;
+            }
+        }
+        for stmt in suite {
+            if let Stmt::Assign(a) = stmt
+                && let Expr::Name(value) = &*a.value
+            {
+                for target in a.targets.iter().filter_map(Expr::as_name_expr) {
+                    self.top_aliases
+                        .insert(target.id.as_str(), value.id.as_str());
+                }
+            }
+        }
+        let mut unknown = false;
+        let heads: Vec<&'a str> = (self.patched.heads.iter())
+            .chain(self.patched.items.iter())
+            .copied()
+            .collect();
+        for head in heads {
+            match self.alias_target(head, 0) {
+                Aliased::No => {
+                    self.patched_heads.insert(head);
+                }
+                Aliased::To(target) => {
+                    self.patched_heads.insert(target);
+                }
+                Aliased::Unknown => unknown = true,
+            }
+        }
+        self.patched_any = unknown || self.patches_unnamed(suite);
         let mut found: Vec<Found<'a>> = Vec::new();
         self.survey_body(suite, -1, &HashSet::new(), &mut found);
         self.settle(found);
@@ -509,10 +581,51 @@ impl<'a, 'w> Walker<'a, 'w> {
                     origin.ends_with(".__dict__") || origin.ends_with(".__globals__")
                 })
         };
-        let heads = self.patched.heads.iter().chain(self.patched.items.iter());
-        heads
-            .into_iter()
+        (self.patched_heads.iter())
             .any(|head| objects.contains(head) || builtin_object(head) || through_dict(head))
+    }
+
+    /// What a name a store goes through stands for (t30's ruling, round 8b): a name the file
+    /// assigns a name that may hold a module (`_g = _f`, or a chain of such) is the name the
+    /// chain reaches, when every
+    /// link is the name's only binding in the file, a module-level statement outside any block,
+    /// and the chain ends at a name an import binds (and nothing else does) or a class or def
+    /// the module binds once. Any other chain is `Unknown`: the file may patch any module.
+    fn alias_target(&self, head: &'a str, depth: usize) -> Aliased<'a> {
+        if !self.name_aliases.contains(head) {
+            return Aliased::No;
+        }
+        let only = self.others.get(head) == Some(&1) && !self.bound.contains_key(head);
+        let (Some(&value), true) = (self.top_aliases.get(head), only) else {
+            return Aliased::Unknown;
+        };
+        if depth > 16 {
+            return Aliased::Unknown;
+        }
+        if self.bound.contains_key(value) {
+            return if self.others.contains_key(value) {
+                Aliased::Unknown
+            } else {
+                Aliased::To(value)
+            };
+        }
+        match self.alias_target(value, depth + 1) {
+            Aliased::No => {
+                let defined = (self.defs.entries.iter()).any(|entry| {
+                    entry.parent == -1
+                        && match entry.node {
+                            DefNode::Func(f) => f.name.as_str() == value,
+                            DefNode::Class(c) => c.name.as_str() == value,
+                        }
+                });
+                if defined && self.others.get(value) == Some(&1) {
+                    Aliased::To(value)
+                } else {
+                    Aliased::Unknown
+                }
+            }
+            reached => reached,
+        }
     }
 
     /// The bindings of one module-level or class body (`scope`) and the blocks in it; `global`
@@ -526,6 +639,32 @@ impl<'a, 'w> Walker<'a, 'w> {
     ) {
         for stmt in suite {
             let mut positive: Vec<(&'a str, Bind<'a>)> = Vec::new();
+            let relisted: Vec<(&'a str, &'a Expr)> = match stmt {
+                Stmt::Assign(a) => (a.targets.iter())
+                    .filter_map(|t| t.as_name_expr().map(|n| (n.id.as_str(), &*a.value)))
+                    .collect(),
+                Stmt::AnnAssign(a) => match (&*a.target, a.value.as_deref()) {
+                    (Expr::Name(name), Some(value)) => vec![(name.id.as_str(), value)],
+                    _ => Vec::new(),
+                },
+                Stmt::AugAssign(a) if matches!(a.op, ast::Operator::Add | ast::Operator::BitOr) => {
+                    match &*a.target {
+                        Expr::Name(name) => vec![(name.id.as_str(), &*a.value)],
+                        _ => Vec::new(),
+                    }
+                }
+                _ => Vec::new(),
+            };
+            for (name, value) in relisted {
+                let sources = match stmt {
+                    Stmt::AugAssign(_) => self.item_source(value, scope).into_iter().collect(),
+                    _ => self.relist_sources(value, scope),
+                };
+                if !sources.is_empty() {
+                    let at = if global.contains(name) { -1 } else { scope };
+                    self.relists.push(((at, name), sources));
+                }
+            }
             match stmt {
                 Stmt::Assign(a) => {
                     for target in &a.targets {
@@ -769,6 +908,130 @@ impl<'a, 'w> Walker<'a, 'w> {
         Some(source)
     }
 
+    /// The lists a value re-lists (T1, T13): each `*X` of a list or tuple display, each operand
+    /// of `+` that is a name, a class attribute or a copy (`item_source`), through nested
+    /// displays and `+`.
+    fn relist_sources(&self, value: &'a Expr, scope: i64) -> Vec<(String, i64)> {
+        match value {
+            Expr::List(ast::ExprList { elts, .. }) | Expr::Tuple(ast::ExprTuple { elts, .. }) => {
+                (elts.iter())
+                    .filter_map(|elt| match elt {
+                        Expr::Starred(star) => self.item_source(&star.value, scope),
+                        _ => None,
+                    })
+                    .collect()
+            }
+            Expr::BinOp(binary) if binary.op == ast::Operator::Add => [&binary.left, &binary.right]
+                .into_iter()
+                .flat_map(|side| match &**side {
+                    Expr::List(_) | Expr::Tuple(_) | Expr::BinOp(_) => {
+                        self.relist_sources(side, scope)
+                    }
+                    side => self.item_source(side, scope).into_iter().collect(),
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Every list an item of `source` (a name of `scope`, or `Class.ATTR`) is an item of too: the
+    /// lists it re-lists, at any depth (`Shape::relist`).
+    fn relist_closure(&self, source: &str, scope: i64) -> Vec<(String, i64)> {
+        let mut out: Vec<(String, i64)> = Vec::new();
+        let mut stack = vec![(source.to_string(), scope)];
+        while let Some((name, scope)) = stack.pop() {
+            let Some(shape) = self.source_shape(&name, scope) else {
+                continue;
+            };
+            for held in shape.relist {
+                if held.0 != source && !out.contains(&held) {
+                    out.push(held.clone());
+                    stack.push(held);
+                }
+            }
+        }
+        out
+    }
+
+    /// The shape of a source the use reading names: a name read in `scope`, or a class
+    /// attribute by its dotted path from the module (`Outer.Inner.ATTR`).
+    fn source_shape(&self, name: &str, scope: i64) -> Option<Shape> {
+        let Some((path, attribute)) = name.rsplit_once('.') else {
+            return self.shape_of(scope, name);
+        };
+        let class = (0..self.defs.entries.len() as i64)
+            .find(|&index| self.defs.is_class(index) && self.class_path(index) == path)?;
+        self.identities.get(&(class, attribute)).cloned()
+    }
+
+    /// The escapes of an item of `source`: for it, and for every list it re-lists.
+    fn emit_item_escape(&mut self, name: &ast::ExprName, at: At, source: &str, scope: i64) {
+        self.emit_escape(name, At { scope, ..at }, source);
+        for (held, held_scope) in self.relist_closure(source, scope) {
+            self.emit_escape(
+                name,
+                At {
+                    scope: held_scope,
+                    ..at
+                },
+                &held,
+            );
+        }
+    }
+
+    /// Whether a use of a re-list takes an item out of it that escapes (a re-list is read as a
+    /// value; its items are its sources' too): an element (`read_item`), `.pop()` or `.get()`,
+    /// `min`/`max`/`sum`, or the same of a copy of it. Iteration hands its targets the source
+    /// (`item_source`), so the loop's own escapes carry it.
+    fn take_items(&self, frames: &[Frame<'a>], at: At, site: TextSize) -> Outcome<'a> {
+        let up = |k: usize| frames.len().checked_sub(k).map(|i| frames[i]);
+        let above = |k: usize| &frames[..frames.len() - k];
+        let Some(first) = up(1) else {
+            return Outcome::Read;
+        };
+        match first {
+            Frame::SubValue(subscript) => match up(2) {
+                Some(Frame::Terminal(text)) if text.ends_with("-target") || text == "del" => {
+                    Outcome::Read
+                }
+                _ if subscript.slice.is_slice_expr() => self.take_items(above(1), at, site),
+                _ => self.read_item(above(1), at, site),
+            },
+            Frame::Attr(method) => {
+                let Some(Frame::CallFunc(call)) = up(2) else {
+                    return Outcome::Read;
+                };
+                let bare = call.arguments.args.is_empty() && call.arguments.keywords.is_empty();
+                match method {
+                    "copy" | "keys" | "values" | "items" if bare => {
+                        self.take_items(above(2), at, site)
+                    }
+                    "pop" | "get" => self.read_item(above(2), at, site),
+                    _ => Outcome::Read,
+                }
+            }
+            Frame::Arg(call, 0) if !has_star_arguments(call) => {
+                let only = call.arguments.args.len() == 1 && call.arguments.keywords.is_empty();
+                match self.resolve(&callee_text(call)).as_deref() {
+                    Some(
+                        "builtins.list" | "builtins.tuple" | "builtins.set" | "builtins.frozenset"
+                        | "builtins.dict",
+                    ) if only => self.take_items(above(1), at, site),
+                    Some("builtins.sorted") => self.take_items(above(1), at, site),
+                    Some("builtins.min" | "builtins.max" | "builtins.sum") if only => {
+                        self.read_item(above(1), at, site)
+                    }
+                    Some(full) if ITERATORS.contains(&full) => match up(2) {
+                        Some(Frame::Arg(..)) => self.take_items(above(2), at, site),
+                        _ => Outcome::Read,
+                    },
+                    _ => Outcome::Read,
+                }
+            }
+            _ => Outcome::Read,
+        }
+    }
+
     /// The name an expression is an item of (T6, T9, T10): `X[i]` with an index that is no
     /// slice, `X.pop(...)`, `X.get(...)`, `min(X)`, `max(X)`, `sum(X)`, or an element of a copy,
     /// `X.copy()[i]` (a view's too), X a name of this module or a class attribute of a class it
@@ -875,6 +1138,13 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// one, an item when any binding takes items.
     fn settle(&mut self, found: Vec<Found<'a>>) {
         let mut deps: HashMap<Identity<'a>, Vec<Vec<Identity<'a>>>> = HashMap::new();
+        for (identity, sources) in std::mem::take(&mut self.relists) {
+            let shape = self.identities.entry(identity).or_insert(Shape {
+                builtin: true,
+                ..Shape::default()
+            });
+            shape.relist.extend(sources);
+        }
         for (identity, bind) in found {
             let shape = self.identities.entry(identity).or_insert(Shape {
                 builtin: true,
@@ -921,10 +1191,21 @@ impl<'a, 'w> Walker<'a, 'w> {
                     .find_map(|dep| self.identities.get(dep).and_then(|s| s.item_of.clone()));
                 let class_alias = (groups.iter().flatten())
                     .any(|dep| self.identities.get(dep).is_some_and(|s| s.class_alias));
+                // An alias of a re-list is the same list: its items come from the same lists.
+                let relist: Vec<(String, i64)> = (groups.iter().flatten())
+                    .filter_map(|dep| self.identities.get(dep))
+                    .flat_map(|s| s.relist.clone())
+                    .collect();
                 let shape = self.identities.get_mut(identity).expect("a found identity");
                 if class_alias && !shape.class_alias {
                     shape.class_alias = true;
                     changed = true;
+                }
+                for held in relist {
+                    if !shape.relist.contains(&held) {
+                        shape.relist.push(held);
+                        changed = true;
+                    }
                 }
                 if shape.builtin && !builtin {
                     shape.builtin = false;
@@ -958,6 +1239,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 record: a.record || b.record,
                 item_of: a.item_of.or(b.item_of),
                 class_alias: a.class_alias || b.class_alias,
+                relist: [a.relist, b.relist].concat(),
             }),
             (a, b) => a.or(b),
         }
@@ -1704,6 +1986,9 @@ impl<'a, 'w> Walker<'a, 'w> {
         let site = name.range.start();
         // A name bound to an item is the item, read for the name it came from, and a value of
         // its own the inventory cannot type.
+        let relist = !self.relist_closure(&reached, at.scope).is_empty()
+            && matches!(start, Start::Value { .. } | Start::Item { own: true, .. })
+            && matches!(self.take_items(frames, at, site), Outcome::Escape);
         let (start, item_escape) = match start {
             Start::Item {
                 source,
@@ -1730,7 +2015,19 @@ impl<'a, 'w> Walker<'a, 'w> {
         };
         let mut relied = std::mem::take(&mut *self.relied.borrow_mut());
         if let Some((source, scope)) = item_escape {
-            self.emit_escape(name, At { scope, ..at }, &source);
+            self.emit_item_escape(name, at, &source, scope);
+        }
+        if relist {
+            for (held, held_scope) in self.relist_closure(&reached, at.scope) {
+                self.emit_escape(
+                    name,
+                    At {
+                        scope: held_scope,
+                        ..at
+                    },
+                    &held,
+                );
+            }
         }
         if !matches!(outcome, Outcome::Escape) && !relied.is_empty() {
             relied.sort();
@@ -1756,7 +2053,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             Outcome::Escape => match start {
                 Start::Item { source, scope, .. } => {
-                    return self.emit_escape(name, At { scope, ..at }, &source);
+                    return self.emit_item_escape(name, at, &source, scope);
                 }
                 Start::Inherited(class) => {
                     for held in self.lineage_names(class) {
@@ -2633,7 +2930,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             None => (dotted, None),
         };
         self.relied.borrow_mut().push(head.to_string());
-        if self.binds_name(head) || self.patched.heads.contains(head) || self.patched_any {
+        if self.binds_name(head) || self.patched_heads.contains(head) || self.patched_any {
             return None;
         }
         let base = match self.bound.get(head) {
@@ -2647,7 +2944,7 @@ impl<'a, 'w> Walker<'a, 'w> {
         };
         // A module patched under another name (`import copy as c; c.copy = f`) is patched for
         // every name that reaches it.
-        let patched = (self.patched.heads.iter())
+        let patched = (self.patched_heads.iter())
             .filter_map(|head| self.bound.get(head).and_then(|b| b.origin()))
             .any(|module| full == module || full.starts_with(&format!("{module}.")));
         (!patched).then_some(full)
@@ -2658,7 +2955,7 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// to anything of it (`from builtins import __dict__`).
     fn builtins_patched(&self) -> bool {
         self.patched_any
-            || (self.patched.heads.iter()).any(|head| {
+            || (self.patched_heads.iter()).any(|head| {
                 let origin = self.bound.get(head).and_then(|b| b.origin());
                 origin.is_some_and(|o| o == "builtins" || o.starts_with("builtins."))
             })
@@ -2686,7 +2983,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             .bound
             .get(head)
             .is_some_and(|binding| binding.first_party);
-        let valid = !self.binds_name(head) && !self.patched.heads.contains(head);
+        let valid = !self.binds_name(head) && !self.patched_heads.contains(head);
         first_party && valid && last.starts_with(|c: char| c.is_ascii_uppercase())
     }
 
@@ -3172,9 +3469,16 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             _ => return,
         };
-        let Some(dotted) = dotted_name(base) else {
+        let Some(mut dotted) = dotted_name(base) else {
             return;
         };
+        let head = dotted.split('.').next().unwrap_or_default().to_string();
+        // A name assigned a name stands for the name it reaches (`_g = _f; _g.print = h`).
+        if let Some(head_ref) = self.name_aliases.get(head.as_str()).copied()
+            && let Aliased::To(target) = self.alias_target(head_ref, 0)
+        {
+            dotted = format!("{target}{}", &dotted[head.len()..]);
+        }
         let head = dotted.split('.').next().unwrap_or_default();
         let local = (self.defs.ancestry(at.scope).into_iter())
             .filter(|scope| *scope >= 0 && !self.defs.is_class(*scope))
