@@ -870,7 +870,8 @@ ROUND5: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r5_g_tuple_holds_list.backend.facade.temporal import WORKFLOWS as R5_G_TUPLE_HOLDS_LIST_WORKFLOWS\n\nQUEUES_R5_G_TUPLE_HOLDS_LIST = [("r5_g_tuple_holds_list", R5_G_TUPLE_HOLDS_LIST_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/gtupleholdslista.py", "backend/temporal/gtupleholdslistb.py"],
-        "outcome": "watched",
+        "outcome": "unread",
+        "reason": "products.r5_g_tuple_holds_list.backend.facade.temporal.WORKFLOWS",
         "note": "W = (_BASE,) holds the list; _BASE.append(B) after",
     },
     "r5_o_logger": {
@@ -1989,7 +1990,7 @@ ROUND5: dict[str, dict[str, Any]] = {
             "ee/hogai/core/agent_modes/presets/r5_h_pkgutil_walk_only.py": 'import pkgutil\n\nimport products.r5_h_pkgutil_walk_only.backend.temporal.health_checks as _hc\n\n\ndef load():\n    return list(pkgutil.walk_packages(_hc.__path__, _hc.__name__ + "."))\n',
         },
         "probes": ["sub/__init__"],
-        "outcome": "unread",
+        "outcome": "problem",
         "note": "pkgutil.walk_packages alone (it imports each subpackage)",
     },
     "r5_h_import_string": {
@@ -2971,8 +2972,7 @@ ROUND5: dict[str, dict[str, Any]] = {
             "ee/hogai/core/agent_modes/presets/r5_h_source_loader.py": 'import importlib.machinery\n\n\ndef load():\n    return importlib.machinery.SourceFileLoader("x", "products/r5_h_source_loader/backend/temporal/health_checks/check.py").load_module()\n',
         },
         "probes": ["backend/temporal/health_checks/check.py"],
-        "outcome": "kept",
-        "why": "limit 8: a library loader the config does not name",
+        "outcome": "problem",
         "note": "importlib.machinery.SourceFileLoader(path).load_module()",
     },
     "r5_h_importlib_import_module_attr": {

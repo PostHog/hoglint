@@ -1494,8 +1494,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r6_r_replace_post_init.backend.facade.temporal import WORKFLOWS as R6_R_REPLACE_POST_INIT_WORKFLOWS\n\nQUEUES_R6_R_REPLACE_POST_INIT = [("r6_r_replace_post_init", R6_R_REPLACE_POST_INIT_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/rreplacepostinita.py", "backend/temporal/rreplacepostinitb.py"],
-        "outcome": "kept",
-        "why": "limit 1: a record's __post_init__ changes its argument",
+        "outcome": "unread",
+        "reason": "products.r6_r_replace_post_init.backend.facade.temporal.WORKFLOWS",
         "note": "dataclasses.replace(R0, workflows=W) on a dataclass whose __post_init__ appends B",
     },
     "r6_r_record_positional_core": {
@@ -2455,7 +2455,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r6_o_json_dumps.backend.facade.temporal import WORKFLOWS as R6_O_JSON_DUMPS_WORKFLOWS\n\nQUEUES_R6_O_JSON_DUMPS = [("r6_o_json_dumps", R6_O_JSON_DUMPS_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/ojsondumpsa.py"],
-        "outcome": "watched",
+        "outcome": "unread",
+        "reason": "products.r6_o_json_dumps.backend.facade.temporal.WORKFLOWS",
         "note": "json.dumps(W, default=repr)",
     },
     "r6_o_pprint": {
@@ -2476,7 +2477,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r6_o_pprint.backend.facade.temporal import WORKFLOWS as R6_O_PPRINT_WORKFLOWS\n\nQUEUES_R6_O_PPRINT = [("r6_o_pprint", R6_O_PPRINT_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/opprinta.py"],
-        "outcome": "watched",
+        "outcome": "unread",
+        "reason": "products.r6_o_pprint.backend.facade.temporal.WORKFLOWS",
         "note": "pprint.pformat(W)",
     },
     "r6_o_isinstance": {
@@ -2792,7 +2794,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r6_o_iter_kept.backend.facade.temporal import WORKFLOWS as R6_O_ITER_KEPT_WORKFLOWS\n\nQUEUES_R6_O_ITER_KEPT = [("r6_o_iter_kept", R6_O_ITER_KEPT_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/oiterkepta.py"],
-        "outcome": "watched",
+        "outcome": "unread",
+        "reason": "products.r6_o_iter_kept.backend.facade.temporal.WORKFLOWS",
         "note": "_IT = iter(W); next(_IT)",
     },
     "r6_o_reversed_kept": {
@@ -2813,7 +2816,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r6_o_reversed_kept.backend.facade.temporal import WORKFLOWS as R6_O_REVERSED_KEPT_WORKFLOWS\n\nQUEUES_R6_O_REVERSED_KEPT = [("r6_o_reversed_kept", R6_O_REVERSED_KEPT_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/oreversedkepta.py"],
-        "outcome": "watched",
+        "outcome": "unread",
+        "reason": "products.r6_o_reversed_kept.backend.facade.temporal.WORKFLOWS",
         "note": "_RV = reversed(W); next(_RV)",
     },
     "r6_o_dict_fromkeys": {
@@ -2855,7 +2859,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r6_o_counter.backend.facade.temporal import WORKFLOWS as R6_O_COUNTER_WORKFLOWS\n\nQUEUES_R6_O_COUNTER = [("r6_o_counter", R6_O_COUNTER_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/ocountera.py"],
-        "outcome": "watched",
+        "outcome": "unread",
+        "reason": "products.r6_o_counter.backend.facade.temporal.WORKFLOWS",
         "note": "collections.Counter(W)",
     },
     "r6_o_holder_rebind": {
@@ -2876,7 +2881,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r6_o_holder_rebind.backend.facade.temporal import WORKFLOWS as R6_O_HOLDER_REBIND_WORKFLOWS\n\nQUEUES_R6_O_HOLDER_REBIND = [("r6_o_holder_rebind", R6_O_HOLDER_REBIND_WORKFLOWS, [])]\n',
         },
         "probes": ["backend/temporal/oholderrebinda.py"],
-        "outcome": "watched",
+        "outcome": "unread",
+        "reason": "products.r6_o_holder_rebind.backend.facade.temporal.WORKFLOWS",
         "note": "_CFG = {'w': W}; _CFG = {**_CFG, 'x': 1} (a holder bound again, nothing changed)",
     },
     "r6_o_ifexp_branch": {
@@ -3400,8 +3406,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "ee/hogai/core/agent_modes/presets/r6_h_gcd_import.py": 'import importlib\nimport os\n\n\ndef load():\n    return importlib._bootstrap._gcd_import(os.environ["X"])\n',
         },
         "probes": [],
-        "outcome": "kept",
-        "why": "limit 8: a library loader the config does not name",
+        "outcome": "problem",
+        "reason": "presets.r6_h_gcd_import",
         "note": "importlib._bootstrap._gcd_import(computed)",
     },
     "r6_h_pkgutil_resolve": {
@@ -3428,8 +3434,8 @@ ROUND6: dict[str, dict[str, Any]] = {
             "ee/hogai/core/agent_modes/presets/r6_h_pkgutil_resolve.py": 'import os\nimport pkgutil\n\n\ndef load():\n    return pkgutil.resolve_name(os.environ["X"])\n',
         },
         "probes": [],
-        "outcome": "kept",
-        "why": "limit 8: a library loader the config does not name",
+        "outcome": "problem",
+        "reason": "presets.r6_h_pkgutil_resolve",
         "note": "pkgutil.resolve_name(computed)",
     },
     "r6_h_spec_from_file": {

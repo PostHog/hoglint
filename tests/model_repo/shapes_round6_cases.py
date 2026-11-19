@@ -119,7 +119,7 @@ REBOUND = "it is bound again by a form the reading cannot read"
 
 def binding_cases() -> dict[str, dict[str, Any]]:
     cases = {}
-    for form, binding, direct, through_holder in BINDING_FORMS:
+    for form, binding, direct, _through_holder in BINDING_FORMS:
         p = f"r6f_{form}"
         body = "WORKFLOWS = (AFlow,)\n" + binding
         case = facade_case(p, body, direct, f"a tuple bound again by {form}", more=MORE)
@@ -135,7 +135,9 @@ def binding_cases() -> dict[str, dict[str, Any]]:
         p = f"r6f_{form}_h"
         held = binding.replace("WORKFLOWS", "_H")
         body = "WORKFLOWS = [AFlow]\n_H = [WORKFLOWS]\n" + held
-        cases[p] = facade_case(p, body, through_holder, f"a holder of the list bound again by {form}", more=MORE)
+        # Round 7: a list in a display is no form the use table reads, so the holder fails closed
+        # at `_H = [WORKFLOWS]`, however it is bound again (`through_holder` was round 6's).
+        cases[p] = facade_case(p, body, "unread", f"a holder of the list bound again by {form}", more=MORE)
     return cases
 
 
@@ -149,8 +151,8 @@ READER_POSITIONS: list[tuple[str, str, str, str]] = [
     ("frozenset", "frozenset(X)", "", "copy"),
     ("sorted", "sorted(X)", "", "copy"),
     ("dict", "dict(X)", "", "copy"),
-    ("copy_copy", "copy.copy(X)", "import copy\n", "copy"),
-    ("deepcopy", "copy.deepcopy(X)", "import copy\n", "read"),
+    ("copy_copy", "copy.copy(X)", "import copy\n", "library"),
+    ("deepcopy", "copy.deepcopy(X)", "import copy\n", "library"),
     ("len", "len(X)", "", "read"),
     ("bool", "bool(X)", "", "read"),
     ("any", "any(X)", "", "read"),
@@ -160,9 +162,9 @@ READER_POSITIONS: list[tuple[str, str, str, str]] = [
     ("id", "id(X)", "", "read"),
     ("hash", "hash(X)", "", "read"),
     ("print", "print(X)", "", "read"),
-    ("json_dumps", "json.dumps(X, default=repr)", "import json\n", "read"),
-    ("pformat", "pprint.pformat(X)", "import pprint\n", "read"),
-    ("counter", "collections.Counter(X)", "import collections\n", "read"),
+    ("json_dumps", "json.dumps(X, default=repr)", "import json\n", "library"),
+    ("pformat", "pprint.pformat(X)", "import pprint\n", "library"),
+    ("counter", "collections.Counter(X)", "import collections\n", "library"),
     ("fromkeys", "dict.fromkeys(X)", "", "read"),
     ("format", '"{}".format(X)', "", "read"),
     ("percent", '"%s" % (X,)', "", "read"),
@@ -188,8 +190,25 @@ READER_POSITIONS: list[tuple[str, str, str, str]] = [
 ]
 # What a change after the reader gives, by what the result can be: with the list itself (`_X.append`
 # changes the result) and with a holder (`_X[0].append` changes an element of the result).
-DIRECT = {"copy": "watched", "read": "watched", "iterator": "watched", "item": "watched", "may be": "unread"}
-THROUGH_HOLDER = {"copy": "unread", "read": "watched", "iterator": "unread", "item": "unread", "may be": "unread"}
+# Round 7: the use table reads no library reader (`library`: its internals would be what accounts
+# for the protocols), no iterator bound to a name (it holds the list), and no list in a display, so
+# every case through a holder fails closed.
+DIRECT = {
+    "copy": "watched",
+    "read": "watched",
+    "library": "unread",
+    "iterator": "unread",
+    "item": "watched",
+    "may be": "unread",
+}
+THROUGH_HOLDER = {
+    "copy": "unread",
+    "read": "unread",
+    "library": "unread",
+    "iterator": "unread",
+    "item": "unread",
+    "may be": "unread",
+}
 
 
 def reader_cases() -> dict[str, dict[str, Any]]:

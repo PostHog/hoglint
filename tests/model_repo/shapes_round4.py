@@ -1248,8 +1248,8 @@ ROUND4: dict[str, dict[str, Any]] = {
         "core": {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r4_d_tc.backend.facade.temporal import WORKFLOWS as R4_D_TC_WORKFLOWS\n\nQUEUES_R4_D_TC = [("r4_d_tc", R4_D_TC_WORKFLOWS, [])]\n'
         },
-        "probes": ["backend/temporal/dtca.py", "backend/temporal/dtcb.py"],
-        "outcome": "unread",
+        "probes": ["backend/temporal/dtca.py"],
+        "outcome": "watched",
         "note": "if TYPE_CHECKING: W.append(B) (never runs)",
     },
     "r4_d_for": {
@@ -1369,7 +1369,7 @@ ROUND4: dict[str, dict[str, Any]] = {
             "posthog/management/commands/start_temporal_worker.py": '\nfrom products.r4_d_setadd.backend.facade.temporal import WORKFLOWS as R4_D_SETADD_WORKFLOWS\n\nQUEUES_R4_D_SETADD = [("r4_d_setadd", R4_D_SETADD_WORKFLOWS, [])]\n'
         },
         "probes": ["backend/temporal/dsetadda.py", "backend/temporal/dsetaddb.py"],
-        "outcome": "watched",
+        "outcome": "unread",
         "note": "set W.add(B)",
     },
     "r4_d_extend_u": {
