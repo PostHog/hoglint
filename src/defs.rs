@@ -317,10 +317,13 @@ pub fn stored_names(suite: &[Stmt]) -> HashSet<&str> {
     collector.names
 }
 
-/// What a file does to names it may resolve through: the heads of every attribute it stores
-/// (`copy.copy = f`, `builtins.sorted = f`) or hands to `setattr`, and whether it uses
-/// `__builtins__` at all. A reader or a loader reached through such a name is no longer the one
-/// its import names.
+/// What a file does to names it may resolve through: the heads of every attribute it stores or
+/// deletes (`copy.copy = f`, `builtins.sorted = f`, `del copy.copy`), of every `__dict__` it
+/// writes into (`copy.__dict__["copy"] = f`), and of what it hands to `setattr` or `delattr`;
+/// whether it uses `__builtins__` at all; and whether it stores into an object it reaches by
+/// no name (`__import__("copy").copy = f`, `setattr(f(), ...)`), which may be any module. A
+/// reader or a loader reached through such a name, or through any name after the last, is no
+/// longer the one its import names.
 #[derive(Default)]
 pub struct Patched<'a> {
     pub heads: HashSet<&'a str>,
@@ -333,22 +336,46 @@ pub fn patched_names(suite: &[Stmt]) -> Patched<'_> {
     collector
 }
 
+impl<'a> Patched<'a> {
+    /// The head of what a store reaches into: a name, through attributes, subscripts and
+    /// `__dict__`; anything else reaches an object by no name (`builtins`: every name may be
+    /// patched).
+    fn store_into(&mut self, mut value: &'a Expr) {
+        loop {
+            match value {
+                Expr::Attribute(inner) => value = &inner.value,
+                Expr::Subscript(inner) => value = &inner.value,
+                Expr::Name(head) => {
+                    self.heads.insert(head.id.as_str());
+                    return;
+                }
+                _ => {
+                    self.builtins = true;
+                    return;
+                }
+            }
+        }
+    }
+}
+
 impl<'a> Visitor<'a> for Patched<'a> {
     fn visit_expr(&mut self, expr: &'a Expr) {
         match expr {
             Expr::Attribute(attribute) if attribute.ctx != ExprContext::Load => {
-                let mut value = &*attribute.value;
-                while let Expr::Attribute(inner) = value {
-                    value = &inner.value;
-                }
-                if let Expr::Name(head) = value {
-                    self.heads.insert(head.id.as_str());
+                self.store_into(&attribute.value);
+            }
+            Expr::Subscript(subscript) if subscript.ctx != ExprContext::Load => {
+                if let Expr::Attribute(dict) = &*subscript.value
+                    && dict.attr.as_str() == "__dict__"
+                {
+                    self.store_into(&dict.value);
                 }
             }
             Expr::Call(call) => {
-                let setattr = matches!(&*call.func, Expr::Name(f) if f.id.as_str() == "setattr");
-                if setattr && let Some(Expr::Name(head)) = call.arguments.args.first() {
-                    self.heads.insert(head.id.as_str());
+                let patch = matches!(&*call.func, Expr::Name(f)
+                    if matches!(f.id.as_str(), "setattr" | "delattr"));
+                if patch && let Some(target) = call.arguments.args.first() {
+                    self.store_into(target);
                 }
             }
             Expr::Name(name) if name.id.as_str() == "__builtins__" => self.builtins = true,

@@ -7,7 +7,8 @@ use ruff_python_ast::{self as ast, Expr};
 #[derive(Clone, Copy)]
 pub enum Frame<'a> {
     Attr(&'a str),
-    CallFunc,
+    /// The callee of a call, with the call.
+    CallFunc(&'a ast::ExprCall),
     SubValue,
     Arg(&'a ast::ExprCall, usize),
     Kw(&'a ast::ExprCall, Option<&'a str>),
@@ -19,9 +20,6 @@ pub enum Frame<'a> {
     /// that holds it, so the use reading can see the other operands. It reads as `Op`: `bin:+`,
     /// `cmp:left`, `cmp:==`, `slice`.
     Operand(&'static str, &'static str, &'a Expr),
-    /// The subject of a `match` statement, with the statement, so the use reading can see its
-    /// class patterns. It reads as the terminal `match`.
-    Subject(&'a ast::StmtMatch),
     DictVal(&'a str),
     Walrus(&'a str),
     /// A terminal step with fixed text: a statement or header slot.
@@ -53,7 +51,7 @@ impl Frame<'_> {
     fn step(&self) -> (String, bool) {
         match self {
             Frame::Attr(a) => (format!(".{a}"), false),
-            Frame::CallFunc => ("()".to_string(), false),
+            Frame::CallFunc(_) => ("()".to_string(), false),
             Frame::SubValue => ("[]".to_string(), false),
             Frame::Arg(call, i) => (format!("arg:{i}:{}", callee_text(call)), false),
             Frame::Kw(call, name) => (
@@ -64,7 +62,6 @@ impl Frame<'_> {
             Frame::Op(prefix, op) | Frame::Operand(prefix, op, _) => {
                 (format!("{prefix}{op}"), false)
             }
-            Frame::Subject(_) => ("match".to_string(), true),
             Frame::DictVal(k) => (format!("dict:val:{k}"), false),
             Frame::Walrus(n) => (format!("walrus:{n}"), false),
             Frame::Terminal(s) => (s.to_string(), true),
@@ -164,7 +161,7 @@ pub fn climb(path: &[Frame]) -> (String, String) {
                 }
                 None => break,
             },
-            Frame::CallFunc => chain.push_str("()"),
+            Frame::CallFunc(_) => chain.push_str("()"),
             Frame::SubValue => chain.push_str("[]"),
             _ => break,
         }
