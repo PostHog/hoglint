@@ -7,8 +7,8 @@
 //! a change to the layout never meets facts written by older code.
 
 use super::facts::{
-    Argument, Assign, CallRow, CountRow, Def, DefKind, FileFacts, Import, Op, Param, RefRow,
-    SelfAttr, StrRow, TagRow, UseRow, V,
+    Argument, Assign, CallRow, ComputedRow, CountRow, Def, DefKind, FileFacts, Import, Op, Param,
+    RefRow, SelfAttr, StrRow, TagRow, UseRow, V,
 };
 use super::intern::{Interner, Sid};
 use rustc_hash::FxHashMap;
@@ -303,6 +303,14 @@ impl Enc<'_> {
             self.u32(r.col);
             self.u32(r.flags);
             self.sid(r.name);
+        }
+        self.u32(f.computed.len() as u32);
+        for r in &f.computed {
+            self.i32(r.scope);
+            self.u32(r.line);
+            self.u32(r.col);
+            self.u32(u32::from(r.call));
+            self.sid(r.sequence);
         }
     }
 
@@ -732,6 +740,17 @@ pub fn decode_body(
             name: d.sid()?,
         });
     }
+    let n = d.u32()? as usize;
+    let mut computed = Vec::with_capacity(n);
+    for _ in 0..n {
+        computed.push(ComputedRow {
+            scope: d.i32()?,
+            line: d.u32()?,
+            col: d.u32()?,
+            call: d.u32()? == 1,
+            sequence: d.sid()?,
+        });
+    }
     Ok(FileFacts {
         path: path.into(),
         status,
@@ -747,6 +766,7 @@ pub fn decode_body(
         tags,
         listed,
         escapes,
+        computed,
         line: line_start..line_start + json_len,
         keys,
     })

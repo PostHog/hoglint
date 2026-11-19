@@ -180,6 +180,20 @@ pub struct Tag {
     pub name: String,
 }
 
+/// A place the code names a module by a value it computes: the module argument of a watched call
+/// (the first positional argument, else `name=`; `form` "call") that is no string literal, or
+/// the key of `sys.modules[...]` (`form` "sys.modules"), whatever it is. `sequence` is the name
+/// the value is an element of: the variable of a `for` or a comprehension over the name, or
+/// `name[...]`; empty when it is none. A call's argument that is an element of a literal of
+/// string literals in the loop's header gets no row: the walk repeats the call per string
+/// (`calls`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Computed {
+    pub site: Site,
+    pub form: &'static str,
+    pub sequence: String,
+}
+
 /// A dict entry with a watched key. The position is the value's; chain and up are the dict's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WatchedKey {
@@ -229,6 +243,8 @@ pub struct Facts {
     pub branches: Vec<Branch>,
     pub callees: Vec<Count<TextKey>>,
     pub calls: Vec<WatchedCall>,
+    /// The places the code names a module by a value it computes (`Computed`).
+    pub computed: Vec<Computed>,
     pub defs: Vec<Def>,
     pub derived: Vec<Ref>,
     /// The names the item reading cannot read at a site: a module-level or class-body use it does
@@ -293,6 +309,7 @@ impl Facts {
         clear(&mut self.branches, kinds, Kind::Branches);
         clear(&mut self.callees, kinds, Kind::Callees);
         clear(&mut self.calls, kinds, Kind::Calls);
+        clear(&mut self.computed, kinds, Kind::Computed);
         clear(&mut self.defs, kinds, Kind::Defs);
         clear(&mut self.derived, kinds, Kind::Derived);
         clear(&mut self.escapes, kinds, Kind::Escapes);
@@ -312,6 +329,7 @@ impl Facts {
         sort_rows(&mut self.branches);
         sort_rows(&mut self.callees);
         sort_rows(&mut self.calls);
+        sort_rows(&mut self.computed);
         sort_rows(&mut self.derived);
         sort_rows(&mut self.escapes);
         sort_rows(&mut self.imports);
@@ -335,7 +353,15 @@ macro_rules! positioned_by_site {
     };
 }
 
-positioned_by_site!(Ref, WatchedCall, DottedStr, Tag, WatchedKey, Branch);
+positioned_by_site!(
+    Ref,
+    WatchedCall,
+    DottedStr,
+    Tag,
+    Computed,
+    WatchedKey,
+    Branch
+);
 
 macro_rules! positioned_by_lc {
     ($($row:ty),*) => {
@@ -457,6 +483,15 @@ impl Serialize for Tag {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut row = self.site.head(s)?;
         row.serialize_element(&self.name)?;
+        row.end()
+    }
+}
+
+impl Serialize for Computed {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut row = self.site.head(s)?;
+        row.serialize_element(self.form)?;
+        row.serialize_element(&self.sequence)?;
         row.end()
     }
 }

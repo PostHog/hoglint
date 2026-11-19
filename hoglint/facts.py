@@ -24,6 +24,7 @@ FACT_KINDS = frozenset(
         "branches",
         "callees",
         "calls",
+        "computed",
         "defs",
         "derived",
         "escapes",

@@ -18,6 +18,7 @@ pub enum Kind {
     Branches,
     Callees,
     Calls,
+    Computed,
     Defs,
     Derived,
     Escapes,
@@ -33,11 +34,12 @@ pub enum Kind {
 
 impl Kind {
     /// In name order, which is also the order `cfg` lists them in.
-    pub const ALL: [Kind; 15] = [
+    pub const ALL: [Kind; 16] = [
         Kind::Assigns,
         Kind::Branches,
         Kind::Callees,
         Kind::Calls,
+        Kind::Computed,
         Kind::Defs,
         Kind::Derived,
         Kind::Escapes,
@@ -57,6 +59,7 @@ impl Kind {
             Kind::Branches => "branches",
             Kind::Callees => "callees",
             Kind::Calls => "calls",
+            Kind::Computed => "computed",
             Kind::Defs => "defs",
             Kind::Derived => "derived",
             Kind::Escapes => "escapes",
@@ -71,14 +74,14 @@ impl Kind {
         }
     }
 
-    fn bit(self) -> u16 {
-        1 << (self as u16)
+    fn bit(self) -> u32 {
+        1 << (self as u32)
     }
 }
 
 /// A set of fact kinds: the lists a record carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Kinds(u16);
+pub struct Kinds(u32);
 
 impl Kinds {
     pub const ALL: Kinds = Kinds((1 << Kind::ALL.len()) - 1);

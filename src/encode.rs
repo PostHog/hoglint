@@ -2,8 +2,8 @@
 
 use crate::config::SCHEMA_VERSION;
 use crate::facts::{
-    Assign, Branch, Count, Def, DottedStr, FileRecord, Import, Ref, Status, Tag, TextKey, UseKey,
-    WatchedCall, WatchedKey,
+    Assign, Branch, Computed, Count, Def, DottedStr, FileRecord, Import, Ref, Status, Tag, TextKey,
+    UseKey, WatchedCall, WatchedKey,
 };
 use serde::Serialize;
 
@@ -20,6 +20,8 @@ struct Line<'r> {
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     calls: &'r [WatchedCall],
     cfg: &'r str,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    computed: &'r [Computed],
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     defs: &'r [Def],
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
@@ -58,6 +60,7 @@ pub fn record_line(record: &FileRecord, cfg: &str, path: &str) -> serde_json::Re
         callees: &facts.callees,
         calls: &facts.calls,
         cfg,
+        computed: &facts.computed,
         defs: &facts.defs,
         derived: &facts.derived,
         escapes: &facts.escapes,

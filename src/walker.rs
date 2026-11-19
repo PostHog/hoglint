@@ -4,7 +4,8 @@ use crate::config::{ExtractConfig, Kind};
 use crate::defs::{Bound, DefNode, DefTable};
 use crate::facts::flags::{BLOCK, CLASS, FUNC, IF, TC_ELSE, TRY, TYPE_ONLY};
 use crate::facts::{
-    Assign, Branch, DottedStr, Import, Ref, Site, Tag, TextKey, UseKey, WatchedCall, WatchedKey,
+    Assign, Branch, Computed, DottedStr, Import, Ref, Site, Tag, TextKey, UseKey, WatchedCall,
+    WatchedKey,
 };
 use crate::loops::{Sequences, literal_elements, rebinds};
 use crate::path::{Frame, climb, computed_read, listed};
@@ -19,9 +20,10 @@ use ruff_text_size::{Ranged, TextSize};
 use std::collections::{HashMap, HashSet};
 
 /// Kinds whose rows come from expressions. Without any of them the walk skips expressions.
-const EXPRESSION_KINDS: [Kind; 11] = [
+const EXPRESSION_KINDS: [Kind; 12] = [
     Kind::Callees,
     Kind::Calls,
+    Kind::Computed,
     Kind::Derived,
     Kind::Escapes,
     Kind::Listed,
@@ -224,6 +226,7 @@ pub struct Walk {
     /// Loads that become `derived` rows once their name is derived.
     pub candidates: Vec<Ref>,
     pub calls: Vec<WatchedCall>,
+    pub computed: Vec<Computed>,
     pub strs: Vec<DottedStr>,
     pub tags: Vec<Tag>,
     pub watched: Vec<WatchedKey>,
@@ -268,6 +271,24 @@ struct LoopValues<'a> {
     values: Vec<Value>,
 }
 
+/// A variable a `for`, a comprehension or a lambda around the code being walked binds, in its
+/// scope, and what it takes (`Computed`).
+struct ElementOf<'a> {
+    scope: i64,
+    variable: &'a str,
+    from: Element<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum Element<'a> {
+    /// Each item of the name a `for` or a comprehension loops over.
+    Of(&'a str),
+    /// Each string of a list or tuple of string literals in the loop's header.
+    Strings,
+    /// Anything else: a value the walk cannot name.
+    Other,
+}
+
 pub struct Walker<'a, 'w> {
     src: &'a str,
     lines: &'w LineIndex,
@@ -276,6 +297,8 @@ pub struct Walker<'a, 'w> {
     stored: &'w HashSet<&'a str>,
     sequences: &'w Sequences<'a>,
     loops: Vec<LoopValues<'a>>,
+    /// The variables of the loops, comprehensions and lambdas around the code being walked.
+    elements: Vec<ElementOf<'a>>,
     /// The names each function declares `global`, by its scope (`emit_global`).
     globals: HashMap<i64, HashSet<String>>,
     config: &'w ExtractConfig,
@@ -308,6 +331,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             stored,
             sequences,
             loops: Vec::new(),
+            elements: Vec::new(),
             globals: HashMap::new(),
             config,
             exprs: config.kinds.any(&EXPRESSION_KINDS),
@@ -604,7 +628,10 @@ impl<'a, 'w> Walker<'a, 'w> {
                 let bound = self.loop_values(f, at);
                 let pushed = bound.is_some();
                 self.loops.extend(bound);
+                let elements = self.elements.len();
+                self.loop_elements(&f.target, &f.iter, at.scope, &f.body);
                 self.body(&f.body, Self::inner(at, BLOCK));
+                self.elements.truncate(elements);
                 if pushed {
                     self.loops.pop();
                 }
@@ -1004,7 +1031,16 @@ impl<'a, 'w> Walker<'a, 'w> {
                 for param in l.parameters.iter().flat_map(|p| p.iter()) {
                     self.opt_child(Frame::Step("lambda:default"), param.default(), at);
                 }
+                let elements = self.elements.len();
+                for param in l.parameters.iter().flat_map(|p| p.iter()) {
+                    self.elements.push(ElementOf {
+                        scope: at.scope,
+                        variable: param.name().as_str(),
+                        from: Element::Other,
+                    });
+                }
                 self.child(Frame::Step("lambda"), &l.body, at);
+                self.elements.truncate(elements);
             }
             Expr::If(i) => {
                 self.child(Frame::Step("ifexp:test"), &i.test, at);
@@ -1023,13 +1059,19 @@ impl<'a, 'w> Walker<'a, 'w> {
             | Expr::Generator(ast::ExprGenerator {
                 elt, generators, ..
             }) => {
+                let elements = self.elements.len();
+                self.comprehension_elements(generators, at.scope);
                 self.child(Frame::Step("comp:elt"), elt, at);
                 self.generators(generators, at);
+                self.elements.truncate(elements);
             }
             Expr::DictComp(c) => {
+                let elements = self.elements.len();
+                self.comprehension_elements(&c.generators, at.scope);
                 self.opt_child(Frame::Step("comp:key"), c.key.as_deref(), at);
                 self.child(Frame::Step("comp:val"), &c.value, at);
                 self.generators(&c.generators, at);
+                self.elements.truncate(elements);
             }
             Expr::Await(a) => self.child(Frame::Step("await"), &a.value, at),
             Expr::Yield(y) => self.opt_child(Frame::Step("yield"), y.value.as_deref(), at),
@@ -1054,6 +1096,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             Expr::Attribute(a) => self.child(Frame::Attr(a.attr.as_str()), &a.value, at),
             Expr::Subscript(s) => {
+                self.emit_module_key(s, at);
                 self.child(Frame::SubValue, &s.value, at);
                 self.child(Frame::Step("slice"), &s.slice, at);
             }
@@ -1109,11 +1152,173 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
+    /// What the variables of a `for` take (`ElementOf`): a body that binds the variable again
+    /// makes it a value the walk cannot name.
+    fn loop_elements(&mut self, target: &'a Expr, iter: &'a Expr, scope: i64, body: &'a [Stmt]) {
+        if !self.wants(Kind::Computed) {
+            return;
+        }
+        let from = match target {
+            Expr::Name(variable) if !rebinds(body, variable.id.as_str(), self.defs) => {
+                self.element_from(iter, scope)
+            }
+            _ => Element::Other,
+        };
+        self.push_elements(target, scope, from);
+    }
+
+    /// What the variables of each generator of a comprehension take, the generators in order, so
+    /// one that loops over an earlier one's variable takes a value the walk cannot name.
+    fn comprehension_elements(&mut self, generators: &'a [ast::Comprehension], scope: i64) {
+        if !self.wants(Kind::Computed) {
+            return;
+        }
+        for generator in generators {
+            let from = self.element_from(&generator.iter, scope);
+            self.push_elements(&generator.target, scope, from);
+        }
+    }
+
+    /// Each name a loop target binds, taking `from` when the target is one plain name.
+    fn push_elements(&mut self, target: &'a Expr, scope: i64, from: Element<'a>) {
+        match target {
+            Expr::Name(variable) => self.elements.push(ElementOf {
+                scope,
+                variable: variable.id.as_str(),
+                from,
+            }),
+            Expr::Tuple(t) => t
+                .elts
+                .iter()
+                .for_each(|e| self.push_elements(e, scope, Element::Other)),
+            Expr::List(l) => l
+                .elts
+                .iter()
+                .for_each(|e| self.push_elements(e, scope, Element::Other)),
+            Expr::Starred(s) => self.push_elements(&s.value, scope, Element::Other),
+            _ => {}
+        }
+    }
+
+    /// What a loop over `iter` hands its variable: each item of a name no loop around binds, each
+    /// string of a literal of string literals, else a value the walk cannot name.
+    fn element_from(&self, iter: &'a Expr, scope: i64) -> Element<'a> {
+        if let Expr::Name(name) = iter {
+            let name = name.id.as_str();
+            let looped = self
+                .elements
+                .iter()
+                .any(|e| e.scope == scope && e.variable == name);
+            return if looped {
+                Element::Other
+            } else {
+                Element::Of(name)
+            };
+        }
+        match literal_elements(iter) {
+            Some(elts) if elts.iter().all(Expr::is_string_literal_expr) => Element::Strings,
+            _ => Element::Other,
+        }
+    }
+
+    /// Whether the def at `scope` binds `name` itself (a parameter, or any binding in its body),
+    /// so a load of it there reads no module-level name.
+    fn binds_locally(&self, scope: i64, name: &str) -> bool {
+        if scope < 0 {
+            return false;
+        }
+        match self.defs.entries[scope as usize].node {
+            DefNode::Func(f) => {
+                let parameter = f.parameters.iter().any(|p| p.name().as_str() == name);
+                parameter || rebinds(&f.body, name, self.defs)
+            }
+            DefNode::Class(c) => rebinds(&c.body, name, self.defs),
+        }
+    }
+
+    /// The name a value is an element of (`Computed`): the variable of the innermost loop or
+    /// comprehension that binds it, over a module-level name, or `name[...]`; empty when it is
+    /// none. None for an element of a literal of string literals.
+    fn sequence_of(&self, value: &'a Expr, scope: i64) -> Option<String> {
+        let sequence = match value {
+            Expr::Name(variable) => {
+                let variable = variable.id.as_str();
+                let found = self
+                    .elements
+                    .iter()
+                    .rev()
+                    .find(|e| e.scope == scope && e.variable == variable);
+                match found.map(|e| e.from) {
+                    Some(Element::Of(name)) => name,
+                    Some(Element::Strings) => return None,
+                    _ => return Some(String::new()),
+                }
+            }
+            Expr::Subscript(s) => match &*s.value {
+                Expr::Name(name) => name.id.as_str(),
+                _ => return Some(String::new()),
+            },
+            _ => return Some(String::new()),
+        };
+        if self.binds_locally(scope, sequence) {
+            return Some(String::new());
+        }
+        Some(sequence.to_string())
+    }
+
     // ---- emitters -------------------------------------------------------------------------
+
+    /// A `computed` row for a module named by `value` at `pos`, when it is no string literal and
+    /// no element of a literal of string literals.
+    fn emit_computed(
+        &mut self,
+        value: Option<&'a Expr>,
+        form: &'static str,
+        at: At,
+        pos: (i64, i64),
+    ) {
+        if value.is_some_and(Expr::is_string_literal_expr) {
+            return;
+        }
+        let sequence = match value {
+            Some(value) => self.sequence_of(value, at.scope),
+            None => Some(String::new()),
+        };
+        if let Some(sequence) = sequence {
+            self.out.computed.push(Computed {
+                site: at.site(pos),
+                form,
+                sequence,
+            });
+        }
+    }
+
+    /// `sys.modules[key]`, read by any key: no edge names a key of `sys.modules`, so it names a
+    /// module the link cannot read, whatever the key.
+    fn emit_module_key(&mut self, s: &'a ast::ExprSubscript, at: At) {
+        if !self.wants(Kind::Computed) || s.ctx != ExprContext::Load {
+            return;
+        }
+        let Expr::Attribute(attribute) = &*s.value else {
+            return;
+        };
+        let sys = matches!(&*attribute.value, Expr::Name(name) if name.id.as_str() == "sys");
+        if !sys || attribute.attr.as_str() != "modules" {
+            return;
+        }
+        let pos = self.lines.pos(s.range().start());
+        let sequence = self.sequence_of(&s.slice, at.scope).unwrap_or_default();
+        self.out.computed.push(Computed {
+            site: at.site(pos),
+            form: "sys.modules",
+            sequence,
+        });
+    }
 
     fn emit_call(&mut self, call: &'a ast::ExprCall, at: At) {
         let (want_callees, want_calls) = (self.wants(Kind::Callees), self.wants(Kind::Calls));
-        if !want_callees && !want_calls {
+        let want_computed = self.wants(Kind::Computed);
+        if !want_callees && !want_calls && !want_computed {
             return;
         }
         let callee = callee_text(call);
@@ -1133,7 +1338,11 @@ impl<'a, 'w> Walker<'a, 'w> {
                     .bound
                     .get(callee.as_str())
                     .is_some_and(|binding| binding.hook_alias));
-        if !want_calls || !(self.config.is_watched_callee(last) || hook) {
+        let watched = self.config.is_watched_callee(last);
+        if watched && want_computed {
+            self.emit_computed(module_argument(call), "call", at, (l, c));
+        }
+        if !want_calls || !(watched || hook) {
             return;
         }
         let row = WatchedCall {
@@ -1312,4 +1521,17 @@ impl<'a, 'w> Walker<'a, 'w> {
             });
         }
     }
+}
+
+/// The argument a loader takes the module's name from: the first positional one, else `name=`.
+fn module_argument(call: &ast::ExprCall) -> Option<&Expr> {
+    if let Some(first) = call.arguments.args.first() {
+        return Some(first);
+    }
+    let keyword = call
+        .arguments
+        .keywords
+        .iter()
+        .find(|k| k.arg.as_ref().is_some_and(|name| name.as_str() == "name"));
+    keyword.map(|k| &k.value)
 }

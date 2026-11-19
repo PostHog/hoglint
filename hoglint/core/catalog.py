@@ -9,8 +9,9 @@ from dataclasses import dataclass
 from hoglint.core.config import CoreConfig
 
 # Fact kinds every producer needs, because the resolver builds module tables from them.
-# `escapes` are the names the item reading of `assigns` cannot read (`Link::sequences`).
-TABLE_KINDS = frozenset({"imports", "defs", "assigns", "escapes"})
+# `escapes` are the names the item reading of `assigns` cannot read (`Link::sequences`);
+# `computed`, where the code names a module by a value it computes (`Link::computed_loads`).
+TABLE_KINDS = frozenset({"imports", "defs", "assigns", "escapes", "computed"})
 # What the declaration producer reads in a contract or export surface: a call on `__all__` makes a
 # hand-out unknown (`callees`); `refs` and `uses` are the names the module refers to itself.
 SURFACE_READS = frozenset({"callees", "refs", "uses"})

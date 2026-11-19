@@ -358,7 +358,7 @@ def load():
     return x.first()
 "#;
     let full = line_with(source, &config());
-    assert_eq!(full["cfg"], "e1dedd17");
+    assert_eq!(full["cfg"], "0456280f");
     assert_eq!(
         kinds_of(&full),
         strings(&[

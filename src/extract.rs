@@ -147,6 +147,7 @@ impl<'s, 'c> FileFacts<'s, 'c> {
             branches: walk.branches,
             callees: counts(walk.callees),
             calls: walk.calls,
+            computed: walk.computed,
             defs,
             derived,
             imports: walk.imports,

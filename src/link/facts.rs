@@ -211,6 +211,17 @@ pub struct CountRow {
     pub col: u32,
 }
 
+/// A `computed` row: a place the code names a module by a value it computes, as the module
+/// argument of a watched call (`call`) or as any key of `sys.modules[...]`, and the name the
+/// value is an element of (EMPTY for none).
+pub struct ComputedRow {
+    pub scope: i32,
+    pub line: u32,
+    pub col: u32,
+    pub call: bool,
+    pub sequence: Sid,
+}
+
 /// A `tags` row.
 pub struct TagRow {
     pub scope: i32,
@@ -242,6 +253,8 @@ pub struct FileFacts {
     /// The names the item reading cannot read at a site (the record's `escapes`); `*` for every
     /// name of the module.
     pub escapes: Vec<TagRow>,
+    /// Where the code names a module by a value it computes (the record's `computed`).
+    pub computed: Vec<ComputedRow>,
     pub line: Range<usize>,
     pub keys: Vec<(Box<str>, Range<usize>)>,
 }
@@ -612,6 +625,7 @@ struct Parsed {
     tags: J,
     listed: J,
     escapes: J,
+    computed: J,
 }
 
 fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
@@ -635,6 +649,7 @@ fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
         tags: J::Null,
         listed: J::Null,
         escapes: J::Null,
+        computed: J::Null,
     };
     for (key, raw) in &map {
         let at = raw.get().as_ptr() as usize - start;
@@ -657,6 +672,7 @@ fn parse_line(line: &[u8], base: usize) -> Result<Parsed, DecodeError> {
             "tags" => parsed.tags = decode(raw)?,
             "listed" => parsed.listed = decode(raw)?,
             "escapes" => parsed.escapes = decode(raw)?,
+            "computed" => parsed.computed = decode(raw)?,
             _ => {}
         }
     }
@@ -878,6 +894,16 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
     };
     let tags = tag_rows(it, &parsed.tags);
     let escapes = tag_rows(it, &parsed.escapes);
+    let computed = rows(&parsed.computed)
+        .iter()
+        .map(|r| ComputedRow {
+            scope: int(row(r, 0)) as i32,
+            line: int(row(r, 2)) as u32,
+            col: int(row(r, 3)) as u32,
+            call: text(row(r, 5)) == "call",
+            sequence: it.intern(text(row(r, 6))),
+        })
+        .collect();
     let listed = rows(&parsed.listed)
         .iter()
         .map(|r| it.intern(text(row(r, 2))))
@@ -897,6 +923,7 @@ fn convert(it: &mut Interner, parsed: Parsed, line: Range<usize>) -> FileFacts {
         tags,
         listed,
         escapes,
+        computed,
         line,
         keys: parsed.keys,
     }
