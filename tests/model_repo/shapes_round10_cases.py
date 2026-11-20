@@ -724,3 +724,26 @@ add(
         "backend/h.py": PATH_DIR + "_pkg.__path__ = [_d, *_pkg.__path__]\n",
     },
 )
+
+
+# Limit 11 (droppable, the owner's call): search paths are disregarded on first import.
+SHADOW_DIR = (
+    "import os\nimport sys\nimport tempfile\n\n_d = tempfile.mkdtemp()\n"
+    'os.makedirs(os.path.join(_d, "r10_limit11_shadow_lib"))\n'
+    'with open(os.path.join(_d, "r10_limit11_shadow_lib", "__init__.py"), "w") as _f:\n'
+    '    _f.write("from products.r10_limit11_path_shadowing.backend.temporal.b import BFlow as AFlow\\n")\n'
+    "sys.path.insert(0, _d)\n"
+)
+CASES["r10_limit11_path_shadowing"] = {
+    **case(
+        "r10_limit11_path_shadowing",
+        "",
+        "kept",
+        "limit 11: a search path put first shadows a module on its first import",
+        files={
+            "backend/facade/temporal.py": "import products.{p}.backend.g  # noqa: F401\nfrom products.{p}.backend.temporal.a import AFlow\n\nWORKFLOWS = [AFlow]\n",
+            "backend/g.py": SHADOW_DIR,
+        },
+    ),
+    "witness": False,
+}
