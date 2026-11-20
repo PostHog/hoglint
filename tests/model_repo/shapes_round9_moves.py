@@ -773,6 +773,12 @@ MOVES: dict[str, dict[str, Any]] = {
 # Round 10 (`engine/brief-watched-round10.md`): each entry narrowed to positive evidence; these
 # rows now fail closed, each for the rule named.
 MOVES10: dict[str, dict[str, Any]] = {
+    "r9b_ok_path": {
+        "moved10": "round 10 commit 3: a computed module's `__path__` bound to a name escapes, and no import names the package, so every module",
+        "outcome": "unread",
+        "reason": "products.r9b_ok_path.",
+        "alone": True,
+    },
     "decl_class_attribute": {
         "moved10": "round 10 family 4: a class read needs a stable class whose binding is a literal, a display, a function or a plain class; a record instance as the value is none of these",
         "unread": True,

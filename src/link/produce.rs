@@ -1334,6 +1334,11 @@ pub struct Producers<'p> {
     pub touching: FxHashSet<Ent>,
     /// The classes some class statement takes as a base (`#base`, family 5).
     pub based_classes: FxHashSet<Ent>,
+    /// Whether some first-party file changes a `__path__` (`^path`) or touches the import hooks
+    /// (`^hooks`), and the `pkgutil.iter_modules` reads they void (`void_iter_reads`).
+    pub path_changed: bool,
+    pub hooks_touched: bool,
+    pub iter_reads: Vec<(usize, i32, u32, String)>,
     /// The modules a change through a module value may have rebound any name of
     /// (`module_change`), and whether that is every module.
     pub poisoned_modules: FxHashSet<Sid>,
@@ -1403,6 +1408,23 @@ impl Producers<'_> {
         });
     }
 
+    /// `pkgutil.iter_modules(M.__path__)` reads (t30's ruling on the commit 3 stop) hold only
+    /// while no first-party file changes, stores, passes or deletes a `__path__` and none touches
+    /// the path hooks, the importer cache, `sys.meta_path`, `sys.addaudithook` or
+    /// `pkgutil.iter_importer_modules`: one such site anywhere makes every such read the change
+    /// of its package it would otherwise be.
+    fn void_iter_reads(&mut self) {
+        if !(self.path_changed || self.hooks_touched) {
+            return;
+        }
+        let owners = self.scopes.len();
+        for (owner, scope, line, change) in std::mem::take(&mut self.iter_reads) {
+            self.core.rec.enter(owner, owners);
+            self.module_change(owner, scope, line, &change);
+            self.core.rec.leave();
+        }
+    }
+
     /// Runs one producer for every analyzed file, each file's reads going to its own trace.
     fn each(&mut self, produce: fn(&mut Self, usize)) {
         let owners = self.scopes.len();
@@ -1419,6 +1441,7 @@ impl Producers<'_> {
         self.read_classes();
         self.each(Self::stores);
         self.each(Self::values);
+        self.void_iter_reads();
         self.each(Self::sequences);
         let read = std::mem::take(&mut self.declared);
         let attributes = std::mem::take(&mut self.attributes);
@@ -2481,7 +2504,25 @@ impl Producers<'_> {
             let Some(text) = self.core.it.s(escape.name).strip_prefix('!') else {
                 continue;
             };
+            // The import system (commit 3): a `__path__` change or a hook touched anywhere voids
+            // every `pkgutil.iter_modules` read (`iter_reads`).
+            match text {
+                "^path" => {
+                    self.path_changed = true;
+                    continue;
+                }
+                "^hooks" => {
+                    self.hooks_touched = true;
+                    continue;
+                }
+                _ => {}
+            }
             if let Some(change) = text.strip_prefix('+') {
+                if let Some(change) = change.strip_suffix("?iter") {
+                    let read = (owner, escape.scope, escape.line, change.to_string());
+                    self.iter_reads.push(read);
+                    continue;
+                }
                 let change = change.to_string();
                 self.module_change(owner, escape.scope, escape.line, &change);
                 continue;
@@ -3741,6 +3782,12 @@ impl Producers<'_> {
             out.push(target);
             return;
         };
+        // A name of a module something may replace or redirect (`!+MODULE:*`): what it holds
+        // there is unknown.
+        if self.module_poisoned(target.m) {
+            out.push(None);
+            return;
+        }
         out.push(Some(target));
         let origin = self.core.it.join(target.m, target.s);
         let rest = (self.core.it.s(surface).strip_prefix(self.core.it.s(origin)))

@@ -507,3 +507,220 @@ add(
     "watched",
     "harmless: T1 runs no item's code",
 )
+
+# Codex's rows on the live stop (t30's ruling, point 5).
+add(
+    "r10_instance_shadowing",
+    "\n\nclass _K:\n    def __init__(self):\n        self.L = BFlow\n\n    def L(self):\n        pass\n\n\n"
+    "WORKFLOWS = [AFlow, _K().L]\n",
+    "unread",
+    "an instance attribute shadows the method a read names",
+)
+add(
+    "r10_decorator_descriptor",
+    "\n\nclass _Desc:\n    def __get__(self, obj, owner=None):\n        return BFlow\n\n\n"
+    "def _d(f):\n    return _Desc()\n\n\nclass _K:\n    @_d\n    def L(self):\n        pass\n\n\n"
+    "WORKFLOWS = [AFlow, _K.L]\n",
+    "unread",
+    "a decorator that returns a descriptor",
+)
+# Both workers' registrations of an activity method (the live fix, PostHog 38a7878ef5b9).
+WAITER = (
+    "\n\ndef _defn(f):\n    return f\n\n\nclass _Waiter:\n    @_defn\n    def wait(self, inputs):\n"
+    "        return inputs\n\n\n_WAITER = _Waiter()\n\n\n"
+)
+add(
+    "r10_ok_wrapper_activity",
+    WAITER + "@_defn\ndef wait(inputs):\n    return _WAITER.wait(inputs)\n\n\nWORKFLOWS = [AFlow, wait]\n",
+    "watched",
+    "harmless: a module-level wrapper of a bound activity method",
+)
+add(
+    "r10_bound_method_activity",
+    WAITER + "WORKFLOWS = [AFlow, _WAITER.wait]\n",
+    "unread",
+    "over-fail by rule: a bound method of an instance (family 4, the live form before its fix)",
+    overfail=True,
+)
+add_g(
+    "r10_ok_external_cleanup",
+    'import sys\n\nsys.modules.pop("_harmless_library", None)\n',
+    "watched",
+    "harmless: a cleanup of a key no first-party module has",
+)
+
+# The import system (commit 3): G redirects the facade's later import of `temporal.a` to BFlow.
+REDIRECT_FACADE = (
+    "import products.{p}.backend.g  # noqa: F401\n"
+    "from products.{p}.backend.temporal.a import AFlow\n\nWORKFLOWS = [AFlow]\n"
+)
+FINDER = (
+    "import importlib.abc\nimport importlib.util\nimport types\n\n"
+    "from products.{p}.backend.temporal.b import BFlow\n\n\n"
+    "class _Loader(importlib.abc.Loader):\n    def create_module(self, spec):\n        return None\n\n"
+    "    def exec_module(self, module):\n        module.AFlow = BFlow\n\n\n"
+    "class _Finder(importlib.abc.MetaPathFinder):\n    def find_spec(self, name, path, target=None):\n"
+    '        if name.endswith(".temporal.a"):\n            return importlib.util.spec_from_loader(name, _Loader())\n'
+    "        return None\n\n\n"
+)
+
+
+def add_redirect(p: str, g: str, note: str, **extra: Any) -> None:
+    files = {"backend/facade/temporal.py": REDIRECT_FACADE, "backend/g.py": g}
+    CASES[p] = {**case(p, "", "unread", note, files=files), "alone": True, **extra}
+
+
+add_redirect(
+    "r10_meta_path_insert",
+    "import sys\n" + FINDER + "sys.meta_path.insert(0, _Finder())\n",
+    "a finder put on sys.meta_path",
+)
+add_redirect(
+    "r10_meta_path_alias",
+    "from sys import meta_path as _mp\n" + FINDER + "_mp.insert(0, _Finder())\n",
+    "a finder put on sys.meta_path through an alias",
+)
+add_redirect(
+    "r10_meta_path_setattr",
+    "import sys\n" + FINDER + 'setattr(sys, "meta_path", [_Finder(), *sys.meta_path])\n',
+    "sys.meta_path replaced by setattr",
+)
+PATH_DIR = (
+    "import os\nimport tempfile\n\nimport products.{p}.backend.temporal as _pkg\n\n"
+    '_d = tempfile.mkdtemp()\nwith open(os.path.join(_d, "a.py"), "w") as _f:\n'
+    '    _f.write("from products.{p}.backend.temporal.b import BFlow as AFlow\\n")\n'
+)
+add_redirect(
+    "r10_package_path_insert",
+    PATH_DIR + "_pkg.__path__.insert(0, _d)\n",
+    "a directory put first on a package's __path__",
+    alone=False,
+)
+add_redirect(
+    "r10_package_path_store",
+    PATH_DIR + "_pkg.__path__ = [_d, *_pkg.__path__]\n",
+    "a package's __path__ replaced",
+    alone=False,
+)
+add_redirect(
+    "r10_import_replaced",
+    "import builtins\n\nfrom products.{p}.backend.temporal.b import BFlow\n\n_real = builtins.__import__\n\n\n"
+    "def _imp(name, globals=None, locals=None, fromlist=(), level=0):\n    module = _real(name, globals, locals, fromlist, level)\n"
+    '    if name.endswith(".temporal.a"):\n        module.AFlow = BFlow\n    return module\n\n\nbuiltins.__import__ = _imp\n',
+    "builtins.__import__ replaced",
+)
+add_redirect(
+    "r10_importer_cache",
+    "import sys\n\nimport products.{p}.backend.temporal as _pkg\n\nsys.path_importer_cache.clear()\n",
+    "sys.path_importer_cache cleared",
+    witness=False,
+)
+add_redirect(
+    "r10_invalidate_caches",
+    "import importlib\n\nimportlib.invalidate_caches()\n",
+    "an explicit importlib.invalidate_caches()",
+    witness=False,
+)
+add_g(
+    "r10_ok_iter_modules",
+    "import pkgutil\n\nimport products.{p}.backend.temporal as _pkg\n\n_names = [m.name for m in pkgutil.iter_modules(_pkg.__path__)]\n",
+    "watched",
+    "harmless: pkgutil.iter_modules lists a package's path",
+)
+# Codex's rows on the commit 3 stop: `pkgutil.iter_modules(M.__path__)` is a read only while no
+# file changes a `__path__` or touches the import hooks, and each item gives only `.name` and
+# `.ispkg`. G (round 9b's facade: WORKFLOWS bound first) or a redirecting G before `temporal.a`.
+PUBLISH = "    import products.{p}.backend.facade.temporal as _f\n\n    _f.WORKFLOWS.append(BFlow)\n"
+PKG = "import pkgutil\nimport sys\n\nimport products.{p}.backend.temporal as _pkg\n\n"
+READ = "for _m in pkgutil.iter_modules(_pkg.__path__):\n    _n = _m.name\n"
+add_g(
+    "r10_iter_declining_hook",
+    PKG + "\n\ndef _hook(path):\n" + PUBLISH + "    raise ImportError\n\n\n"
+    "sys.path_hooks.insert(0, _hook)\nsys.path_importer_cache.pop(_pkg.__path__[0], None)\n" + READ,
+    "unread",
+    "a path hook that declines and publishes B while iter_modules runs",
+    alone=True,
+)
+add_g(
+    "r10_iter_cache_pinning",
+    PKG
+    + "\n\nclass _Finder:\n    def iter_modules(self, prefix=''):\n"
+    + PUBLISH.replace("    ", "        ")
+    + "        return iter([])\n\n\nsys.path_importer_cache[_pkg.__path__[0]] = _Finder()\n"
+    + READ,
+    "unread",
+    "a finder pinned in the shared importer cache for the package's path",
+    alone=True,
+)
+add_g(
+    "r10_iter_handler_registered",
+    "import importlib.machinery\n"
+    + PKG
+    + "\n\n@pkgutil.iter_importer_modules.register(importlib.machinery.FileFinder)\n"
+    + "def _handler(importer, prefix=''):\n"
+    + PUBLISH
+    + "    return iter([])\n\n\n"
+    + READ,
+    "unread",
+    "a registered iter_importer_modules handler publishes B",
+)
+add_g(
+    "r10_iter_handler_fallback",
+    PKG + "\n\ndef _handler(importer, prefix=''):\n" + PUBLISH + "    return iter([])\n\n\n"
+    "pkgutil.iter_importer_modules = _handler\n" + READ,
+    "unread",
+    "the generic iter_importer_modules replaced, a fallback that publishes B",
+)
+FINDER_ESCAPE = (
+    "import importlib.util\n"
+    + PKG
+    + FINDER.split("class _Finder")[0]
+    + "\n\ndef _evil(finder):\n    real = finder.find_spec\n\n"
+    "    def find_spec(name, target=None):\n        if name.endswith('.temporal.a'):\n"
+    "            return importlib.util.spec_from_loader(name, _Loader())\n        return real(name, target)\n\n"
+    "    finder.find_spec = find_spec\n\n\n"
+)
+for name, loop in {
+    "module_finder": "for _m in pkgutil.iter_modules(_pkg.__path__):\n    _evil(_m.module_finder)\n",
+    "index": "for _m in pkgutil.iter_modules(_pkg.__path__):\n    _evil(_m[0])\n",
+    "first_target": "for _f, _n, _k in pkgutil.iter_modules(_pkg.__path__):\n    _evil(_f)\n",
+    "escaped_generator": "\n\ndef _all(modules):\n    for _f, _n, _k in modules:\n        _evil(_f)\n\n\n_all(pkgutil.iter_modules(_pkg.__path__))\n",
+}.items():
+    add_redirect(
+        f"r10_iter_escape_{name}", FINDER_ESCAPE + loop, f"the importer cache's finder escapes: {name}", alone=False
+    )
+add(
+    "r10_iter_namespace_refresh",
+    "",
+    "unread",
+    "a namespace package's path refreshed after its parent's __path__ changes",
+    files={
+        "backend/ns/a.py": "from products.{p}.backend.temporal.a import AFlow  # noqa: F401\n",
+        "backend/facade/temporal.py": "import products.{p}.backend.g  # noqa: F401\nfrom products.{p}.backend.ns.a import AFlow\n\nWORKFLOWS = [AFlow]\n",
+        "backend/g.py": "import os\nimport tempfile\n\nimport products.{p}.backend as _parent\n\n_d = tempfile.mkdtemp()\n"
+        "os.makedirs(os.path.join(_d, 'ns'))\nwith open(os.path.join(_d, 'ns', 'a.py'), 'w') as _f:\n"
+        "    _f.write('from products.{p}.backend.temporal.b import BFlow as AFlow\\n')\n"
+        "_parent.__path__.insert(0, _d)\n",
+    },
+)
+add_g(
+    "r10_iter_fspath_item",
+    PKG
+    + "\n\nclass _P:\n    def __fspath__(self):\n"
+    + PUBLISH.replace("    ", "        ")
+    + "        return '/nonexistent'\n\n\n"
+    "_pkg.__path__.insert(0, _P())\n" + READ,
+    "unread",
+    "a custom path item whose __fspath__ publishes B",
+)
+add(
+    "r10_iter_path_replaced_elsewhere",
+    "",
+    "unread",
+    "a __path__ replaced in another file voids the iter_modules read",
+    files={
+        "backend/facade/temporal.py": REDIRECT_FACADE,
+        "backend/g.py": "import products.{p}.backend.h  # noqa: F401\n" + PKG + READ,
+        "backend/h.py": PATH_DIR + "_pkg.__path__ = [_d, *_pkg.__path__]\n",
+    },
+)

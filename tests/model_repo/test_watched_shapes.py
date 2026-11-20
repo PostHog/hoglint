@@ -25,7 +25,7 @@ from model_repo.shapes_round8 import ROUND8
 from model_repo.shapes_round8_cases import CASES as ROUND8_CASES
 from model_repo.shapes_round9 import ROUND9 as ROUND9_PINNED
 from model_repo.shapes_round9_moves import moved
-from model_repo.shapes_round9b_cases import CASES as ROUND9B
+from model_repo.shapes_round9b_cases import CASES as ROUND9B_PINNED
 from model_repo.shapes_round10_cases import CASES as ROUND10
 from model_repo.test_watched import lay_derived, watched
 
@@ -41,6 +41,7 @@ ROUND7_CASES = moved(ROUND7_CASES)
 ROUND8 = moved(ROUND8)
 ROUND8_CASES = moved(ROUND8_CASES)
 ROUND9 = moved(ROUND9_PINNED)
+ROUND9B = moved(ROUND9B_PINNED)
 
 CLASS = "class {name}:\n    def run(self, x):\n        return x\n"
 FUNCTION = "def {name}(x, mode=None):\n    return x\n"
@@ -1488,7 +1489,7 @@ def test_round9b_a_change_through_a_resolved_module_fails_that_module_only(round
 # together; the loud rows together, as each fails only its own facade; a row whose change may
 # reach every module (`alone`) in an answer of its own.
 ROUND10_ALONE = {p: shape for p, shape in ROUND10.items() if shape.get("alone")}
-ROUND10_QUIET = {p: shape for p, shape in ROUND10.items() if shape["outcome"] == "watched"}
+ROUND10_QUIET = {p: shape for p, shape in ROUND10.items() if shape["outcome"] in ("watched", "kept")}
 ROUND10_LOUD = {p: shape for p, shape in ROUND10.items() if shape["outcome"] == "unread" and not shape.get("alone")}
 
 

@@ -270,6 +270,8 @@ These belong to the PostHog preset, not to the engine.
   An operation of T9 to T13 that compares, hashes, formats or releases a list's items writes `name?$`; one with a named operand of a comparing method writes `name?&OPERAND`. The read holds only when every row that binds or changes the list is read and each value (or the operand) is a literal of a builtin type, a display of such, an undecorated function, or a class whose creation and metaclass run no first-party code.
 - **Base use, `#base`** (round 10, a `!VALUE#base` row).
   A class some class statement takes as a base is touched: a subclass reaches it through `super()` and attribute lookup, so it is no stable class and no quiet holder.
+- **Import system rows, `^path`, `^hooks`, `?iter`** (round 10, commit 3).
+  `!^path` marks a change of a package's `__path__`, `!^hooks` a touch of the path hooks, the importer cache, `sys.meta_path`, `sys.addaudithook` or `pkgutil.iter_importer_modules`; `!+MODULE:*?iter` is a `pkgutil.iter_modules` read that becomes that change when any file writes either marker.
 - **Unknown object store, `@?` row** (round 10, an `escapes` row `@?.ATTR`).
   A store into an object no dotted name gives (`type(x).attr = v`): it may be any class the file defines or imports, each of which is stored into.
 - **Computed module value, `!+` row** (an `escapes` row `!+MODULE:NAME`).

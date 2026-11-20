@@ -514,6 +514,8 @@ pub struct Walker<'a, 'w> {
     namespace_writers: bool,
     /// The names bound to a module value, by scope (`follow`).
     computed: HashMap<(i64, &'a str), Tracked>,
+    /// The `for` statement whose iterable is being walked (`iter_modules_read`).
+    for_stmt: Option<&'a ast::StmtFor>,
     /// The `!` rows written, by scope and text (`emit_value_row`).
     values_seen: HashSet<(i64, String)>,
     /// The names each function declares `global`, by its scope (`emit_global`).
@@ -568,6 +570,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             suite: &[],
             namespace_writers: false,
             computed: HashMap::new(),
+            for_stmt: None,
             values_seen: HashSet::new(),
             globals: HashMap::new(),
             config,
@@ -1529,7 +1532,9 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             Stmt::For(f) => {
                 self.child(Frame::Terminal("for-target"), &f.target, at);
+                self.for_stmt = Some(f);
                 self.child(Frame::Terminal("for-iter"), &f.iter, at);
+                self.for_stmt = None;
                 let bound = self.loop_values(f, at);
                 let pushed = bound.is_some();
                 self.loops.extend(bound);
@@ -3403,6 +3408,13 @@ impl<'a, 'w> Walker<'a, 'w> {
         if !stored && self.is_sys_modules(expr, at.scope) {
             return self.emit_modules_use(at, pos);
         }
+        let import_rows = self.import_system(expr, at);
+        if !import_rows.is_empty() {
+            for row in import_rows {
+                self.emit_value_row(at, pos, row);
+            }
+            return;
+        }
         match expr {
             // `patch.dict("sys.modules", ...)`: `sys.modules` named by a string, the keys it
             // stores; handed to anything else, any module.
@@ -3682,6 +3694,334 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
         }
         keys
+    }
+
+    /// The import system (round 10, commit 3, t30's rulings on the live stop and the commit 3
+    /// stop): the `!` rows a use writes. A visible replacement, mutation or escape of
+    /// `sys.meta_path`, `sys.path_hooks`, `sys.path_importer_cache` or a package's `__path__`, a
+    /// replacement of the effective `__import__`, or an explicit `importlib.invalidate_caches()`
+    /// redirects imports: `+MODULE:*` for the modules it may affect (a package and its
+    /// descendants for a `__path__`, `.` the file's own package, empty every module). A read is a
+    /// bare statement, a test, iteration, `in`, `is` and an item by a literal index. Any use of
+    /// the hooks, the importer cache, `sys.addaudithook` or `pkgutil.iter_importer_modules`
+    /// writes `^hooks`, and a `__path__` change `^path`: either voids every
+    /// `pkgutil.iter_modules` read (`iter_modules_read`), whose change row is conditional
+    /// (`?iter`).
+    fn import_system(&self, expr: &'a Expr, at: At) -> Vec<String> {
+        const HOOKS: [&str; 3] = ["meta_path", "path_hooks", "path_importer_cache"];
+        let any = || vec!["^hooks".to_string(), "+:*".to_string()];
+        let named = |text: &str| {
+            HOOKS.iter().any(|hook| text == format!("sys.{hook}"))
+                || matches!(
+                    text,
+                    "builtins.__import__" | "importlib.invalidate_caches" | "sys.addaudithook"
+                )
+        };
+        match expr {
+            // `patch("sys.meta_path", ...)`, `monkeypatch.setattr("builtins.__import__", f)`.
+            Expr::StringLiteral(text)
+                if named(text.value.to_str())
+                    && matches!(self.path.last(), Some(Frame::Arg(..) | Frame::Kw(..))) =>
+            {
+                any()
+            }
+            // `setattr(sys, "meta_path", x)`, `patch.object(builtins, "__import__", f)`.
+            Expr::Call(call) => {
+                let args = &call.arguments.args;
+                let target = args
+                    .iter()
+                    .any(|arg| self.is_sys(arg, at.scope) || self.is_builtins(arg));
+                let member = args.iter().any(|arg| {
+                    matches!(arg, Expr::StringLiteral(text)
+                        if HOOKS.contains(&text.value.to_str()) || text.value.to_str() == "__import__")
+                });
+                let invalidate = callee_text(call).rsplit('.').next() == Some("invalidate_caches")
+                    && self.importlib_member(&call.func);
+                if invalidate || (target && member) {
+                    any()
+                } else {
+                    Vec::new()
+                }
+            }
+            Expr::Attribute(attribute) => {
+                let attr = attribute.attr.as_str();
+                let sys = self.is_sys(&attribute.value, at.scope);
+                if HOOKS.contains(&attr) && sys {
+                    if self.import_read(attribute.ctx) {
+                        return vec!["^hooks".to_string()];
+                    }
+                    return any();
+                }
+                if attr == "addaudithook" && sys {
+                    return vec!["^hooks".to_string()];
+                }
+                if attr == "iter_importer_modules" && self.pkgutil(&attribute.value) {
+                    return vec!["^hooks".to_string()];
+                }
+                if attr == "__import__"
+                    && !attribute.ctx.is_load()
+                    && self.is_builtins(&attribute.value)
+                {
+                    return any();
+                }
+                if attr == "__path__" {
+                    let module = self.package_of(&attribute.value);
+                    return self.path_use(expr, attribute.ctx, module, Some(&attribute.value), at);
+                }
+                Vec::new()
+            }
+            Expr::Subscript(subscript)
+                if !subscript.ctx.is_load()
+                    && matches!(&*subscript.value, Expr::Name(n) if n.id.as_str() == "__builtins__")
+                    && matches!(&*subscript.slice, Expr::StringLiteral(key) if key.value.to_str() == "__import__") =>
+            {
+                any()
+            }
+            Expr::Name(name) => {
+                let id = name.id.as_str();
+                let hook = (self.bound.get(id)).is_some_and(|b| {
+                    (b.module == "sys" && (HOOKS.contains(&b.member) || b.member == "addaudithook"))
+                        || (b.module == "pkgutil" && b.member == "iter_importer_modules")
+                });
+                if hook {
+                    if self.import_read(name.ctx) {
+                        return vec!["^hooks".to_string()];
+                    }
+                    return any();
+                }
+                if id == "__path__" && !self.binds_name("__path__") {
+                    return self.path_use(expr, name.ctx, Some(".".to_string()), None, at);
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The rows a use of a package's `__path__` writes: none for a read; a conditional change for
+    /// a `pkgutil.iter_modules` read (`iter_modules_read`); else `^path` and a change of the
+    /// package (any module when no import names it).
+    fn path_use(
+        &self,
+        expr: &'a Expr,
+        ctx: ExprContext,
+        module: Option<String>,
+        owner: Option<&'a Expr>,
+        at: At,
+    ) -> Vec<String> {
+        let module = module.unwrap_or_default();
+        if self.import_read(ctx) {
+            return Vec::new();
+        }
+        if ctx.is_load() && self.iter_modules_read(expr, owner, at) {
+            return vec![format!("+{module}:*?iter")];
+        }
+        vec!["^path".to_string(), format!("+{module}:*")]
+    }
+
+    /// Whether the use of an import-system value being walked only reads it: a load that is a
+    /// bare statement, a test, iteration, `in`/`not in` or `is`/`is not`, or an item by a
+    /// literal index (a string of a path list).
+    fn import_read(&self, ctx: ExprContext) -> bool {
+        if !ctx.is_load() {
+            return false;
+        }
+        match self.path.last() {
+            Some(Frame::Terminal("expr" | "if-test" | "while-test" | "assert" | "for-iter"))
+            | Some(Frame::Step("ifexp:test" | "comp:if" | "comp:iter"))
+            | Some(Frame::Op("unary:", "not")) => true,
+            Some(Frame::Operand("cmp:", _, Expr::Compare(compare))) => {
+                compare.ops.iter().all(|op| {
+                    matches!(
+                        op,
+                        ast::CmpOp::In | ast::CmpOp::NotIn | ast::CmpOp::Is | ast::CmpOp::IsNot
+                    )
+                })
+            }
+            Some(Frame::SubValue(subscript)) => {
+                subscript.ctx.is_load() && index_literal(&subscript.slice)
+            }
+            _ => false,
+        }
+    }
+
+    /// `pkgutil.iter_modules(P)` as a read of `P` (t30's ruling on the commit 3 stop), in this
+    /// file; the link voids it when any first-party file changes a `__path__` or touches the
+    /// hooks (conditions 2 and 3 across files):
+    /// 1. the callee is `pkgutil.iter_modules` through an import nothing rebinds, with no `*` or
+    ///    `**` argument and `prefix` only as a literal;
+    /// 2. `P` is `M.__path__` read in the call, `M` the file's own package, a name (or chain)
+    ///    an import binds, or a name bound once to `importlib.import_module(...)`;
+    /// 4. the call is the direct iterable of a `for` statement or a comprehension;
+    /// 5. each item is used only through `.name` and `.ispkg`, or unpacked into three plain names
+    ///    whose first is never read (a later target of the same unpacking rebinds it).
+    fn iter_modules_read(&self, path: &'a Expr, owner: Option<&'a Expr>, at: At) -> bool {
+        let n = self.path.len();
+        let (Some(Frame::Arg(call, 0)), Some(slot)) = (
+            self.path.last().copied(),
+            n.checked_sub(2).map(|i| self.path[i]),
+        ) else {
+            return false;
+        };
+        // 1.
+        let head = callee_text(call);
+        let head = head.split('.').next().unwrap_or_default();
+        let callee = self.resolve(&callee_text(call)).as_deref() == Some("pkgutil.iter_modules")
+            && self.bound.contains_key(head)
+            && self.others.get(head).is_none();
+        let prefix = |value: &Expr| value.is_string_literal_expr();
+        let arguments = call.arguments.args.len() <= 2
+            && call.arguments.args.get(1).is_none_or(prefix)
+            && !has_star_arguments(call)
+            && (call.arguments.keywords.iter()).all(|keyword| {
+                keyword
+                    .arg
+                    .as_ref()
+                    .is_some_and(|arg| arg.as_str() == "prefix")
+                    && prefix(&keyword.value)
+            })
+            && call
+                .arguments
+                .args
+                .first()
+                .is_some_and(|first| std::ptr::eq(first, path));
+        // 2.
+        let package = match owner {
+            None => true,
+            Some(owner) => self.package_value(owner, at.scope),
+        };
+        if !(callee && arguments && package) {
+            return false;
+        }
+        // 4. and 5.
+        match slot {
+            Frame::Terminal("for-iter") => self.for_stmt.is_some_and(|f| {
+                matches!(&*f.iter, Expr::Call(c) if std::ptr::eq(c, call))
+                    && self.items_named(&f.target, ItemRegion::Scope(at.scope))
+            }),
+            Frame::Step("comp:iter") => {
+                let comprehension = (self.stack.iter().rev()).find_map(|(expr, _)| {
+                    let generators: &'a [ast::Comprehension] = match expr {
+                        Expr::ListComp(c) => &c.generators,
+                        Expr::SetComp(c) => &c.generators,
+                        Expr::DictComp(c) => &c.generators,
+                        Expr::Generator(c) => &c.generators,
+                        _ => return None,
+                    };
+                    let generator = (generators.iter())
+                        .find(|g| matches!(&g.iter, Expr::Call(c) if std::ptr::eq(c, call)))?;
+                    Some((*expr, generator))
+                });
+                comprehension.is_some_and(|(expr, generator)| {
+                    self.items_named(&generator.target, ItemRegion::Expr(expr))
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// Condition 2's `M`: the file's own package, a name (or a chain) whose head an import
+    /// binds, or a name bound once in the scope to `importlib.import_module(...)`.
+    fn package_value(&self, owner: &'a Expr, scope: i64) -> bool {
+        let Some(dotted) = dotted_name(owner) else {
+            return false;
+        };
+        let head = dotted.split('.').next().unwrap_or_default();
+        if self.bound.contains_key(head) && self.others.get(head).is_none() {
+            return true;
+        }
+        if dotted.contains('.') {
+            return false;
+        }
+        matches!(self.bound_once(scope, head), Some(Expr::Call(call))
+            if callee_text(call).rsplit('.').next() == Some("import_module"))
+    }
+
+    /// Condition 5: the loop or comprehension target's uses in its region (`ItemRegion`).
+    fn items_named(&self, target: &'a Expr, region: ItemRegion<'a>) -> bool {
+        let (name, first) = match target {
+            Expr::Name(name) => (name.id.as_str(), false),
+            Expr::Tuple(tuple)
+                if tuple.elts.len() == 3 && tuple.elts.iter().all(Expr::is_name_expr) =>
+            {
+                let names: Vec<&str> = (tuple.elts.iter())
+                    .filter_map(|e| e.as_name_expr().map(|n| n.id.as_str()))
+                    .collect();
+                // A later target of the same unpacking rebinds the first: never read.
+                if names[1..].contains(&names[0]) {
+                    return true;
+                }
+                (names[0], true)
+            }
+            _ => return false,
+        };
+        let mut uses = ItemUses {
+            name,
+            unpacked: first,
+            other: false,
+        };
+        match region {
+            ItemRegion::Expr(expr) => uses.visit_expr(expr),
+            ItemRegion::Scope(scope) => {
+                let body: &'a [Stmt] =
+                    match (scope >= 0).then(|| self.defs.entries[scope as usize].node) {
+                        Some(DefNode::Func(f)) => &f.body,
+                        Some(DefNode::Class(c)) => &c.body,
+                        None => self.suite,
+                    };
+                uses.visit_body(body);
+            }
+        }
+        !uses.other
+    }
+
+    /// Whether a name is the module `pkgutil` (an import of it).
+    fn pkgutil(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Name(name) if (self.bound.get(name.id.as_str()))
+            .is_some_and(|b| b.module == "pkgutil" && b.member.is_empty()))
+    }
+
+    /// The package a `__path__` belongs to: the module an import binds to the chain's head, with
+    /// the attributes after it (`import products.a as m; m.__path__`: `products.a`). None when no
+    /// import names it (any package).
+    fn package_of(&self, value: &Expr) -> Option<String> {
+        let dotted = dotted_name(value)?;
+        let (head, rest) = dotted
+            .split_once('.')
+            .map_or((dotted.as_str(), ""), |(h, r)| (h, r));
+        let binding = self.bound.get(head)?;
+        let origin = binding.origin()?;
+        Some(if rest.is_empty() {
+            origin
+        } else {
+            format!("{origin}.{rest}")
+        })
+    }
+
+    /// Whether an expression is the module `builtins` (an import of it) or `__builtins__`.
+    fn is_builtins(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Name(name) => {
+                let id = name.id.as_str();
+                id == "__builtins__"
+                    || (self.bound.get(id))
+                        .is_some_and(|b| b.module == "builtins" && b.member.is_empty())
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a callee is `importlib`'s `invalidate_caches`: an attribute of an import of
+    /// `importlib`, or a name `from importlib import invalidate_caches` binds.
+    fn importlib_member(&self, callee: &Expr) -> bool {
+        match callee {
+            Expr::Attribute(attribute) => matches!(&*attribute.value, Expr::Name(head)
+                if (self.bound.get(head.id.as_str()))
+                    .is_some_and(|b| b.module == "importlib" && b.member.is_empty())),
+            Expr::Name(name) => (self.bound.get(name.id.as_str()))
+                .is_some_and(|b| b.module == "importlib" && b.member == "invalidate_caches"),
+            _ => false,
+        }
     }
 
     /// The keys `update` (or `|=`) stores: each key of a dict display that resolves
@@ -5476,6 +5816,38 @@ fn module_object(value: &Expr, known: &HashSet<&str>) -> bool {
         Expr::Subscript(subscript) => module_object(&subscript.value, known),
         Expr::Name(name) => known.contains(name.id.as_str()) || name.id.as_str() == "__builtins__",
         _ => false,
+    }
+}
+
+/// Where a `pkgutil.iter_modules` item's uses are read (`Walker::items_named`): a
+/// comprehension, or the whole scope of a `for` statement.
+enum ItemRegion<'a> {
+    Expr(&'a Expr),
+    Scope(i64),
+}
+
+/// The uses of an item name other than `.name` and `.ispkg` (or, `unpacked`, any read of the
+/// finder unpacked into it).
+struct ItemUses<'n> {
+    name: &'n str,
+    unpacked: bool,
+    other: bool,
+}
+
+impl<'a> Visitor<'a> for ItemUses<'_> {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Attribute(attribute)
+                if !self.unpacked
+                    && attribute.ctx.is_load()
+                    && matches!(attribute.attr.as_str(), "name" | "ispkg")
+                    && matches!(&*attribute.value, Expr::Name(n) if n.id.as_str() == self.name) => {
+            }
+            Expr::Name(name) if name.id.as_str() == self.name && name.ctx == ExprContext::Load => {
+                self.other = true
+            }
+            _ => visitor::walk_expr(self, expr),
+        }
     }
 }
 
