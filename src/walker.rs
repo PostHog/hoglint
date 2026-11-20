@@ -3868,7 +3868,7 @@ impl<'a, 'w> Walker<'a, 'w> {
         let head = head.split('.').next().unwrap_or_default();
         let callee = self.resolve(&callee_text(call)).as_deref() == Some("pkgutil.iter_modules")
             && self.bound.contains_key(head)
-            && self.others.get(head).is_none();
+            && !self.others.contains_key(head);
         let prefix = |value: &Expr| value.is_string_literal_expr();
         let arguments = call.arguments.args.len() <= 2
             && call.arguments.args.get(1).is_none_or(prefix)
@@ -3927,7 +3927,7 @@ impl<'a, 'w> Walker<'a, 'w> {
             return false;
         };
         let head = dotted.split('.').next().unwrap_or_default();
-        if self.bound.contains_key(head) && self.others.get(head).is_none() {
+        if self.bound.contains_key(head) && !self.others.contains_key(head) {
             return true;
         }
         if dotted.contains('.') {
