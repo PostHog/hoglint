@@ -1338,11 +1338,14 @@ pub struct Producers<'p> {
     /// (`^hooks`), and the `pkgutil.iter_modules` reads they void (`void_iter_reads`).
     pub path_changed: bool,
     pub hooks_touched: bool,
-    pub iter_reads: Vec<(usize, i32, u32, String)>,
+    pub iter_reads: Vec<(usize, i32, u32, String, Option<String>)>,
     /// The modules a change through a module value may have rebound any name of
     /// (`module_change`), and whether that is every module.
     pub poisoned_modules: FxHashSet<Sid>,
     pub poison_all: bool,
+    /// The builtins some first-party file stores, deletes or patches (`^builtin:NAME`, ruling C;
+    /// `*` any): a proof that trusts the original of one is void (`builtin_patched`).
+    pub patched_builtins: FxHashSet<String>,
     /// Whether some first-party file defines `monkeypatch` (`monkeypatch_defined`), once read.
     pub monkeypatch: Option<bool>,
 }
@@ -1414,15 +1417,118 @@ impl Producers<'_> {
     /// `pkgutil.iter_importer_modules`: one such site anywhere makes every such read the change
     /// of its package it would otherwise be.
     fn void_iter_reads(&mut self) {
-        if !(self.path_changed || self.hooks_touched) {
-            return;
-        }
         let owners = self.scopes.len();
-        for (owner, scope, line, change) in std::mem::take(&mut self.iter_reads) {
+        for (owner, scope, line, change, target) in std::mem::take(&mut self.iter_reads) {
+            // Condition 5 across files and scopes (round 11, family 5): a loop target bound at
+            // module level (`?iter=NAME`) is used only in its own file, and nothing hands its
+            // module out.
+            let module = self.scopes[owner].module;
+            let shared = target.is_some_and(|name| {
+                self.module_touched(module) || self.name_used_elsewhere(owner, &name)
+            });
+            if !(self.path_changed || self.hooks_touched || shared) {
+                continue;
+            }
             self.core.rec.enter(owner, owners);
             self.module_change(owner, scope, line, &change);
             self.core.rec.leave();
         }
+    }
+
+    /// Whether some other first-party file names `name` of `owner`'s module (round 11, family
+    /// 5): a from-import of it or a star import of the module, or a dotted chain through a module
+    /// alias that reaches it (`ev._mi`, `pkg.ev._mi`): a reference, an alias use, a `!` or `@`
+    /// row, an assignment's target.
+    fn name_used_elsewhere(&mut self, owner: usize, name: &str) -> bool {
+        let module = self.scopes[owner].module;
+        let facts = self.core.facts.clone();
+        let star = self.settings.k.star;
+        let wanted = self.core.it.intern(name);
+        let full = format!("{}.{name}", self.core.it.s(module));
+        let dotted = format!(".{name}");
+        for other in 0..self.scopes.len() {
+            if other == owner {
+                continue;
+            }
+            let (other_module, is_package) =
+                (self.scopes[other].module, self.scopes[other].is_package);
+            let record = &facts.files[self.scopes[other].file as usize];
+            for row in &record.imports {
+                let (_, _, source) =
+                    import_surface(&mut self.core.it, other_module, is_package, row);
+                if source == Some(module) && (row.name == Some(wanted) || row.name == Some(star)) {
+                    return true;
+                }
+            }
+            // (scope, line, root name, the chain after it)
+            let mut chains: Vec<(i32, u32, String, String)> = Vec::new();
+            let it = &self.core.it;
+            for row in &record.refs {
+                chains.push((
+                    row.scope,
+                    row.line,
+                    it.s(row.name).to_string(),
+                    row.chain.to_string(),
+                ));
+            }
+            for row in &record.uses {
+                chains.push((
+                    row.scope,
+                    row.line,
+                    it.s(row.root).to_string(),
+                    it.s(row.attrs).to_string(),
+                ));
+            }
+            for escape in &record.escapes {
+                let text = it.s(escape.name);
+                let Some(text) = text.strip_prefix(['!', '@']) else {
+                    continue;
+                };
+                if let Some((root, rest)) = text.split_once('.') {
+                    chains.push((
+                        escape.scope,
+                        escape.line,
+                        root.to_string(),
+                        format!(".{rest}"),
+                    ));
+                }
+            }
+            for row in &record.assigns {
+                for target in &row.targets {
+                    if let V::Chain(target) = target
+                        && let Some((root, rest)) = it.s(*target).split_once('.')
+                    {
+                        chains.push((row.s, row.l, root.to_string(), format!(".{rest}")));
+                    }
+                }
+            }
+            for (scope, line, root, chain) in chains {
+                if !chain.contains(&dotted) {
+                    continue;
+                }
+                let core = &mut *self.core;
+                let tokens = chain_tokens(&chain);
+                let leading: Vec<Sid> = (tokens.iter())
+                    .take_while(|t| t.starts_with('.'))
+                    .map(|t| core.it.intern(&t[1..]))
+                    .collect();
+                let root = core.it.intern(&root);
+                let first = core.name_lookup(
+                    &self.settings.names,
+                    &mut self.scopes[other],
+                    root,
+                    scope,
+                    line,
+                );
+                let (found, rest) = core.names_descend(first, &leading);
+                let surface = core.it.join_all(found.surface, &leading[rest..]);
+                let surface = core.it.s(surface);
+                if surface == full || surface.starts_with(&format!("{full}.")) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Runs one producer for every analyzed file, each file's reads going to its own trace.
@@ -1786,12 +1892,17 @@ impl Producers<'_> {
                 entry.1.push(Touching { at, row, touch });
             }
         }
-        let links = self.escape_touches(owner, record, &mut out);
+        let (links, relied) = self.escape_touches(owner, record, &mut out);
         self.holder_escapes(owner, &mut out);
         self.foreign_rebinds(owner, &mut out);
         self.import_rebinds(owner, record, &mut out);
         self.loader_namespace(owner, record, &mut out);
-        self.aliases(&mut out, links);
+        self.aliases(&mut out, links.clone());
+        // A read that relied on bindings (`?`) is judged once every other touch is in, aliases'
+        // too (round 11: `$OTHER` reads another name's touches); what it escapes spreads again.
+        if self.relied_touches(owner, relied, &mut out) {
+            self.aliases(&mut out, links);
+        }
         if !all_classes {
             let module = self.scopes[owner].module;
             out.retain(|key, _| {
@@ -1825,8 +1936,9 @@ impl Producers<'_> {
         owner: usize,
         record: &'r FileFacts,
         out: &mut Touches<'r>,
-    ) -> Vec<Link> {
+    ) -> (Vec<Link>, Vec<(i32, u32, String)>) {
         let mut links = Vec::new();
+        let mut relied_rows = Vec::new();
         for escape in &record.escapes {
             let text = self.core.it.s(escape.name).to_string();
             let scope = escape.scope;
@@ -1836,46 +1948,11 @@ impl Producers<'_> {
                 // A store into a module or a class (`stores`), or a value that may be a module,
                 // a class or a function (`values`), read before any file.
                 continue;
-            } else if let Some((name, relied)) = text.split_once('?') {
-                // A read that relied on these names' bindings: a binding of one from another
-                // file or through a module object makes it an escape.
-                let module = self.scopes[owner].module;
-                let stored = self.foreign.get(&module);
-                let mut rebound = self.module_touched(module)
-                    || relied.split(',').any(|dep| {
-                        stored.is_some_and(|names| {
-                            (names.iter()).any(|n| {
-                                matches!(self.core.it.s(*n), "*") || self.core.it.s(*n) == dep
-                            })
-                        })
-                    });
-                // `#Class.ATTR`: a read that took a class attribute's body binding as its type,
-                // which holds only from a stable class (`stable_class`).
-                let classes: Vec<(String, String)> = (relied.split(','))
-                    .filter_map(|dep| dep.strip_prefix('#')?.rsplit_once('.'))
-                    .map(|(class, attribute)| (class.to_string(), attribute.to_string()))
-                    .collect();
-                for (class, attribute) in classes {
-                    let class = Ent {
-                        m: module,
-                        s: self.core.it.intern(&class),
-                    };
-                    rebound = rebound || !self.stable_class(class, &attribute);
-                }
-                // `$`: the read runs code of the name's items (family 7); `&NAME`: of an operand.
-                if !rebound && relied.split(',').any(|dep| dep == "$") {
-                    let file = self.scopes[owner].file as usize;
-                    let mut text = AssignText::new(self.core.facts.clone(), file);
-                    rebound = !self.inert_items(owner, scope, name, out, &mut text, 0);
-                }
-                for operand in relied.split(',').filter_map(|dep| dep.strip_prefix('&')) {
-                    let operand = V::Chain(self.core.it.intern(operand));
-                    rebound = rebound || !self.inert_value(owner, scope, escape.line, &operand);
-                }
-                if !rebound {
-                    continue;
-                }
-                (self.escape_keys(owner, scope, name, out), Touch::Escaped)
+            } else if text.contains('?') {
+                // A read that relied on bindings: judged after the other touches
+                // (`relied_touches`).
+                relied_rows.push((scope, escape.line, text));
+                continue;
             } else if let Some(name) = text.strip_prefix('=') {
                 for key in self.escape_keys(owner, scope, name, out) {
                     if let Some(entry) = out.get_mut(&key) {
@@ -1955,7 +2032,79 @@ impl Producers<'_> {
                 }
             }
         }
-        links
+        (links, relied_rows)
+    }
+
+    /// The reads that relied on bindings (`name?NAMES` rows, by scope and line), judged once
+    /// every other touch of the file is in: a binding of a relied name from another file or
+    /// through a module object, an unstable class (`#Class.ATTR`), items not proved inert (`$`,
+    /// `$OTHER`) or an operand not proved inert (`&NAME`) makes the read an escape. Whether any
+    /// did.
+    fn relied_touches(
+        &mut self,
+        owner: usize,
+        rows: Vec<(i32, u32, String)>,
+        out: &mut Touches,
+    ) -> bool {
+        let mut escaped = false;
+        for (scope, line, text) in rows {
+            let Some((name, relied)) = text.split_once('?') else {
+                continue;
+            };
+            let module = self.scopes[owner].module;
+            let stored = self.foreign.get(&module);
+            let mut rebound = self.module_touched(module)
+                || relied.split(',').any(|dep| {
+                    stored.is_some_and(|names| {
+                        (names.iter())
+                            .any(|n| matches!(self.core.it.s(*n), "*") || self.core.it.s(*n) == dep)
+                    })
+                });
+            // `#Class.ATTR`: a read that took a class attribute's body binding as its type,
+            // which holds only from a stable class (`stable_class`).
+            let classes: Vec<(String, String)> = (relied.split(','))
+                .filter_map(|dep| dep.strip_prefix('#')?.rsplit_once('.'))
+                .map(|(class, attribute)| (class.to_string(), attribute.to_string()))
+                .collect();
+            for (class, attribute) in classes {
+                let class = Ent {
+                    m: module,
+                    s: self.core.it.intern(&class),
+                };
+                rebound = rebound || !self.stable_class(class, &attribute);
+            }
+            // `$`: the read runs code of the name's items (family 7); `$OTHER`: of another name's
+            // items, a field formatted with it or a copy it is a source of (round 11, family 9);
+            // `&NAME`: of an operand.
+            let items: Vec<&str> = (relied.split(','))
+                .filter_map(|dep| dep.strip_prefix('$'))
+                .map(|dep| if dep.is_empty() { name } else { dep })
+                .collect();
+            if !rebound && !items.is_empty() {
+                let file = self.scopes[owner].file as usize;
+                let mut text = AssignText::new(self.core.facts.clone(), file);
+                rebound = !(items.into_iter())
+                    .all(|held| self.inert_items(owner, scope, held, out, &mut text, 0));
+            }
+            for operand in relied.split(',').filter_map(|dep| dep.strip_prefix('&')) {
+                let operand = V::Chain(self.core.it.intern(operand));
+                rebound = rebound || !self.inert_value(owner, scope, line, &operand);
+            }
+            if !rebound {
+                continue;
+            }
+            for key in self.escape_keys(owner, scope, name, out) {
+                if let Some(entry) = out.get_mut(&key) {
+                    entry.1.push(Touching {
+                        at: usize::MAX,
+                        row: &ESCAPED,
+                        touch: Touch::Escaped,
+                    });
+                    escaped = true;
+                }
+            }
+        }
+        escaped
     }
 
     /// Family 7 (t30's ruling): whether every item a name may hold is proved inert, so comparing,
@@ -2000,6 +2149,12 @@ impl Producers<'_> {
             let Some(json) = text.value(touching.at).cloned() else {
                 return false;
             };
+            if row.op != Op::Mutate
+                && let Some(proved) =
+                    self.copied_items(owner, row.s, row.l, &json, out, text, depth)
+            {
+                return proved;
+            }
             if row.op == Op::Mutate {
                 let J::Object(call) = &json else {
                     return false;
@@ -2008,6 +2163,64 @@ impl Producers<'_> {
             }
             self.inert_json(owner, row.s, row.l, &json)
         })
+    }
+
+    /// The items a copy holds (round 11, family 9: a copy of the list that gains a value before
+    /// it is formatted): `NAME[...]` and `NAME.copy()` hold NAME's items; `X + Y` both sides'; a
+    /// list or tuple display with `*NAME` NAME's items and its other elements. Whether each is
+    /// proved inert; None for any other value.
+    #[allow(clippy::too_many_arguments)]
+    fn copied_items(
+        &mut self,
+        owner: usize,
+        scope: i32,
+        line: u32,
+        json: &J,
+        out: &Touches,
+        text: &mut AssignText,
+        depth: usize,
+    ) -> Option<bool> {
+        let J::Object(map) = json else {
+            return None;
+        };
+        let held = |walker: &mut Self, part: &J, text: &mut AssignText| match part {
+            J::String(name) => walker.inert_items(owner, scope, name, out, text, depth + 1),
+            part => walker
+                .copied_items(owner, scope, line, part, out, text, depth + 1)
+                .unwrap_or_else(|| walker.inert_json(owner, scope, line, part)),
+        };
+        if let Some(J::String(name)) = map.get("sub") {
+            return Some(self.inert_items(owner, scope, name, out, text, depth + 1));
+        }
+        if let Some(J::String(call)) = map.get("call")
+            && let Some(name) = call.strip_suffix(".copy")
+            && !map.contains_key("args")
+            && !map.contains_key("kw")
+        {
+            return Some(self.inert_items(owner, scope, name, out, text, depth + 1));
+        }
+        if map.get("bin").and_then(J::as_str) == Some("+") {
+            let (left, right) = (map.get("l")?.clone(), map.get("r")?.clone());
+            return Some(held(self, &left, text) && held(self, &right, text));
+        }
+        for key in ["list", "tuple"] {
+            let Some(J::Array(items)) = map.get(key) else {
+                continue;
+            };
+            let starred = |item: &J| matches!(item, J::Object(m) if m.contains_key("star"));
+            if !items.iter().any(starred) {
+                return None;
+            }
+            let items = items.clone();
+            return Some(items.iter().all(|item| match item {
+                J::Object(m) if m.contains_key("star") => {
+                    let star = m["star"].clone();
+                    held(self, &star, text)
+                }
+                item => self.inert_json(owner, scope, line, item),
+            }));
+        }
+        None
     }
 
     /// Whether a value, as an item or a display of items, is proved inert (family 7): a literal
@@ -2049,14 +2262,19 @@ impl Producers<'_> {
             V::Null | V::Scalar | V::Str(..) => true,
             V::Chain(_) => match self.named_hit(owner, value, scope, line) {
                 Some((HitKind::Def, def)) => {
-                    (self.def_of(def.m, def.s, HitKind::Def)).is_some_and(|(def_owner, idx)| {
-                        let file = self.scopes[def_owner].file as usize;
-                        self.core.facts.files[file].defs[idx as usize]
-                            .dec
-                            .is_empty()
-                    })
+                    self.sole_binding(def)
+                        && (self.def_of(def.m, def.s, HitKind::Def)).is_some_and(
+                            |(def_owner, idx)| {
+                                let file = self.scopes[def_owner].file as usize;
+                                self.core.facts.files[file].defs[idx as usize]
+                                    .dec
+                                    .is_empty()
+                            },
+                        )
                 }
-                Some((HitKind::Class, class)) => !self.holder_runs_code(class, None, 0),
+                Some((HitKind::Class, class)) => {
+                    self.sole_binding(class) && !self.holder_runs_code(class, None, 0)
+                }
                 _ => false,
             },
             _ => false,
@@ -2249,11 +2467,15 @@ impl Producers<'_> {
                 Some((HitKind::Class, class)) if self.defined_class(class) => {
                     self.plain_metaclass(class, 0)
                 }
-                // A builtin (`object`, `int`, `len`) is a class or a function: no `__set__`.
+                // A builtin (`object`, `int`, `len`) is a class or a function: no `__set__`,
+                // unless some file changes that builtin (ruling C).
                 _ => self
                     .named(owner, value, at, line)
                     .is_some_and(|(surface, target)| {
-                        surface.starts_with("builtins.") || target.starts_with("builtins.")
+                        let builtin = [surface, target]
+                            .into_iter()
+                            .find_map(|name| name.strip_prefix("builtins.").map(str::to_string));
+                        builtin.is_some_and(|name| !self.builtin_patched(&name))
                     }),
             },
             V::Call(callee, ..) => {
@@ -2517,9 +2739,14 @@ impl Producers<'_> {
                 }
                 _ => {}
             }
+            if let Some(name) = text.strip_prefix("^builtin:") {
+                self.patched_builtins.insert(name.to_string());
+                continue;
+            }
             if let Some(change) = text.strip_prefix('+') {
-                if let Some(change) = change.strip_suffix("?iter") {
-                    let read = (owner, escape.scope, escape.line, change.to_string());
+                if let Some((change, target)) = change.split_once("?iter") {
+                    let target = target.strip_prefix('=').map(str::to_string);
+                    let read = (owner, escape.scope, escape.line, change.to_string(), target);
                     self.iter_reads.push(read);
                     continue;
                 }
@@ -2609,6 +2836,17 @@ impl Producers<'_> {
     /// `*` is every name: every read that may depend on the module is unread (`module_poisoned`).
     /// A class NAME such a module defines is stored into too.
     fn module_change(&mut self, owner: usize, scope: i32, line: u32, change: &str) {
+        // A key resolved through names bound once (`?=NAMES`, round 11, family 6): the proof
+        // consults every binding, so a store into one of them from any file makes it any key.
+        let (change, names) = match change.split_once("?=") {
+            Some((change, names)) => (change, Some(names)),
+            None => (change, None),
+        };
+        let own = self.scopes[owner].module;
+        let rebound = names.is_some_and(|names| {
+            self.module_poisoned(own) || names.split(',').any(|name| self.stored_into(own, name))
+        });
+        let change = if rebound { ":*" } else { change };
         // A key pytest's `monkeypatch` stores or deletes: when some file defines a fixture or a
         // plugin name `monkeypatch`, the call may be anything, so any module.
         let change = match change.strip_suffix("?monkeypatch") {
@@ -2889,6 +3127,7 @@ impl Producers<'_> {
             || self.touched(class)
             || self.module_poisoned(class.m)
             || !self.stable_lineage(class, 0)
+            || (!self.core.it.s(class.s).contains('.') && !self.sole_binding(class))
         {
             return false;
         }
@@ -2926,16 +3165,68 @@ impl Producers<'_> {
     /// (family 4): `staticmethod`, `classmethod` or `property`, which return a descriptor whose
     /// class read runs no first-party code.
     fn trusted_decorator(&mut self, owner: usize, decorator: &V, def: &Def) -> bool {
-        self.named(owner, decorator, def.s, def.l)
-            .is_some_and(|(surface, target)| {
-                let trusted = |name: &str| {
-                    matches!(
-                        name,
-                        "builtins.staticmethod" | "builtins.classmethod" | "builtins.property"
-                    )
-                };
-                trusted(&surface) || trusted(&target)
-            })
+        let Some((surface, target)) = self.named(owner, decorator, def.s, def.l) else {
+            return false;
+        };
+        let trusted = |name: &str| {
+            matches!(
+                name,
+                "builtins.staticmethod" | "builtins.classmethod" | "builtins.property"
+            )
+        };
+        let name = if trusted(&surface) {
+            surface
+        } else if trusted(&target) {
+            target
+        } else {
+            return false;
+        };
+        // Round 11 (ruling C, family 10): the builtin unchanged, and the name not stored into
+        // the reading module from another file.
+        let bare = name.trim_start_matches("builtins.");
+        let module = self.scopes[owner].module;
+        !self.builtin_patched(bare) && !self.stored_into(module, bare)
+    }
+
+    /// Whether some first-party file stores, deletes or patches the builtin `name` (ruling C).
+    fn builtin_patched(&self, name: &str) -> bool {
+        self.patched_builtins.contains(name) || self.patched_builtins.contains("*")
+    }
+
+    /// Whether some file stores into `name` of `module` (`foreign`, `*` any name).
+    fn stored_into(&self, module: Sid, name: &str) -> bool {
+        self.foreign.get(&module).is_some_and(|names| {
+            names
+                .iter()
+                .any(|n| matches!(self.core.it.s(*n), "*") || self.core.it.s(*n) == name)
+        })
+    }
+
+    /// Whether a module-level def or class is the only binding of its name (round 11, family
+    /// 10: a proof consults every binding of the name it relies on): no file stores into the
+    /// name (`foreign`), no change through a module value may have rebound it
+    /// (`module_poisoned`), and its own file binds it by nothing else: no module-level row (a
+    /// `global` row of a function or a class body among them) and no `=name`.
+    fn sole_binding(&mut self, ent: Ent) -> bool {
+        let name = self.core.it.s(ent.s).to_string();
+        if self.stored_into(ent.m, &name) || self.module_poisoned(ent.m) {
+            return false;
+        }
+        let Some(table) = self.core.table(ent.m) else {
+            return false;
+        };
+        let Some(file) = self.core.table_at(table).record else {
+            return false;
+        };
+        let facts = self.core.facts.clone();
+        let record = &facts.files[file as usize];
+        let rebound = format!("={name}");
+        let it = &self.core.it;
+        let other = (record.escapes.iter()).any(|e| e.scope == -1 && it.s(e.name) == rebound);
+        let assigned = (record.assigns.iter())
+            .filter(|row| row.s == -1)
+            .any(|row| (row.targets.iter()).any(|t| matches!(t, V::Chain(n) if *n == ent.s)));
+        !other && !assigned
     }
 
     /// Whether a class-body binding's value runs no first-party code when the class reads it

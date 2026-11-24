@@ -239,6 +239,87 @@ enum ModuleUse<'a> {
     Handed,
 }
 
+/// The objects the import system rule protects (round 11): what a value may be is keyed on the
+/// object, whatever the spelling that reaches it (`Walker::protected`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Object {
+    /// The module `sys`.
+    Sys,
+    /// The module `builtins`.
+    Builtins,
+    /// Shared import machinery (t30's ruling A): a module or a member of `importlib` (but
+    /// `importlib.metadata` and `importlib.resources`), `pkgutil`, `zipimport` or `site`; an
+    /// import hook or the importer cache (`meta_path`, `path_hooks`, `path_importer_cache` on any
+    /// receiver) or an item of one; a finder the importer cache holds.
+    Machinery,
+}
+
+/// A value that may be a protected object, and the last name that reaches it, when one does
+/// (`invalidate_caches`, `insert`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Protected<'a> {
+    object: Object,
+    member: Option<&'a str>,
+}
+
+/// Where a protected value goes (`Walker::protected_use`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Use<'a> {
+    /// Read: nothing of it goes on.
+    Read,
+    /// The expression around it is a protected value too: its own use decides.
+    Inner,
+    /// Changed: an attribute or a key of it stored, deleted or patched (the name, when a literal
+    /// gives it), or a member of it called that changes it.
+    Changed(Option<&'a str>),
+    /// Handed on where no read accounts for it.
+    Handed,
+}
+
+/// The import hooks and the importer cache: an attribute of these names, on any receiver, is the
+/// import system's (round 11).
+const HOOKS: [&str; 3] = ["meta_path", "path_hooks", "path_importer_cache"];
+
+/// The calls of a member of shared import machinery that change it (ruling A): the mutating
+/// methods, a cache invalidation, a handler registration.
+const MACHINERY_CHANGERS: [&str; 4] = ["invalidate_caches", "register", "__iadd__", "__ior__"];
+
+/// The calls of a member of shared import machinery that return a finder the importer cache
+/// holds (`PathFinder._path_importer_cache(d)`, `pkgutil.get_importer(p)`): what they return is
+/// shared machinery too.
+const CACHED_FINDERS: [&str; 2] = ["_path_importer_cache", "get_importer"];
+
+/// The builtins the walker's own proofs trust, in every file, by name (ruling C): a visible
+/// change of one may change any of them, so it is every first-party name (`+:*`).
+/// `staticmethod`, `classmethod` and `property` are judged by the link where it trusts them
+/// (`^builtin:NAME`); `__import__` is the import system's.
+const TRUSTED_BUILTINS: [&str; 24] = [
+    "__build_class__",
+    "getattr",
+    "hasattr",
+    "setattr",
+    "delattr",
+    "vars",
+    "globals",
+    "locals",
+    "isinstance",
+    "issubclass",
+    "len",
+    "bool",
+    "list",
+    "tuple",
+    "set",
+    "frozenset",
+    "sorted",
+    "dict",
+    "exec",
+    "eval",
+    "object",
+    "type",
+    "super",
+    "dir",
+];
+
 /// The methods of a module's member that change it, through a module value (`Walker::follow`).
 const MODULE_MUTATORS: [&str; 17] = [
     "append",
@@ -514,6 +595,12 @@ pub struct Walker<'a, 'w> {
     namespace_writers: bool,
     /// The names bound to a module value, by scope (`follow`).
     computed: HashMap<(i64, &'a str), Tracked>,
+    /// The names a `sys.modules` key was resolved through (`literal_text`), for the row that
+    /// writes it (`keyed`): the link makes it any key when a file stores into one.
+    key_names: RefCell<Vec<String>>,
+    /// The names some binding in any scope binds to a protected object, or to an item of shared
+    /// import machinery (a `for` or comprehension target over one): `protected_names`.
+    protected_names: HashMap<&'a str, Protected<'a>>,
     /// The `for` statement whose iterable is being walked (`iter_modules_read`).
     for_stmt: Option<&'a ast::StmtFor>,
     /// The `!` rows written, by scope and text (`emit_value_row`).
@@ -570,6 +657,8 @@ impl<'a, 'w> Walker<'a, 'w> {
             suite: &[],
             namespace_writers: false,
             computed: HashMap::new(),
+            protected_names: HashMap::new(),
+            key_names: RefCell::new(Vec::new()),
             for_stmt: None,
             values_seen: HashSet::new(),
             globals: HashMap::new(),
@@ -694,6 +783,37 @@ impl<'a, 'w> Walker<'a, 'w> {
                 }
             }
             if self.sys_aliases.len() == before {
+                break;
+            }
+        }
+        self.protected_names(suite);
+    }
+
+    /// The names any binding of the file, in any scope, binds to a protected object
+    /// (`protected`), or to an item of shared import machinery (a `for` or comprehension target
+    /// over one), to a fixpoint: a use of such a name anywhere is a use of the object (round 11,
+    /// ruling A's "follow the object through aliases"). By name, not by scope, so a binding in
+    /// any scope counts for every use.
+    fn protected_names(&mut self, suite: &'a [Stmt]) {
+        let mut bindings = ValueBindings::default();
+        bindings.visit_body(suite);
+        loop {
+            let before = self.protected_names.len();
+            for (name, value) in &bindings.pairs {
+                if let Some(protected) = self.protected(value, -1) {
+                    self.protected_names.entry(name).or_insert(protected);
+                }
+            }
+            for (name, iterable) in &bindings.items {
+                if self.protected(iterable, -1).map(|p| p.object) == Some(Object::Machinery) {
+                    let item = Protected {
+                        object: Object::Machinery,
+                        member: None,
+                    };
+                    self.protected_names.entry(name).or_insert(item);
+                }
+            }
+            if self.protected_names.len() == before {
                 break;
             }
         }
@@ -1076,6 +1196,11 @@ impl<'a, 'w> Walker<'a, 'w> {
             Expr::Attribute(a) if is(&a.value) && a.ctx.is_load() && whole => {
                 match a.attr.as_str() {
                     "__name__" | "__qualname__" | "__module__" | "__doc__" => {
+                        // An item's attribute read runs its metaclass's `__getattribute__`
+                        // (round 11, the audit): the item proof.
+                        if kind.item {
+                            self.needs_items();
+                        }
                         Some(Shape::item_of(&kind.sources))
                     }
                     "copy" | "keys" | "values" | "items" if kind.exact => Some(Shape {
@@ -1450,16 +1575,20 @@ impl<'a, 'w> Walker<'a, 'w> {
                 }
             }
             Stmt::Assign(a) => {
+                let declared = self.class_globals(at.scope);
+                let global = |target: &&Expr| matches!(target, Expr::Name(name) if declared.contains(name.id.as_str()));
                 if let Some(declared) = self.typed_dict(a, at) {
                     self.out.typed_dicts.push(declared);
                 } else if self.emits_assign(at.scope) {
-                    let t = a
-                        .targets
-                        .iter()
-                        .map(|t| self.value(Some(t), false))
-                        .collect();
-                    let v = self.enc.assigned(Some(&a.value), self.src);
-                    self.emit_assign(stmt, at, "=".to_string(), t, None, v);
+                    // A class body's `global` names bind at module level (round 11, family 11).
+                    let (globals, own): (Vec<&Expr>, Vec<&Expr>) =
+                        a.targets.iter().partition(global);
+                    if !own.is_empty() {
+                        let t = own.iter().map(|t| self.value(Some(t), false)).collect();
+                        let v = self.enc.assigned(Some(&a.value), self.src);
+                        self.emit_assign(stmt, at, "=".to_string(), t, None, v);
+                    }
+                    self.emit_global(stmt, at, &globals, Some(&a.value));
                 } else {
                     let targets: Vec<&Expr> = a.targets.iter().collect();
                     self.emit_global(stmt, at, &targets, Some(&a.value));
@@ -1471,7 +1600,11 @@ impl<'a, 'w> Walker<'a, 'w> {
                 self.child(Frame::AssignValue(&a.targets), &a.value, at);
             }
             Stmt::AnnAssign(a) => {
-                if self.emits_assign(at.scope) {
+                let global = matches!(&*a.target,
+                    Expr::Name(name) if self.class_globals(at.scope).contains(name.id.as_str()));
+                if global {
+                    self.emit_global(stmt, at, &[&*a.target], a.value.as_deref());
+                } else if self.emits_assign(at.scope) {
                     let t = vec![self.value(Some(&a.target), false)];
                     let ann = self.value(Some(&a.annotation), true);
                     let v = self.enc.assigned(a.value.as_deref(), self.src);
@@ -1486,7 +1619,11 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             Stmt::AugAssign(a) => {
                 let op = binop(a.op);
-                if self.emits_assign(at.scope) {
+                let global = matches!(&*a.target,
+                    Expr::Name(name) if self.class_globals(at.scope).contains(name.id.as_str()));
+                if global {
+                    self.emit_global(stmt, at, &[&*a.target], Some(&a.value));
+                } else if self.emits_assign(at.scope) {
                     let t = vec![self.value(Some(&a.target), false)];
                     let v = self.enc.assigned(Some(&a.value), self.src);
                     self.emit_assign(stmt, at, format!("{op}="), t, None, v);
@@ -1941,16 +2078,22 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// with op `global`, the statement's flags and the assigned value, so the reading knows what
     /// the function may bind the name to.
     fn emit_global(&mut self, stmt: &Stmt, at: At, targets: &[&Expr], value: Option<&Expr>) {
-        if at.scope == -1 || self.emits_assign(at.scope) || !self.wants(Kind::Assigns) {
+        if at.scope == -1 || !self.wants(Kind::Assigns) || targets.is_empty() {
             return;
         }
-        let Some(names) = self.globals.get(&at.scope) else {
-            return;
+        let class = self.class_globals(at.scope);
+        let declared = |name: &str| {
+            class.contains(name)
+                || (!self.defs.is_class(at.scope)
+                    && self
+                        .globals
+                        .get(&at.scope)
+                        .is_some_and(|n| n.contains(name)))
         };
         let bound: Vec<String> = targets
             .iter()
             .filter_map(|target| match target {
-                Expr::Name(name) if names.contains(name.id.as_str()) => Some(name.id.to_string()),
+                Expr::Name(name) if declared(name.id.as_str()) => Some(name.id.to_string()),
                 _ => None,
             })
             .collect();
@@ -1969,6 +2112,18 @@ impl<'a, 'w> Walker<'a, 'w> {
                 None,
                 v.clone(),
             );
+        }
+    }
+
+    /// The names a class body (`scope`) declares `global` (round 11, family 11): they bind at
+    /// module level, as a function's do. Empty for any other scope.
+    fn class_globals(&self, scope: i64) -> HashSet<&'a str> {
+        if scope < 0 || !self.defs.is_class(scope) {
+            return HashSet::new();
+        }
+        match self.defs.entries[scope as usize].node {
+            DefNode::Class(class) => declared_global(&class.body),
+            DefNode::Func(_) => HashSet::new(),
         }
     }
 
@@ -2177,9 +2332,22 @@ impl<'a, 'w> Walker<'a, 'w> {
                 _ => vec![(reached.clone(), at.scope)],
             };
             if !matches!(outcome, Outcome::Escape) {
-                for (source, scope) in sources {
-                    let site = At { scope, ..at };
-                    self.emit_escape(name, site, &format!("{source}?$"));
+                // A copy of a source holds the values it gained too (round 11, family 9): when
+                // the value used is a container, not an item, each other source's read needs the
+                // used name's items proved (`$NAME`), which hold its sources' and its own.
+                let copy =
+                    matches!(&start, Start::Value(shape) | Start::Variable(shape) if !shape.item);
+                for (source, scope) in &sources {
+                    let extra = if copy && *source != reached {
+                        format!(",${reached}")
+                    } else {
+                        String::new()
+                    };
+                    let site = At {
+                        scope: *scope,
+                        ..at
+                    };
+                    self.emit_escape(name, site, &format!("{source}?${extra}"));
                 }
             }
         }
@@ -2191,7 +2359,21 @@ impl<'a, 'w> Walker<'a, 'w> {
         let row = match outcome {
             Outcome::Read => return,
             Outcome::Changed(call) => return self.emit_change(call, &reached, at),
-            Outcome::Alias(targets) => format!("{reached}~{targets}"),
+            Outcome::Alias(targets) => {
+                // A class body's `global` target is the module's name (family 11).
+                let declared = self.class_globals(at.scope);
+                let (globals, own): (Vec<&str>, Vec<&str>) = targets
+                    .split(',')
+                    .partition(|target| declared.contains(target));
+                if !globals.is_empty() {
+                    let module = At { scope: -1, ..at };
+                    self.emit_escape(name, module, &format!("{reached}~{}", globals.join(",")));
+                }
+                if own.is_empty() {
+                    return;
+                }
+                format!("{reached}~{}", own.join(","))
+            }
             Outcome::Record(targets, callees) => {
                 format!("{reached}>{targets}@{}", callees.join(","))
             }
@@ -2272,7 +2454,14 @@ impl<'a, 'w> Walker<'a, 'w> {
                 reads
             }
             Frame::Step("fstr") => items(reads && self.fstring_inert(site, scope)),
-            Frame::Terminal("for-iter") | Frame::Step("comp:iter") => kind.exact,
+            // Unpacking each item into a target that is no plain name runs the item's
+            // `__iter__` (round 11, the audit): the item proof.
+            Frame::Terminal("for-iter") | Frame::Step("comp:iter") => {
+                if kind.exact && self.unpacks_items(first) {
+                    self.needs_items();
+                }
+                kind.exact
+            }
             Frame::AssignValue(targets) => targets.iter().all(Expr::is_name_expr),
             Frame::AnnAssignValue(target) => target.is_name_expr(),
             Frame::Arg(call, _) | Frame::Kw(call, Some(_)) => {
@@ -2325,6 +2514,28 @@ impl<'a, 'w> Walker<'a, 'w> {
             }
             _ => false,
         }
+    }
+
+    /// Whether the loop whose iterable is being walked (a `for` statement's, or a
+    /// comprehension's, `frame`) unpacks each item: its target is no plain name.
+    fn unpacks_items(&self, frame: Frame<'a>) -> bool {
+        let target = match frame {
+            Frame::Terminal("for-iter") => self.for_stmt.map(|f| &*f.target),
+            _ => (self.stack.iter().rev()).find_map(|(expr, _)| {
+                let generators: &'a [ast::Comprehension] = match expr {
+                    Expr::ListComp(c) => &c.generators,
+                    Expr::SetComp(c) => &c.generators,
+                    Expr::DictComp(c) => &c.generators,
+                    Expr::Generator(c) => &c.generators,
+                    _ => return None,
+                };
+                let site = self.stack.last()?.0.range();
+                (generators.iter())
+                    .find(|g| g.iter.range().contains_range(site))
+                    .map(|g| &g.target)
+            }),
+        };
+        target.is_none_or(|target| !target.is_name_expr())
     }
 
     /// What a use of `id` starts as, the name it reaches (`Reg.WORKFLOWS` through a class's
@@ -2461,9 +2672,10 @@ impl<'a, 'w> Walker<'a, 'w> {
                 "assign-target" | "annassign-target" | "augassign-target"
             ))
         );
+        // A plain-name assignment of a `global` name writes a `global` row instead, in a
+        // function and (round 11, family 11) in a class body alike.
         let site = match (global, row_scope) {
-            (true, true) => At { scope: -1, ..at },
-            (true, false) if !(assignment && direct) => At { scope: -1, ..at },
+            (true, _) if !(assignment && direct) => At { scope: -1, ..at },
             (false, true) if !assignment => at,
             _ => return,
         };
@@ -2517,6 +2729,14 @@ impl<'a, 'w> Walker<'a, 'w> {
             | Frame::Op("unary:", "not")
                 if builtin =>
             {
+                // Unpacking each item runs its `__iter__` (round 11, the audit).
+                let iterates = matches!(
+                    first,
+                    Frame::Terminal("for-iter") | Frame::Step("comp:iter")
+                );
+                if iterates && self.unpacks_items(first) {
+                    self.needs_items();
+                }
                 Outcome::Read
             }
             // T12: an f-string, whose other fields are literals; it formats every item.
@@ -2586,11 +2806,20 @@ impl<'a, 'w> Walker<'a, 'w> {
     }
 
     /// Whether formatting another operand runs no first-party code (family 7): a literal, or a
-    /// name the inventory proves builtin-typed, whose own use the same entry reads (its items
-    /// proved by its own `$`).
+    /// name the inventory proves builtin-typed whose items the link proves inert for this read
+    /// too (`$NAME`, round 11, family 9: formatting it runs every item's dunders).
     fn formatted_inert(&self, operand: &'a Expr, scope: i64) -> bool {
-        plain_literal(operand)
-            || (operand.is_name_expr() && self.kind_of(operand, scope, &[]).exact)
+        if plain_literal(operand) {
+            return true;
+        }
+        let Expr::Name(name) = operand else {
+            return false;
+        };
+        if !self.kind_of(operand, scope, &[]).exact {
+            return false;
+        }
+        self.relied.borrow_mut().push(format!("${}", name.id));
+        true
     }
 
     /// Whether every other field of the f-string around `site` (its siblings, the format spec
@@ -3399,6 +3628,7 @@ impl<'a, 'w> Walker<'a, 'w> {
         if !self.wants(Kind::Escapes) || at.flags & TYPE_ONLY != 0 {
             return;
         }
+        self.key_names.borrow_mut().clear();
         let pos = self.lines.pos(expr.range().start());
         let any = Tracked {
             module: None,
@@ -3429,7 +3659,8 @@ impl<'a, 'w> Walker<'a, 'w> {
                     _ => vec![None],
                 };
                 for key in keys {
-                    self.emit_value_row(at, pos, format!("+{}:*", key.unwrap_or_default()));
+                    let row = self.keyed(format!("+{}:*", key.unwrap_or_default()));
+                    self.emit_value_row(at, pos, row);
                 }
             }
             _ if let Some((value, "__self__")) = self.dunder_read(expr) => {
@@ -3456,7 +3687,10 @@ impl<'a, 'w> Walker<'a, 'w> {
                 };
                 self.follow(tracked, at, pos);
             }
-            Expr::Subscript(subscript) if self.is_modules(&subscript.value) => {
+            Expr::Subscript(subscript)
+                if self.is_modules(&subscript.value)
+                    || self.is_sys_modules(&subscript.value, at.scope) =>
+            {
                 let module = match &*subscript.slice {
                     key if self.literal_text(key, at.scope, 0).is_some() => {
                         self.literal_text(key, at.scope, 0)
@@ -3473,8 +3707,8 @@ impl<'a, 'w> Walker<'a, 'w> {
                     return;
                 }
                 if !subscript.ctx.is_load() {
-                    let module = module.unwrap_or_default();
-                    return self.emit_value_row(at, pos, format!("+{module}:*"));
+                    let row = self.keyed(format!("+{}:*", module.unwrap_or_default()));
+                    return self.emit_value_row(at, pos, row);
                 }
                 if module.as_deref() == Some(".") {
                     return self.emit_value_row(at, pos, ".".to_string());
@@ -3630,15 +3864,17 @@ impl<'a, 'w> Walker<'a, 'w> {
                 let key = (call.arguments.args.get(1))
                     .and_then(|key| self.literal_text(key, at.scope, 0));
                 let row = match key {
-                    Some(key) => format!("+{key}:*?monkeypatch"),
+                    Some(key) => self.keyed(format!("+{key}:*?monkeypatch")),
                     None => "+:*".to_string(),
                 };
                 return self.emit_value_row(at, pos, row);
             }
             _ => vec![None],
         };
+        let names = self.key_names.borrow().clone();
         for key in keys {
-            let row = format!("+{}:*", key.unwrap_or_default());
+            *self.key_names.borrow_mut() = names.clone();
+            let row = self.keyed(format!("+{}:*", key.unwrap_or_default()));
             self.emit_value_row(at, pos, row);
         }
     }
@@ -3696,19 +3932,18 @@ impl<'a, 'w> Walker<'a, 'w> {
         keys
     }
 
-    /// The import system (round 10, commit 3, t30's rulings on the live stop and the commit 3
-    /// stop): the `!` rows a use writes. A visible replacement, mutation or escape of
-    /// `sys.meta_path`, `sys.path_hooks`, `sys.path_importer_cache` or a package's `__path__`, a
-    /// replacement of the effective `__import__`, or an explicit `importlib.invalidate_caches()`
-    /// redirects imports: `+MODULE:*` for the modules it may affect (a package and its
-    /// descendants for a `__path__`, `.` the file's own package, empty every module). A read is a
-    /// bare statement, a test, iteration, `in`, `is` and an item by a literal index. Any use of
-    /// the hooks, the importer cache, `sys.addaudithook` or `pkgutil.iter_importer_modules`
-    /// writes `^hooks`, and a `__path__` change `^path`: either voids every
-    /// `pkgutil.iter_modules` read (`iter_modules_read`), whose change row is conditional
+    /// The import system (round 10's commit 3; round 11 keys it on the object, t30's brief and
+    /// rulings A and C): the `!` rows a use writes. A visible change, replacement or handoff of a
+    /// protected object (`protected`: the module `sys` or `builtins`, shared import machinery)
+    /// redirects imports: `+:*` (every first-party name) and `^hooks`; a change of a builtin
+    /// writes `^builtin:NAME` (the link voids the proofs that trust it). A package's `__path__`,
+    /// by any spelling, writes `+MODULE:*` for the package and its descendants (`.` the file's own
+    /// package, empty every package) and `^path`. A read is a bare statement, a test, iteration,
+    /// `in`, `is`, a literal attribute or an item by a literal index (`protected_use`). Any use of
+    /// `sys.addaudithook` or `pkgutil.iter_importer_modules` writes `^hooks`: either row voids
+    /// every `pkgutil.iter_modules` read (`iter_modules_read`), whose change row is conditional
     /// (`?iter`).
     fn import_system(&self, expr: &'a Expr, at: At) -> Vec<String> {
-        const HOOKS: [&str; 3] = ["meta_path", "path_hooks", "path_importer_cache"];
         let any = || vec!["^hooks".to_string(), "+:*".to_string()];
         let named = |text: &str| {
             HOOKS.iter().any(|hook| text == format!("sys.{hook}"))
@@ -3717,84 +3952,523 @@ impl<'a, 'w> Walker<'a, 'w> {
                     "builtins.__import__" | "importlib.invalidate_caches" | "sys.addaudithook"
                 )
         };
+        if let Some(rows) = self.path_spelled(expr, at) {
+            return rows;
+        }
         match expr {
             // `patch("sys.meta_path", ...)`, `monkeypatch.setattr("builtins.__import__", f)`.
             Expr::StringLiteral(text)
                 if named(text.value.to_str())
                     && matches!(self.path.last(), Some(Frame::Arg(..) | Frame::Kw(..))) =>
             {
-                any()
+                return any();
             }
-            // `setattr(sys, "meta_path", x)`, `patch.object(builtins, "__import__", f)`.
-            Expr::Call(call) => {
-                let args = &call.arguments.args;
-                let target = args
-                    .iter()
-                    .any(|arg| self.is_sys(arg, at.scope) || self.is_builtins(arg));
-                let member = args.iter().any(|arg| {
-                    matches!(arg, Expr::StringLiteral(text)
-                        if HOOKS.contains(&text.value.to_str()) || text.value.to_str() == "__import__")
-                });
-                let invalidate = callee_text(call).rsplit('.').next() == Some("invalidate_caches")
-                    && self.importlib_member(&call.func);
-                if invalidate || (target && member) {
-                    any()
-                } else {
-                    Vec::new()
-                }
-            }
+            // `patch("importlib.machinery.SourceFileLoader.get_data", f)`,
+            // `patch("builtins.staticmethod", f)`: a store into what the target names.
+            Expr::StringLiteral(text) => return self.patch_target(text.value.to_str(), at),
             Expr::Attribute(attribute) => {
                 let attr = attribute.attr.as_str();
-                let sys = self.is_sys(&attribute.value, at.scope);
-                if HOOKS.contains(&attr) && sys {
-                    if self.import_read(attribute.ctx) {
-                        return vec!["^hooks".to_string()];
-                    }
-                    return any();
-                }
-                if attr == "addaudithook" && sys {
+                if attr == "addaudithook" && self.is_sys(&attribute.value, at.scope) {
                     return vec!["^hooks".to_string()];
                 }
                 if attr == "iter_importer_modules" && self.pkgutil(&attribute.value) {
-                    return vec!["^hooks".to_string()];
-                }
-                if attr == "__import__"
-                    && !attribute.ctx.is_load()
-                    && self.is_builtins(&attribute.value)
-                {
-                    return any();
+                    let mut rows = vec!["^hooks".to_string()];
+                    rows.extend(self.protected_rows(expr, at));
+                    return rows;
                 }
                 if attr == "__path__" {
                     let module = self.package_of(&attribute.value);
                     return self.path_use(expr, attribute.ctx, module, Some(&attribute.value), at);
                 }
-                Vec::new()
-            }
-            Expr::Subscript(subscript)
-                if !subscript.ctx.is_load()
-                    && matches!(&*subscript.value, Expr::Name(n) if n.id.as_str() == "__builtins__")
-                    && matches!(&*subscript.slice, Expr::StringLiteral(key) if key.value.to_str() == "__import__") =>
-            {
-                any()
             }
             Expr::Name(name) => {
                 let id = name.id.as_str();
                 let hook = (self.bound.get(id)).is_some_and(|b| {
-                    (b.module == "sys" && (HOOKS.contains(&b.member) || b.member == "addaudithook"))
+                    (b.module == "sys" && b.member == "addaudithook")
                         || (b.module == "pkgutil" && b.member == "iter_importer_modules")
                 });
                 if hook {
-                    if self.import_read(name.ctx) {
-                        return vec!["^hooks".to_string()];
-                    }
-                    return any();
+                    let mut rows = vec!["^hooks".to_string()];
+                    rows.extend(self.protected_rows(expr, at));
+                    return rows;
                 }
                 if id == "__path__" && !self.binds_name("__path__") {
                     return self.path_use(expr, name.ctx, Some(".".to_string()), None, at);
                 }
+            }
+            _ => {}
+        }
+        self.protected_rows(expr, at)
+    }
+
+    /// A string a patch takes as its target (the first argument, or `target=`, of a call whose
+    /// last name is `patch`, `setattr` or `delattr`): a store into what it names. Of `builtins`,
+    /// the builtin it names (`builtin_rows`); of shared import machinery, every first-party name.
+    fn patch_target(&self, text: &str, at: At) -> Vec<String> {
+        let target = match self.path.last() {
+            Some(Frame::Arg(call, 0)) | Some(Frame::Kw(call, Some("target"))) => {
+                let callee = callee_text(call);
+                matches!(
+                    callee.rsplit('.').next(),
+                    Some("patch" | "setattr" | "delattr")
+                )
+            }
+            _ => false,
+        };
+        if !target {
+            return Vec::new();
+        }
+        let Some((owner, name)) = text.rsplit_once('.') else {
+            return Vec::new();
+        };
+        match object_of_origin(owner) {
+            Some(Object::Builtins) => self.builtin_rows(name, at),
+            Some(Object::Machinery) => vec!["^hooks".to_string(), "+:*".to_string()],
+            // `sys.modules` by a string is `emit_computed_value`'s; the hooks are `named` above.
+            Some(Object::Sys) | None => Vec::new(),
+        }
+    }
+
+    /// `__path__` named by a literal attribute string or a namespace key (round 11, family 2):
+    /// `getattr(M, "__path__")` (read where the call is used, like `M.__path__`), `setattr`,
+    /// `delattr`, `patch.object` or a `setattr` method with `"__path__"` (a change),
+    /// `vars(M)["__path__"]`, `M.__dict__["__path__"]` (read or changed where the key is used),
+    /// and `globals()["__path__"]` or module-level `vars()["__path__"]`, the file's own package.
+    /// M is the package an import names, else any package. None for any other expression.
+    fn path_spelled(&self, expr: &'a Expr, at: At) -> Option<Vec<String>> {
+        let path_literal = |value: Option<&Expr>| matches!(value, Some(Expr::StringLiteral(s)) if s.value.to_str() == "__path__");
+        match expr {
+            Expr::Call(call) if path_literal(call.arguments.args.get(1)) => {
+                let owner = call.arguments.args.first()?;
+                let callee = callee_text(call);
+                let last = callee.rsplit('.').next().unwrap_or_default();
+                let module = self.package_of(owner);
+                let bare = |name: &str| callee == name && !self.binds_name(name);
+                if bare("getattr") {
+                    return Some(self.path_use(expr, ExprContext::Load, module, Some(owner), at));
+                }
+                if bare("hasattr") {
+                    return Some(Vec::new());
+                }
+                let patch = last == "object" && callee.contains("patch");
+                if patch || matches!(last, "setattr" | "delattr") {
+                    return Some(vec![
+                        "^path".to_string(),
+                        format!("+{}:*", module.unwrap_or_default()),
+                    ]);
+                }
+                None
+            }
+            Expr::Subscript(subscript) if path_literal(Some(&subscript.slice)) => {
+                let module = match &*subscript.value {
+                    Expr::Call(call) => {
+                        let callee = callee_text(call);
+                        let bare = |name: &str| callee == name && !self.binds_name(name);
+                        match call.arguments.args.first() {
+                            Some(owner) if bare("vars") => self.package_of(owner),
+                            None if bare("globals") || (bare("vars") && at.scope == -1) => {
+                                Some(".".to_string())
+                            }
+                            _ => None,
+                        }
+                    }
+                    Expr::Attribute(attribute) if attribute.attr.as_str() == "__dict__" => {
+                        self.package_of(&attribute.value)
+                    }
+                    _ => None,
+                };
+                Some(self.path_use(expr, subscript.ctx, module, None, at))
+            }
+            _ => None,
+        }
+    }
+
+    /// The rows a use of a protected object writes (`protected`, `protected_use`,
+    /// `object_rows`); none when the expression is no protected object.
+    fn protected_rows(&self, expr: &'a Expr, at: At) -> Vec<String> {
+        let Some(protected) = self.protected(expr, at.scope) else {
+            return Vec::new();
+        };
+        let used = self.protected_use(protected, expr, at);
+        // An import entry point handed on (`addCleanup(importlib.reload, m)`) changes no shared
+        // machinery: calling it is the item reading's rule 2, where a registration point does.
+        let entry = protected.member.is_some_and(|m| ENTRY_POINTS.contains(&m));
+        if entry && used == Use::Handed {
+            return Vec::new();
+        }
+        self.object_rows(protected.object, used, at)
+    }
+
+    /// The rows a use of a protected object writes (t30's brief and rulings A and C): none for a
+    /// read; of shared import machinery, a change or a handoff is every first-party name; of
+    /// `sys`, a change of an import-system attribute (the hooks, `modules`, an unknown name) or a
+    /// handoff is; of `builtins`, a change of a name is that builtin's (`builtin_rows`), and a
+    /// handoff or an unknown name is every builtin and every first-party name.
+    fn object_rows(&self, object: Object, used: Use<'a>, at: At) -> Vec<String> {
+        let any = || vec!["^hooks".to_string(), "+:*".to_string()];
+        match (object, used) {
+            (_, Use::Read | Use::Inner) => Vec::new(),
+            (Object::Machinery, _) => any(),
+            (Object::Sys, Use::Changed(Some(name)))
+                if !HOOKS.contains(&name) && name != "modules" && !is_dunder(name) =>
+            {
                 Vec::new()
             }
-            _ => Vec::new(),
+            (Object::Sys, _) => any(),
+            (Object::Builtins, Use::Changed(Some(name))) => self.builtin_rows(name, at),
+            (Object::Builtins, _) => {
+                let mut rows = any();
+                rows.push("^builtin:*".to_string());
+                rows
+            }
+        }
+    }
+
+    /// A visible change of `builtins.NAME` (ruling C): `^builtin:NAME`, which voids every proof
+    /// the link bases on the original (`staticmethod`, `classmethod`, `property`, a builtin
+    /// default); every first-party name too for one the walker's own proofs trust
+    /// (`TRUSTED_BUILTINS`) or a dunder, and the import system's rows for `__import__`.
+    fn builtin_rows(&self, name: &str, _at: At) -> Vec<String> {
+        let mut rows = vec![format!("^builtin:{name}")];
+        if name == "__import__" {
+            rows.push("^hooks".to_string());
+        }
+        if name == "__import__" || TRUSTED_BUILTINS.contains(&name) || is_dunder(name) {
+            rows.push("+:*".to_string());
+        }
+        rows
+    }
+
+    /// What protected object an expression may be (round 11, keyed on the object, not on a list
+    /// of spellings): a name an import binds to one (`object_of_origin`), `__builtins__`, a name
+    /// some binding binds to one (`protected_names`) or to a module value a literal names
+    /// (`computed`); an attribute `sys` or `builtins` of a value that may be a module (`os.sys`,
+    /// `importlib.sys`, `m.sys`); an attribute named `meta_path`, `path_hooks` or
+    /// `path_importer_cache` on any receiver; a member or an item of shared import machinery;
+    /// `sys.modules[KEY]` with a key that resolves, `__import__` or `import_module` of a literal;
+    /// a finder the importer cache returns (`CACHED_FINDERS`); a branch of a conditional or a
+    /// boolean operation, a walrus. Only loads count: a store's change is read where its value
+    /// is used (`protected_use`).
+    fn protected(&self, expr: &'a Expr, scope: i64) -> Option<Protected<'a>> {
+        let object = |object| {
+            Some(Protected {
+                object,
+                member: None,
+            })
+        };
+        match expr {
+            Expr::Name(name) if name.ctx.is_load() => {
+                let id = name.id.as_str();
+                if id == "__builtins__" {
+                    return object(Object::Builtins);
+                }
+                // A function's parameter of the same name is not the import.
+                let parameter = scope >= 0
+                    && matches!(self.defs.entries[scope as usize].node,
+                        DefNode::Func(f) if f.parameters.iter().any(|p| p.name().as_str() == id));
+                if let Some(binding) = self.bound.get(id).filter(|_| !parameter)
+                    && let Some(origin) = binding.origin()
+                    && let Some(found) = object_of_origin(&origin)
+                {
+                    let member = (!binding.member.is_empty()).then_some(binding.member);
+                    return Some(Protected {
+                        object: found,
+                        member,
+                    });
+                }
+                if let Some(protected) = self.protected_names.get(id) {
+                    return Some(*protected);
+                }
+                let tracked = [scope, -1]
+                    .iter()
+                    .find_map(|scope| self.computed.get(&(*scope, id)));
+                match tracked {
+                    Some(Tracked {
+                        module: Some(module),
+                        member: Member::Module,
+                    }) => object_of_origin(module).and_then(object),
+                    _ => None,
+                }
+            }
+            Expr::Attribute(attribute) if attribute.ctx.is_load() => {
+                self.protected_attribute(&attribute.value, attribute.attr.as_str(), scope)
+            }
+            Expr::Subscript(subscript) if subscript.ctx.is_load() => {
+                let modules = self.is_modules(&subscript.value)
+                    || self.is_sys_modules(&subscript.value, scope);
+                if modules {
+                    let key = self.literal_text(&subscript.slice, scope, 0)?;
+                    return object_of_origin(&key).and_then(object);
+                }
+                let value = self.protected(&subscript.value, scope)?;
+                (value.object == Object::Machinery).then_some(Protected {
+                    object: Object::Machinery,
+                    member: None,
+                })
+            }
+            Expr::Call(call) => {
+                let callee = callee_text(call);
+                let last = callee.rsplit('.').next().unwrap_or_default();
+                if matches!(last, "__import__" | "import_module")
+                    && let Some(Expr::StringLiteral(module)) = call.arguments.args.first()
+                {
+                    return object_of_origin(module.value.to_str()).and_then(object);
+                }
+                if !self.binds_name("getattr")
+                    && let (Some(attr), Some(value)) =
+                        (getattr_literal(call), call.arguments.args.first())
+                {
+                    return self.protected_attribute(value, attr, scope);
+                }
+                let callee = self.protected(&call.func, scope)?;
+                let finder = callee.object == Object::Machinery
+                    && callee.member.is_some_and(|m| CACHED_FINDERS.contains(&m));
+                finder.then_some(Protected {
+                    object: Object::Machinery,
+                    member: None,
+                })
+            }
+            Expr::If(conditional) => self
+                .protected(&conditional.body, scope)
+                .or_else(|| self.protected(&conditional.orelse, scope)),
+            Expr::BoolOp(boolean) => (boolean.values.iter()).find_map(|v| self.protected(v, scope)),
+            Expr::Named(named) => self.protected(&named.value, scope),
+            _ => None,
+        }
+    }
+
+    /// What `VALUE.ATTR` may be (`protected`): `sys` or `builtins` of a value that may be a
+    /// module; an import hook or the importer cache on any receiver; a member of shared import
+    /// machinery.
+    fn protected_attribute(
+        &self,
+        value: &'a Expr,
+        attr: &'a str,
+        scope: i64,
+    ) -> Option<Protected<'a>> {
+        let module = || {
+            self.protected(value, scope).is_some()
+                || dotted_name(value).is_some_and(|dotted| {
+                    let head = dotted.split('.').next().unwrap_or_default();
+                    self.bound.contains_key(head)
+                        || self.computed.contains_key(&(scope, head))
+                        || self.computed.contains_key(&(-1, head))
+                })
+        };
+        let object = match attr {
+            "sys" if module() => Object::Sys,
+            "builtins" if module() => Object::Builtins,
+            _ if HOOKS.contains(&attr) => Object::Machinery,
+            // Package data and resources, not import state (`object_of_origin`).
+            "metadata" | "resources" => return None,
+            _ if self.protected(value, scope)?.object == Object::Machinery => Object::Machinery,
+            _ => return None,
+        };
+        let member = (object == Object::Machinery).then_some(attr);
+        Some(Protected { object, member })
+    }
+
+    /// Ruling A's spec lookup: a call of `find_spec` on shared machinery is a read when it is
+    /// `importlib.util.find_spec` (one name, an import entry point read elsewhere), or a
+    /// `PathFinder.find_spec(name, locations)` whose name is a string (a literal, an f-string, or
+    /// a name bound only to those, to names or as a parameter) and whose locations are a
+    /// package's search locations: `M.__path__`, `S.submodule_search_locations`, `None`, or a
+    /// name bound only to those or a conditional of them, with no `*` or `**` argument.
+    fn path_finder_lookup(&self, call: &'a ast::ExprCall, scope: i64) -> bool {
+        if has_star_arguments(call) || !call.arguments.keywords.is_empty() {
+            return false;
+        }
+        let head = callee_text(call);
+        let full = self.resolve_quietly(&head);
+        if full.as_deref() == Some("importlib.util.find_spec") {
+            return call.arguments.args.len() <= 2;
+        }
+        let [name, locations] = &call.arguments.args[..] else {
+            return false;
+        };
+        let body: &'a [Stmt] = match (scope >= 0).then(|| self.defs.entries[scope as usize].node) {
+            Some(DefNode::Func(function)) => &function.body,
+            _ => self.suite,
+        };
+        let bindings = |id: &str| {
+            let mut found: Vec<&'a Expr> = Vec::new();
+            let mut stack: Vec<&'a [Stmt]> = vec![body];
+            while let Some(suite) = stack.pop() {
+                for stmt in suite {
+                    if let Stmt::Assign(assign) = stmt
+                        && (assign.targets.iter())
+                            .any(|t| matches!(t, Expr::Name(n) if n.id.as_str() == id))
+                    {
+                        found.push(&assign.value);
+                    }
+                    stack.extend(nested_bodies(stmt));
+                }
+            }
+            found
+        };
+        let string = |expr: &'a Expr| match expr {
+            Expr::StringLiteral(_) | Expr::FString(_) => true,
+            Expr::Name(n) => bindings(n.id.as_str()).iter().all(|value| {
+                matches!(
+                    value,
+                    Expr::StringLiteral(_) | Expr::FString(_) | Expr::Name(_)
+                )
+            }),
+            _ => false,
+        };
+        fn search(expr: &Expr) -> bool {
+            match expr {
+                Expr::Attribute(a) => {
+                    matches!(a.attr.as_str(), "__path__" | "submodule_search_locations")
+                }
+                Expr::NoneLiteral(_) => true,
+                Expr::If(c) => search(&c.body) && search(&c.orelse),
+                _ => false,
+            }
+        }
+        let places = match locations {
+            Expr::Name(n) => {
+                let values = bindings(n.id.as_str());
+                !values.is_empty() && values.iter().all(|value| search(value))
+            }
+            other => search(other),
+        };
+        string(name) && places
+    }
+
+    /// The full name a dotted name stands for through the import that binds its head, with no
+    /// record of the reliance (`resolve` writes one): None when no import binds the head.
+    fn resolve_quietly(&self, dotted: &str) -> Option<String> {
+        let (head, rest) = match dotted.split_once('.') {
+            Some((head, rest)) => (head, Some(rest)),
+            None => (dotted, None),
+        };
+        let base = self.bound.get(head)?.origin()?;
+        Some(match rest {
+            Some(rest) => format!("{base}.{rest}"),
+            None => base,
+        })
+    }
+
+    /// Where a protected value goes (the expression being walked, `expr`), by its parent frame:
+    /// - read: a literal attribute (a dunder but a plain one may be a namespace: handed), a call
+    ///   of it that changes nothing, `getattr` or `hasattr` with a literal name, `isinstance`, a
+    ///   statement, a test, iteration, a comparison, a base, a decorator, names bound to it (the
+    ///   names are followed: `protected_names`);
+    /// - inner: the expression around it is a protected value too (`sys.meta_path` of `sys`);
+    /// - changed: an attribute or a key of it stored or deleted, `setattr`, `delattr`,
+    ///   `patch.object` or a `setattr`/`delattr` method on it, a mutating or invalidating call of
+    ///   a member of machinery (`MODULE_MUTATORS`, `MACHINERY_CHANGERS`);
+    /// - handed: anything else (an argument, an element, a returned or yielded value, `vars`,
+    ///   `getattr` with a computed name).
+    fn protected_use(&self, protected: Protected<'a>, expr: &'a Expr, at: At) -> Use<'a> {
+        let n = self.stack.len();
+        let parent = n.checked_sub(2).map(|i| self.stack[i].0);
+        let inner_or = |read: Use<'a>| match parent {
+            Some(parent) if self.protected(parent, at.scope).is_some() => Use::Inner,
+            _ => read,
+        };
+        let literal = |value: Option<&'a Expr>| match value {
+            Some(Expr::StringLiteral(text)) => Some(text.value.to_str()),
+            _ => None,
+        };
+        let Some(frame) = self.path.last() else {
+            return Use::Read;
+        };
+        // The namespace of `sys` or `builtins` (`m.__dict__`, `vars(m)`) by a literal key: a
+        // store or a deletion is that name's change, a load a read (ruling C: follow namespace
+        // writes).
+        let namespace = match *frame {
+            Frame::Attr("__dict__") => true,
+            Frame::Arg(call, 0) => {
+                callee_text(call) == "vars"
+                    && !self.binds_name("vars")
+                    && call.arguments.args.len() == 1
+            }
+            _ => false,
+        };
+        if namespace && protected.object != Object::Machinery {
+            let keyed = self.path.len().checked_sub(2).map(|i| self.path[i]);
+            if let Some(Frame::SubValue(subscript)) = keyed
+                && let Some(key) = literal(Some(&subscript.slice))
+            {
+                return if subscript.ctx.is_load() {
+                    Use::Read
+                } else {
+                    Use::Changed(Some(key))
+                };
+            }
+            return Use::Handed;
+        }
+        match *frame {
+            Frame::Attr(attr) => match parent {
+                Some(Expr::Attribute(outer)) if !outer.ctx.is_load() => Use::Changed(Some(attr)),
+                _ if is_dunder(attr) && !PLAIN_DUNDERS.contains(&attr) => Use::Handed,
+                _ => inner_or(Use::Read),
+            },
+            Frame::CallFunc(call) => {
+                let member = protected.member.unwrap_or_default();
+                let changes =
+                    MODULE_MUTATORS.contains(&member) || MACHINERY_CHANGERS.contains(&member);
+                if protected.object == Object::Machinery && changes {
+                    return Use::Changed(Some(member));
+                }
+                if protected.object == Object::Machinery
+                    && member == "find_spec"
+                    && !self.path_finder_lookup(call, at.scope)
+                {
+                    return Use::Handed;
+                }
+                inner_or(Use::Read)
+            }
+            Frame::Arg(call, position) => {
+                let callee = callee_text(call);
+                let last = callee.rsplit('.').next().unwrap_or_default();
+                let bare = |name: &str| callee == name && !self.binds_name(name);
+                let second = call.arguments.args.get(1);
+                if bare("isinstance") || bare("issubclass") {
+                    return Use::Read;
+                }
+                if position != 0 {
+                    return Use::Handed;
+                }
+                let patch = last == "object" && callee.contains("patch");
+                if patch || matches!(last, "setattr" | "delattr") {
+                    return Use::Changed(literal(second));
+                }
+                if bare("getattr") && getattr_literal(call).is_some() {
+                    let attr = getattr_literal(call).unwrap_or_default();
+                    if is_dunder(attr) && !PLAIN_DUNDERS.contains(&attr) {
+                        return Use::Handed;
+                    }
+                    return inner_or(Use::Read);
+                }
+                if bare("hasattr") && literal(second).is_some_and(|name| !is_dunder(name)) {
+                    return Use::Read;
+                }
+                Use::Handed
+            }
+            Frame::SubValue(subscript) if !subscript.ctx.is_load() => {
+                Use::Changed(literal(Some(&subscript.slice)))
+            }
+            Frame::SubValue(_) => inner_or(Use::Read),
+            Frame::Terminal(
+                "expr" | "if-test" | "while-test" | "assert" | "for-iter" | "decorator",
+            )
+            | Frame::Step("ifexp:test" | "comp:if" | "comp:iter")
+            | Frame::Op("unary:", "not")
+            | Frame::Operand("cmp:", ..)
+            | Frame::Base(_)
+            | Frame::Walrus(_)
+            | Frame::AnnAssignValue(Expr::Name(_)) => Use::Read,
+            Frame::AssignValue(targets) if targets.iter().all(Expr::is_name_expr) => Use::Read,
+            Frame::Step("ifexp:body" | "ifexp:else") | Frame::Op("bool:", _) => {
+                inner_or(Use::Handed)
+            }
+            _ => {
+                let _ = expr;
+                Use::Handed
+            }
         }
     }
 
@@ -3813,8 +4487,13 @@ impl<'a, 'w> Walker<'a, 'w> {
         if self.import_read(ctx) {
             return Vec::new();
         }
-        if ctx.is_load() && self.iter_modules_read(expr, owner, at) {
-            return vec![format!("+{module}:*?iter")];
+        if ctx.is_load()
+            && let Some(target) = self.iter_modules_read(expr, owner, at)
+        {
+            // A loop target bound at module level (`?iter=NAME`): the link checks that no
+            // other file names it (condition 5 across files, round 11).
+            let target = target.map(|name| format!("={name}")).unwrap_or_default();
+            return vec![format!("+{module}:*?iter{target}")];
         }
         vec!["^path".to_string(), format!("+{module}:*")]
     }
@@ -3854,14 +4533,25 @@ impl<'a, 'w> Walker<'a, 'w> {
     ///    an import binds, or a name bound once to `importlib.import_module(...)`;
     /// 4. the call is the direct iterable of a `for` statement or a comprehension;
     /// 5. each item is used only through `.name` and `.ispkg`, or unpacked into three plain names
-    ///    whose first is never read (a later target of the same unpacking rebinds it).
-    fn iter_modules_read(&self, path: &'a Expr, owner: Option<&'a Expr>, at: At) -> bool {
+    ///    whose first is never read (a later target of the same unpacking rebinds it), in every
+    ///    scope of the file: a target bound at module level (a module-level loop, or one in a
+    ///    function that declares it `global`) is read in the whole file, and returned (`Some`)
+    ///    for the link to check that no other file names it and nothing hands the module out
+    ///    (round 11, family 5). A loop in a class body is no read.
+    ///
+    /// None when the call is no read; `Some(None)` for a target local to its scope.
+    fn iter_modules_read(
+        &self,
+        path: &'a Expr,
+        owner: Option<&'a Expr>,
+        at: At,
+    ) -> Option<Option<&'a str>> {
         let n = self.path.len();
         let (Some(Frame::Arg(call, 0)), Some(slot)) = (
             self.path.last().copied(),
             n.checked_sub(2).map(|i| self.path[i]),
         ) else {
-            return false;
+            return None;
         };
         // 1.
         let head = callee_text(call);
@@ -3891,14 +4581,34 @@ impl<'a, 'w> Walker<'a, 'w> {
             Some(owner) => self.package_value(owner, at.scope),
         };
         if !(callee && arguments && package) {
-            return false;
+            return None;
         }
         // 4. and 5.
         match slot {
-            Frame::Terminal("for-iter") => self.for_stmt.is_some_and(|f| {
-                matches!(&*f.iter, Expr::Call(c) if std::ptr::eq(c, call))
-                    && self.items_named(&f.target, ItemRegion::Scope(at.scope))
-            }),
+            Frame::Terminal("for-iter") => {
+                let f = self.for_stmt?;
+                if !matches!(&*f.iter, Expr::Call(c) if std::ptr::eq(c, call)) {
+                    return None;
+                }
+                let first = loop_target(&f.target)?;
+                let module = match at.scope {
+                    -1 => true,
+                    scope if self.defs.is_class(scope) => return None,
+                    scope => match self.defs.entries[scope as usize].node {
+                        DefNode::Func(function) => declared_global(&function.body).contains(first),
+                        DefNode::Class(_) => return None,
+                    },
+                };
+                let region = if module {
+                    ItemRegion::Scope(-1)
+                } else {
+                    ItemRegion::Scope(at.scope)
+                };
+                if !self.items_named(&f.target, region) {
+                    return None;
+                }
+                Some(module.then_some(first))
+            }
             Frame::Step("comp:iter") => {
                 let comprehension = (self.stack.iter().rev()).find_map(|(expr, _)| {
                     let generators: &'a [ast::Comprehension] = match expr {
@@ -3912,11 +4622,12 @@ impl<'a, 'w> Walker<'a, 'w> {
                         .find(|g| matches!(&g.iter, Expr::Call(c) if std::ptr::eq(c, call)))?;
                     Some((*expr, generator))
                 });
-                comprehension.is_some_and(|(expr, generator)| {
+                let read = comprehension.is_some_and(|(expr, generator)| {
                     self.items_named(&generator.target, ItemRegion::Expr(expr))
-                })
+                });
+                read.then_some(None)
             }
-            _ => false,
+            _ => None,
         }
     }
 
@@ -3998,32 +4709,6 @@ impl<'a, 'w> Walker<'a, 'w> {
         })
     }
 
-    /// Whether an expression is the module `builtins` (an import of it) or `__builtins__`.
-    fn is_builtins(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Name(name) => {
-                let id = name.id.as_str();
-                id == "__builtins__"
-                    || (self.bound.get(id))
-                        .is_some_and(|b| b.module == "builtins" && b.member.is_empty())
-            }
-            _ => false,
-        }
-    }
-
-    /// Whether a callee is `importlib`'s `invalidate_caches`: an attribute of an import of
-    /// `importlib`, or a name `from importlib import invalidate_caches` binds.
-    fn importlib_member(&self, callee: &Expr) -> bool {
-        match callee {
-            Expr::Attribute(attribute) => matches!(&*attribute.value, Expr::Name(head)
-                if (self.bound.get(head.id.as_str()))
-                    .is_some_and(|b| b.module == "importlib" && b.member.is_empty())),
-            Expr::Name(name) => (self.bound.get(name.id.as_str()))
-                .is_some_and(|b| b.module == "importlib" && b.member == "invalidate_caches"),
-            _ => false,
-        }
-    }
-
     /// The keys `update` (or `|=`) stores: each key of a dict display that resolves
     /// (`literal_text`) and each keyword's name; None for any other key or argument.
     fn dict_keys(&self, call: &ast::ExprCall, scope: i64) -> Vec<Option<String>> {
@@ -4054,14 +4739,17 @@ impl<'a, 'w> Walker<'a, 'w> {
         if !self.wants(Kind::Escapes) || !self.is_sys_modules(&a.target, at.scope) {
             return;
         }
+        self.key_names.borrow_mut().clear();
         let pos = self.lines.pos(a.target.range().start());
         let keys = if matches!(a.op, ast::Operator::BitOr) {
             self.display_keys(&a.value, at.scope)
         } else {
             vec![None]
         };
+        let names = self.key_names.borrow().clone();
         for key in keys {
-            let row = format!("+{}:*", key.unwrap_or_default());
+            *self.key_names.borrow_mut() = names.clone();
+            let row = self.keyed(format!("+{}:*", key.unwrap_or_default()));
             self.emit_value_row(at, pos, row);
         }
     }
@@ -4088,6 +4776,19 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
+    /// A `sys.modules` key row with the names its key was resolved through (`?=NAMES`, round 11,
+    /// family 6: the proof consults every binding of them, `@` stores from every file too).
+    fn keyed(&self, row: String) -> String {
+        let mut names = std::mem::take(&mut *self.key_names.borrow_mut());
+        // A key that resolves to nothing is every module already.
+        if names.is_empty() || row.starts_with("+:") {
+            return row;
+        }
+        names.sort();
+        names.dedup();
+        format!("{row}?={}", names.join(","))
+    }
+
     /// The text a key names (round 9b, t30's ruling on the stop): a string literal; a name bound
     /// once in `scope` (the module, or a function's body), by an assignment of a text this
     /// resolves; or `spec.name`, `spec` bound once there to
@@ -4101,12 +4802,14 @@ impl<'a, 'w> Walker<'a, 'w> {
             Expr::StringLiteral(literal) => Some(literal.value.to_str().to_string()),
             Expr::Name(name) => {
                 let value = self.bound_once(scope, name.id.as_str())?;
+                self.key_names.borrow_mut().push(name.id.to_string());
                 self.literal_text(value, scope, depth + 1)
             }
             Expr::Attribute(attribute) if attribute.attr.as_str() == "name" => {
                 let Expr::Name(spec) = &*attribute.value else {
                     return None;
                 };
+                self.key_names.borrow_mut().push(spec.id.to_string());
                 let Expr::Call(call) = self.bound_once(scope, spec.id.as_str())? else {
                     return None;
                 };
@@ -5026,14 +5729,15 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
-    /// Whether an expression is `sys.modules` by any spelling (rule 1): an attribute named
-    /// `modules` on any receiver, `getattr(x, "modules")`, a name an import binds as `modules`,
-    /// or a module-level name the inventory resolves to one of these.
-    /// Whether an expression is `sys.modules` on positive evidence (family 2): `modules` read
-    /// from the module `sys` (`is_sys`) by attribute, `getattr`, `vars(sys)["modules"]` or
-    /// `sys.__dict__["modules"]`, a name `from sys import modules` binds, or a module-level alias
-    /// the inventory resolves to one of these.
+    /// Whether an expression is `sys.modules` (family 2, keyed on the object in round 11):
+    /// `modules` read from a value that may be the module `sys` (`is_sys`, `os.sys` and
+    /// `sys.modules["sys"]` among them), a name `from sys import modules` binds, a module-level
+    /// alias the inventory resolves to one of these; and `"modules"` as a literal attribute string
+    /// or namespace key (`getattr(x, "modules")`, `vars(x)["modules"]`, `x.__dict__["modules"]`)
+    /// on any receiver the walker does not know to be a first-party module, class or def
+    /// (`first_party_value`).
     fn is_sys_modules(&self, expr: &'a Expr, scope: i64) -> bool {
+        let unknown = |value: &'a Expr| self.is_sys(value, scope) || !self.first_party_value(value);
         match expr {
             Expr::Attribute(attribute) => {
                 attribute.attr.as_str() == "modules" && self.is_sys(&attribute.value, scope)
@@ -5045,12 +5749,9 @@ impl<'a, 'w> Walker<'a, 'w> {
                         .is_some_and(|b| b.member == "modules" && b.module == "sys")
             }
             Expr::Call(call) => {
-                getattr_literal(call) == Some("modules")
-                    && call
-                        .arguments
-                        .args
-                        .first()
-                        .is_some_and(|m| self.is_sys(m, scope))
+                !self.binds_name("getattr")
+                    && getattr_literal(call) == Some("modules")
+                    && call.arguments.args.first().is_some_and(unknown)
             }
             Expr::Subscript(subscript) => {
                 let literal = matches!(&*subscript.slice,
@@ -5058,15 +5759,11 @@ impl<'a, 'w> Walker<'a, 'w> {
                 let namespace = match &*subscript.value {
                     Expr::Call(call) => {
                         callee_text(call) == "vars"
-                            && call
-                                .arguments
-                                .args
-                                .first()
-                                .is_some_and(|m| self.is_sys(m, scope))
+                            && !self.binds_name("vars")
+                            && call.arguments.args.first().is_some_and(unknown)
                     }
                     Expr::Attribute(attribute) => {
-                        attribute.attr.as_str() == "__dict__"
-                            && self.is_sys(&attribute.value, scope)
+                        attribute.attr.as_str() == "__dict__" && unknown(&attribute.value)
                     }
                     _ => false,
                 };
@@ -5076,11 +5773,36 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
+    /// Whether a value is one the walker knows to be a first-party module, class or def: a name
+    /// (or the head of a chain) an import of a first-party module binds, a module-level class or
+    /// def of the file.
+    fn first_party_value(&self, value: &Expr) -> bool {
+        let Some(dotted) = dotted_name(value) else {
+            return false;
+        };
+        let head = dotted.split('.').next().unwrap_or_default();
+        let imported = self.bound.get(head).is_some_and(|b| b.first_party);
+        let defined = (self.defs.entries.iter()).any(|entry| {
+            entry.parent == -1
+                && match entry.node {
+                    DefNode::Func(f) => f.name.as_str() == head,
+                    DefNode::Class(c) => c.name.as_str() == head,
+                }
+        });
+        imported || defined
+    }
+
     /// Whether an expression may be the module `sys`: a name an import binds to it, a name the
     /// file assigns a name that may hold a module whose chain does not end at another one
     /// (`alias_target`), a name bound to a module value a literal names `sys` (`computed`), or
     /// `__import__("sys")` and `import_module("sys")`.
     fn is_sys(&self, expr: &'a Expr, scope: i64) -> bool {
+        if self
+            .protected(expr, scope)
+            .is_some_and(|p| p.object == Object::Sys)
+        {
+            return true;
+        }
         let sys = |id: &str| {
             (self.bound.get(id)).is_some_and(|b| b.module == "sys" && b.member.is_empty())
         };
@@ -6037,10 +6759,21 @@ impl<'a> Visitor<'a> for NamespaceWriters {
 }
 
 /// Each name a file binds to a value, in any scope: a name target of `=`, of `:` with a value,
-/// and of a walrus.
+/// and of a walrus (`pairs`); and each name a `for` or a comprehension binds to the items of an
+/// iterable (`items`).
 #[derive(Default)]
 struct ValueBindings<'a> {
     pairs: Vec<(&'a str, &'a Expr)>,
+    items: Vec<(&'a str, &'a Expr)>,
+}
+
+impl<'a> ValueBindings<'a> {
+    fn items_of(&mut self, target: &'a Expr, iterable: &'a Expr) {
+        let mut names = Vec::new();
+        target_names(target, &mut names);
+        self.items
+            .extend(names.into_iter().map(|name| (name, iterable)));
+    }
 }
 
 impl<'a> Visitor<'a> for ValueBindings<'a> {
@@ -6058,6 +6791,7 @@ impl<'a> Visitor<'a> for ValueBindings<'a> {
                     self.pairs.push((name.id.as_str(), value));
                 }
             }
+            Stmt::For(f) => self.items_of(&f.target, &f.iter),
             _ => {}
         }
         visitor::walk_stmt(self, stmt);
@@ -6070,6 +6804,11 @@ impl<'a> Visitor<'a> for ValueBindings<'a> {
             self.pairs.push((name.id.as_str(), &named.value));
         }
         visitor::walk_expr(self, expr);
+    }
+
+    fn visit_comprehension(&mut self, comprehension: &'a ast::Comprehension) {
+        self.items_of(&comprehension.target, &comprehension.iter);
+        visitor::walk_comprehension(self, comprehension);
     }
 }
 
@@ -6096,4 +6835,50 @@ fn read_if<'a>(read: bool) -> Outcome<'a> {
 fn is_format_call(call: &ast::ExprCall) -> bool {
     matches!(call.func.as_ref(), Expr::Attribute(method)
         if method.attr.as_str() == "format" && method.value.is_string_literal_expr())
+}
+
+/// Whether a name is a dunder (`__x__`).
+fn is_dunder(name: &str) -> bool {
+    name.len() > 4 && name.starts_with("__") && name.ends_with("__")
+}
+
+/// The protected object a full name an import binds is (round 11): `sys` itself or an import hook
+/// of it (shared machinery), `builtins` itself, or a module or member of `importlib` (but
+/// `importlib.metadata` and `importlib.resources`), `pkgutil`, `zipimport`, `site` or the frozen
+/// bootstrap modules. `sys.modules` and every other member of `sys` or `builtins` are none.
+fn object_of_origin(origin: &str) -> Option<Object> {
+    let mut parts = origin.split('.');
+    let head = parts.next()?;
+    let second = parts.next();
+    match head {
+        "sys" => match second {
+            None => Some(Object::Sys),
+            Some(hook) if HOOKS.contains(&hook) => Some(Object::Machinery),
+            Some(_) => None,
+        },
+        "builtins" => second.is_none().then_some(Object::Builtins),
+        "importlib" => match second {
+            Some("metadata" | "resources") => None,
+            _ => Some(Object::Machinery),
+        },
+        "pkgutil"
+        | "zipimport"
+        | "site"
+        | "_frozen_importlib"
+        | "_frozen_importlib_external"
+        | "_imp" => Some(Object::Machinery),
+        _ => None,
+    }
+}
+
+/// The name an `iter_modules` loop binds to each item's finder (`Walker::iter_modules_read`): a
+/// plain name target, or the first of three plain names.
+fn loop_target(target: &Expr) -> Option<&str> {
+    match target {
+        Expr::Name(name) => Some(name.id.as_str()),
+        Expr::Tuple(tuple) if tuple.elts.len() == 3 => {
+            tuple.elts[0].as_name_expr().map(|n| n.id.as_str())
+        }
+        _ => None,
+    }
 }

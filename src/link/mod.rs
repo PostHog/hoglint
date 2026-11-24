@@ -463,6 +463,7 @@ impl Link {
             touching: FxHashSet::default(),
             poisoned_modules: FxHashSet::default(),
             poison_all: false,
+            patched_builtins: FxHashSet::default(),
             monkeypatch: None,
         };
         producers.run();
