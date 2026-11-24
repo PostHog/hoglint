@@ -4106,8 +4106,13 @@ impl<'a, 'w> Walker<'a, 'w> {
     /// handoff or an unknown name is every builtin and every first-party name.
     fn object_rows(&self, object: Object, used: Use<'a>, at: At) -> Vec<String> {
         let any = || vec!["^hooks".to_string(), "+:*".to_string()];
+        // Limit 9's round 9b sentence, widened to `sys` and `builtins` (round 11, droppable, the
+        // owner's call): handed on in a function body, the module is not followed; a visible
+        // change of it still is.
+        let function = at.scope >= 0 && !self.defs.is_class(at.scope);
         match (object, used) {
             (_, Use::Read | Use::Inner) => Vec::new(),
+            (Object::Sys | Object::Builtins, Use::Handed) if function => Vec::new(),
             (Object::Machinery, _) => any(),
             (Object::Sys, Use::Changed(Some(name)))
                 if !HOOKS.contains(&name) && name != "modules" && !is_dunder(name) =>
