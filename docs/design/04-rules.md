@@ -96,6 +96,13 @@ No rule judges a transaction in presentation; with the reference edges below, th
 - `receiver-direction` and `get-model` read an unplaced sender and an unreadable label as incomplete, not as findings.
 - `model-crossings` leaves a use to `public-surface` when that rule reports the module the code named (A5, one rule per coupling): the selector reads that module as `surface.<field>`, next to `dst` at the origin. Kept (the architect, Nov 16): a re-route through a facade drawer shows again as a `model-crossings` row, and `export-shape` flags the drawer.
 
+**A cycle finding names the way back** (Nov 24).
+The message of a cycle finding says which new dependency closes the cycle and the existing path back from its destination to its source: `the dependency a -> b closes a cycle (1 edge); way back: b -> c via f.py:12, c -> a via g.py:3`.
+- The way back is the shortest path over the rule's group pairs, counted in steps; of several shortest paths it takes the one whose groups sort first, step by step, so the words never depend on the order the pairs came in.
+- Each step names the place of its pair's first witness, the edge the pair's own finding takes its identity from.
+- Python finds the way back next to the strongly connected parts it already finds (`hoglint/rules/graphs.py` `WayBack`), from the pairs the engine hands it once; no call goes back to the engine.
+- The message is no part of the identity, so no ledger line moves.
+
 **A use of a name the config lists is a reference edge** (the architect, Nov 17, for D115).
 `[discovery] reference_names` lists full dotted names; each use of one is a `reference` edge, one per scope and attribute chain, at its first use.
 - Why: core makes a reference edge for a use of a first-party class and for a name read through a module alias of an export, and none for a third-party function or a first-party function, since most of those no rule reads.

@@ -23,5 +23,5 @@ wiring-watched: products/inventory/turbo.json does not watch products/inventory/
 wiring-watched: products/inventory/turbo.json does not watch products/inventory/backend/logic/reorder.py: a hook callback, or a function that ready() defines, imports this module
 wiring-watched: products/inventory/turbo.json watches no file in products/inventory/backend/tasks/: core runs this location by name, and one watched file in it is enough
 
-Not shown: 36 advisory rows, 13 advisory unknowns, 106 old unknowns, 226 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+Not shown: 36 advisory rows, 13 advisory unknowns, 106 old unknowns, 228 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
 What the hook checks and what to do: hoglint help hook.

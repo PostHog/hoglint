@@ -1267,6 +1267,18 @@ identity = ["products.catalog.backend.models.CatalogEntry", "products.reports.ba
 # no-new-package-cycles
 
 [[row]]
+case = "CY04"
+rule = "no-new-package-cycles"
+verdict = "finding"
+identity = ["batch_exports", "catalog"]
+
+[[row]]
+case = "CY04"
+rule = "no-new-package-cycles"
+verdict = "finding"
+identity = ["reports", "batch_exports"]
+
+[[row]]
 case = "CR03"
 rule = "no-new-package-cycles"
 verdict = "incomplete"

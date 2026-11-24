@@ -66,7 +66,7 @@ model-crossings: products.reports.backend.logic.bulk_models uses products.catalo
   needs a person: If no facade function fits, stop and tell the person. The owners of the product decide what its facade offers.
   see: hoglint explain model-crossings
 
-no-new-package-cycles: the dependency legacy -> catalog closes a cycle (8 edges)
+no-new-package-cycles: the dependency legacy -> catalog closes a cycle (8 edges); way back: catalog -> reports via products/catalog/backend/facade/api.py:12, reports -> legacy via products/reports/backend/presentation/bulk.py:9
   at products/legacy/backend/api/widgets.py:5
   why: Products must not form a cycle. A cycle makes the products one unit for tests and for change.
   fix (needs care): Remove the new dependency. Use a hook that the other product exports, or move the shared code to the product that owns it.
@@ -83,5 +83,5 @@ public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pri
 public-surface: posthog.api.bulk_report names products.catalog.backend.logic.pricing.owner, which is not exported to it
   at posthog/api/bulk_report.py:5
 
-Not shown: 54 more findings, 24 advisory rows, 13 advisory unknowns, 106 old unknowns, 226 old findings in the ledger. Show every row: hoglint compare --base base --all. Show one rule: hoglint compare --base base --rule <rule>.
+Not shown: 54 more findings, 24 advisory rows, 13 advisory unknowns, 106 old unknowns, 228 old findings in the ledger. Show every row: hoglint compare --base base --all. Show one rule: hoglint compare --base base --rule <rule>.
 What the hook checks and what to do: hoglint help hook.

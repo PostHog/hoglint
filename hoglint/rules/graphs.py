@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -202,19 +203,73 @@ class CyclePrimitive(EdgeRule):
             if components.get(key[0]) is not None and components.get(key[0]) == components.get(key[1])
         ]
         identities = self.ctx.cycle_identities(self, [pair.step for _, pair in cyclic])
+        way_back = WayBack(sorted(pairs))
         for ((src, dst), pair), identity in zip(cyclic, identities, strict=True):
             first = pair.first
             assert first is not None
+            edges = f"{pair.count} {'edge' if pair.count == 1 else 'edges'}"
+            steps = ", ".join(self.step_words(pairs, step) for step in way_back.steps(dst, src))
             finding = self.ctx.finding(
                 self.spec,
                 identity,
-                f"the dependency {src} -> {dst} closes a cycle ({pair.count} {'edge' if pair.count == 1 else 'edges'})",
+                f"the dependency {src} -> {dst} closes a cycle ({edges}); way back: {steps}",
                 first.src.module,
                 subjects_of(first.src.module, first.dst.module),
                 tuple(pair.witnesses),
             )
             self.run.findings.append(finding)
         return self.run
+
+    @staticmethod
+    def step_words(pairs: dict[tuple[str, str], Pair], step: tuple[str, str]) -> str:
+        """One step of a way back with the place of its pair's first witness."""
+        site = pairs[step].witnesses[0].site
+        return f"{step[0]} -> {step[1]} via {site.path}:{site.line}"
+
+
+class WayBack:
+    """The shortest existing path between two groups of a cycle rule's pairs, counted in steps.
+    Of several shortest paths it takes the one whose groups sort first, step by step, so the
+    words of a finding do not depend on the order the pairs came in."""
+
+    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+        self.after: dict[str, list[str]] = {}
+        self.before: dict[str, list[str]] = {}
+        for src, dst in sorted(pairs):
+            self.after.setdefault(src, []).append(dst)
+            self.before.setdefault(dst, []).append(src)
+        self.distances: dict[str, dict[str, int]] = {}
+
+    def distances_to(self, goal: str) -> dict[str, int]:
+        """Each group's number of steps to `goal`, for the groups with a path there."""
+        known = self.distances.get(goal)
+        if known is not None:
+            return known
+        found = {goal: 0}
+        queue = deque([goal])
+        while queue:
+            node = queue.popleft()
+            for previous in self.before.get(node, []):
+                if previous in found:
+                    continue
+                found[previous] = found[node] + 1
+                queue.append(previous)
+        self.distances[goal] = found
+        return found
+
+    def steps(self, start: str, goal: str) -> list[tuple[str, str]]:
+        """The steps of the shortest path from `start` to `goal`; none when there is no path."""
+        distances = self.distances_to(goal)
+        if start not in distances:
+            return []
+        out: list[tuple[str, str]] = []
+        node = start
+        while node != goal:
+            # `after` is sorted: the first group one step closer is the one that sorts first.
+            closer = next(nxt for nxt in self.after[node] if distances.get(nxt) == distances[node] - 1)
+            out.append((node, closer))
+            node = closer
+        return out
 
 
 def strongly_connected(pairs: list[tuple[str, str]]) -> dict[str, int]:

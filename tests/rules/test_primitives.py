@@ -15,6 +15,7 @@ from hoglint.model import Context, FindingStatus, Graph, IncompleteCause, Resolu
 from hoglint.plugins import ProducerFailure
 from hoglint.rules.engine import Engine, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
+from hoglint.rules.graphs import WayBack
 
 from rules.support import GraphBuilder, config_from, native_graph
 
@@ -402,6 +403,39 @@ def test_cycle_reports_every_pair_inside_a_component(tmp_path: Path) -> None:
     )
     result = run(tmp_path, CYCLE, graph)
     assert sorted(identities(result, "no-cycles")) == [("alerts", "billing"), ("billing", "alerts")]
+
+
+def test_way_back_takes_the_fewest_steps() -> None:
+    # c -> a directly is one step; c -> d -> e -> a is three.
+    pairs = [("a", "b"), ("b", "c"), ("c", "a"), ("c", "d"), ("d", "e"), ("e", "a")]
+    assert WayBack(pairs).steps("c", "a") == [("c", "a")]
+    assert WayBack(pairs).steps("b", "a") == [("b", "c"), ("c", "a")]
+
+
+def test_way_back_breaks_a_tie_by_the_groups_that_sort_first() -> None:
+    # Two shortest ways from x to w: x -> z -> w and x -> y -> w. The pairs come unsorted.
+    pairs = [("w", "x"), ("x", "z"), ("z", "w"), ("x", "y"), ("y", "w")]
+    assert WayBack(pairs).steps("x", "w") == [("x", "y"), ("y", "w")]
+    assert WayBack(list(reversed(pairs))).steps("x", "w") == [("x", "y"), ("y", "w")]
+    assert WayBack(pairs).steps("w", "q") == []
+
+
+def test_cycle_message_names_the_way_back_with_a_witness_per_step(tmp_path: Path) -> None:
+    graph = (
+        base_graph()
+        .module("products.reports.logic")
+        .edge("import", "products.billing.logic", "products.alerts.logic", line=3)
+        .edge("import", "products.alerts.logic", "products.reports.logic", line=5)
+        .edge("import", "products.alerts.logic", "products.reports.logic", line=9)
+        .edge("import", "products.reports.logic", "products.billing.logic", line=7)
+        .graph
+    )
+    result = run(tmp_path, CYCLE, graph)
+    found = dict(zip(identities(result, "no-cycles"), messages(result, "no-cycles"), strict=True))
+    assert found[("billing", "alerts")] == (
+        "the dependency billing -> alerts closes a cycle (1 edge); way back: "
+        "alerts -> reports via products/alerts/logic.py:5, reports -> billing via products/reports/logic.py:7"
+    )
 
 
 SIGNATURE = """

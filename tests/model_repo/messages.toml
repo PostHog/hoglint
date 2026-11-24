@@ -1055,13 +1055,23 @@ text = "posthog.settings.web reaches products.gatekeeper.backend.logic.session.t
 
 [[finding]]
 rule = "no-new-package-cycles"
+identity = ["batch_exports", "catalog"]
+text = "the dependency batch_exports -> catalog closes a cycle (2 edges); way back: catalog -> reports via products/catalog/backend/facade/api.py:12, reports -> batch_exports via products/reports/backend/logic/build.py:3"
+
+[[finding]]
+rule = "no-new-package-cycles"
 identity = ["catalog", "reports"]
-text = "the dependency catalog -> reports closes a cycle (1 edge)"
+text = "the dependency catalog -> reports closes a cycle (1 edge); way back: reports -> catalog via products/reports/backend/logic/build.py:1"
+
+[[finding]]
+rule = "no-new-package-cycles"
+identity = ["reports", "batch_exports"]
+text = "the dependency reports -> batch_exports closes a cycle (2 edges); way back: batch_exports -> catalog via products/batch_exports/backend/sql.py:4, catalog -> reports via products/catalog/backend/facade/api.py:12"
 
 [[finding]]
 rule = "no-new-package-cycles"
 identity = ["reports", "catalog"]
-text = "the dependency reports -> catalog closes a cycle (9 edges)"
+text = "the dependency reports -> catalog closes a cycle (9 edges); way back: catalog -> reports via products/catalog/backend/facade/api.py:12"
 
 [[finding]]
 rule = "foundation-direction"

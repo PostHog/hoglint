@@ -271,6 +271,7 @@ The last column names the decision behind a verdict, or "open" where none is rec
 | `CY01` | `products/catalog/backend/facade/api.py`, `products/reports/backend/logic/build.py` | Two products that depend on each other | no-new-package-cycles finding, one per direction | |
 | `CY02` | `products/reports/backend/logic/build.py`, `products/catalog/backend/facade/shapes.py` | One-way dependencies | clean | |
 | `CY03` | `products/legacy/backend/logic/widgets.py`, `products/legacy/backend/facade/aboveworkers.py`, `products/legacy/backend/facade/lazygoneworkers.py` | An unresolved model label; an unresolved relative import; a lazy entry no module answers for | no-new-package-cycles incomplete, one item each | An edge whose end hoglint cannot tell names no package pair (Nov 16) |
+| `CY04` | `products/batch_exports/backend/sql.py`, `products/catalog/backend/facade/api.py`, `products/reports/backend/logic/build.py` | A third product on a cycle: batch_exports imports catalog's facade, catalog imports reports, reports imports batch_exports | no-new-package-cycles finding for each new pair; each message names the shortest way back with one witness per step (two steps here, one step for `CY01`) | The way back: shortest by package steps, ties by the groups that sort first (Nov 24) |
 | `FO01` | `products/access_control/backend/logic/rules.py` | A foundation product imports a feature product's facade | foundation-direction finding | |
 | `FO02` | `products/access_control/backend/logic/rules.py` | A foundation product imports another foundation product | clean | |
 | `IF01` | `posthog/egress/client.py` | Infrastructure imports a product's facade | infrastructure-direction finding; no-product-lists-in-core clean (D93) | |
@@ -470,6 +471,7 @@ Every kind the triage of the rules found on the monorepo, and the case that show
 | no-new-package-cycles | An unresolved label onto `?` | `CY03`: incomplete; a migration's historical label: no row (the rule leaves migrations out) |
 | no-new-package-cycles | A pair whose edges go through a facade | `CY01` (one direction) |
 | no-new-package-cycles | A pair with non-facade edges | `CY01` (other direction) |
+| no-new-package-cycles | A cycle of three packages: the way back takes two steps | `CY04` |
 | drives | A test outside the product runs its query kind | `DR01`, `DR02` |
 | drives | A test imports a runner by name | None |
 | thin-commands | An import through the product's own facade | `TC04`, `TC05` (a name the facade re-exports) |

@@ -804,7 +804,7 @@
     "products.alerts.backend.facade.api",
     "products.billing.backend.facade.api"
    ],
-   "the dependency @team-alerts -> @team-billing closes a cycle (6 edges)",
+   "the dependency @team-alerts -> @team-billing closes a cycle (6 edges); way back: @team-billing -> @team-alerts via products/billing/backend/facade/api.py:1",
    false,
    false,
    [
@@ -820,7 +820,7 @@
     "products.billing.backend.facade.api",
     "products.alerts.backend.logic"
    ],
-   "the dependency @team-billing -> @team-alerts closes a cycle (2 edges)",
+   "the dependency @team-billing -> @team-alerts closes a cycle (2 edges); way back: @team-alerts -> @team-billing via products/alerts/backend/facade/api.py:1",
    false,
    false,
    [
@@ -4165,7 +4165,7 @@
     "alerts",
     "billing"
    ],
-   "the dependency products.alerts.backend.logic -> products.billing.backend.facade.api closes a cycle (1 edge)",
+   "the dependency products.alerts.backend.logic -> products.billing.backend.facade.api closes a cycle (1 edge); way back: products.billing.backend.facade.api -> products.alerts.backend.logic via products/billing/backend/facade/api.py:1",
    false,
    false,
    [
@@ -4181,7 +4181,7 @@
     "billing",
     "alerts"
    ],
-   "the dependency products.billing.backend.facade.api -> products.alerts.backend.logic closes a cycle (1 edge)",
+   "the dependency products.billing.backend.facade.api -> products.alerts.backend.logic closes a cycle (1 edge); way back: products.alerts.backend.logic -> products.billing.backend.facade.api via products/alerts/backend/logic.py:6",
    false,
    false,
    [
@@ -15362,7 +15362,7 @@
     "products.alerts.backend.facade.api",
     "products.billing.backend.facade.api"
    ],
-   "the dependency @team-alerts -> @team-billing closes a cycle (6 edges)",
+   "the dependency @team-alerts -> @team-billing closes a cycle (6 edges); way back: @team-billing -> @team-alerts via products/billing/backend/facade/api.py:1",
    false,
    false,
    [
@@ -15378,7 +15378,7 @@
     "products.billing.backend.facade.api",
     "products.alerts.backend.logic"
    ],
-   "the dependency @team-billing -> @team-alerts closes a cycle (2 edges)",
+   "the dependency @team-billing -> @team-alerts closes a cycle (2 edges); way back: @team-alerts -> @team-billing via products/alerts/backend/facade/api.py:1",
    false,
    false,
    [
