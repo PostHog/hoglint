@@ -8,6 +8,10 @@ shipped preset's own, and `test_derive.py` fails when the derived form adds one 
 
 The model repository's watched cases and the real-size run lay this form over the preset with
 `derive_preset`. Each edit names the exact text it replaces, so a preset that moved fails loudly.
+
+`derive_unclaimed` is the form the PostHog monorepo runs now: the Isolated level with no
+`claimed_by` at all, so every product is judged, a product that passes gets the test skip, and
+the ledger's level lines are the ratchet (`test_unclaimed.py`).
 """
 
 from __future__ import annotations
@@ -28,6 +32,14 @@ def replace_once(text: str, old: str, new: str) -> str:
 
 def derive_preset(text: str) -> str:
     text = replace_once(text, TURBO_CLAIM, YAML_CLAIM)
+    if text.count(TURBO_INPUTS) != 2:
+        raise ValueError(f"the preset holds {text.count(TURBO_INPUTS)} turbo inputs, not two")
+    return text.replace(TURBO_INPUTS, "")
+
+
+def derive_unclaimed(text: str) -> str:
+    """The derived form with no claim: no `claimed_by`, the zones named once, no turbo inputs."""
+    text = replace_once(text, TURBO_CLAIM, 'watch_zones  = ["facade", "presentation", "migrations"]')
     if text.count(TURBO_INPUTS) != 2:
         raise ValueError(f"the preset holds {text.count(TURBO_INPUTS)} turbo inputs, not two")
     return text.replace(TURBO_INPUTS, "")
