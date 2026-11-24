@@ -5,7 +5,7 @@ are the ratchet (CASES.md `LR`).
 (a) `check --write-ledger` writes a level line for each product that passes, and none for one that
     fails.
 (b) A product that stops passing leaves a stale level line: check says it needs a person, and
-    `ledger shrink` refuses to drop it.
+    neither `ledger shrink` nor `check --write-ledger` drops it without `--drop-levels`.
 (c) A registry whose module lacks the attribute in some products (PostHog's
     `load_product_modules("activity_log_config")`, attribute `FIELD_EXCLUSIONS`) still watches each
     module, and raises no problem.
@@ -180,6 +180,10 @@ def test_a_product_that_stops_passing_needs_a_person(
         code, out = run(repo, tmp_path / "shrink", lambda c: c.shrink_ledger())
         assert code == 1, out
         assert "depot" in level_lines(repo), out
+        # `check --write-ledger` keeps it too, by the same person's switch.
+        code, out = run(repo, tmp_path / "write", lambda c: c.check(False, True, False, True))
+        assert code == 1, out
+        assert "kept 1 level lines" in out and "depot" in level_lines(repo), out
         code, out = run(repo, tmp_path / "drop", lambda c: c.shrink_ledger(drop_levels=True))
         assert code == 0, out
         assert "depot" not in level_lines(repo), out

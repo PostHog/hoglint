@@ -1,4 +1,4 @@
 exit 1
 kept 1 level lines of hoglint.ledger: the groups no longer pass the level
   level:isolated	depot  1 -> 0
-  a group that loses a level needs a person: fix the code so the group passes the level again, or stop and tell the person; a person who lets the group lose the level runs `hoglint ledger shrink --drop-levels`
+  a group that loses a level needs a person: fix the code so the group passes the level again, or stop and tell the person; a person who lets the group lose the level runs `hoglint ledger shrink --drop-levels` (or `hoglint check --write-ledger --drop-levels`)

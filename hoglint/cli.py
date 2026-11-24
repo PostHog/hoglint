@@ -362,7 +362,8 @@ RECORD_GROWTH_WAY_OUT = (
 )
 DROP_LEVELS_WAY_OUT = (
     "a group that loses a level needs a person: fix the code so the group passes the level again, "
-    "or stop and tell the person; a person who lets the group lose the level runs `hoglint ledger shrink --drop-levels`"
+    "or stop and tell the person; a person who lets the group lose the level runs `hoglint ledger shrink --drop-levels` "
+    "(or `hoglint check --write-ledger --drop-levels`)"
 )
 # What a command that could not run at all prints, in one line (D104.3, D111). The hook's command
 # lets the commit through on exit 3; CI runs the full check.
@@ -986,27 +987,44 @@ class Commands:
             return []
         return [change for change in grown_lines(head, ledger) if change[0] not in moved]
 
-    def write_ledger(self, run: Run, record_growth: bool, moved: frozenset[LineKey]) -> int | None:
+    def write_ledger(
+        self, run: Run, record_growth: bool, moved: frozenset[LineKey], drop_levels: bool = False
+    ) -> int | None:
         """Writes the run's ledger over the file, and says what it added and removed. Without
         `record_growth` it refuses to add or raise a line that did not only move, and returns the
-        exit code then."""
+        exit code then. Without `drop_levels` it keeps the level line of a group that no longer
+        passes the level, as `ledger shrink` does: a group that loses a level needs a person. It
+        writes the rest, says which lines it kept, and returns 1."""
         path = self.repo / run.config.ledger.file
         before = LedgerFile.read(path)
-        grown, shrunk = grown_lines(before, run.ledger), shrunk_lines(before, run.ledger)
+        grown = grown_lines(before, run.ledger)
         debt = [change for change in grown if change[0] not in moved]
         if debt and not record_growth:
             sys.stdout.write(f"not written: the scan adds {len(debt)} lines to {run.config.ledger.file}\n")
             sys.stdout.write("".join(f"  {change_row(change)}\n" for change in debt))
             sys.stdout.write(f"  {RECORD_GROWTH_WAY_OUT}\n")
             return 1
-        run.ledger.write(path)
+        held = [] if drop_levels else [c for c in shrunk_lines(before, run.ledger) if is_level_line(c[0])]
+        ledger = run.ledger
+        if held:
+            lines = {**run.ledger.lines, **{change[0]: change[1] for change in held}}
+            ledger = LedgerFile(run.ledger.schema, run.ledger.policy, lines, exists=True)
+        shrunk = shrunk_lines(before, ledger)
+        ledger.write(path)
         sys.stdout.write(
-            f"wrote {len(run.ledger.lines)} lines to {run.config.ledger.file}: "
+            f"wrote {len(ledger.lines)} lines to {run.config.ledger.file}: "
             f"{len(grown)} added or raised, {len(shrunk)} removed or lowered\n"
         )
         for change in grown:
             sys.stdout.write(f"  {'moved' if change[0] in moved else 'added'}  {change_row(change)}\n")
-        return None
+        if not held:
+            return None
+        sys.stdout.write(
+            f"kept {len(held)} level lines of {run.config.ledger.file}: the groups no longer pass the level\n"
+        )
+        sys.stdout.write("".join(f"  {change_row(change)}\n" for change in held))
+        sys.stdout.write(f"  {DROP_LEVELS_WAY_OUT}\n")
+        return 1
 
     def shrink_ledger(self, drop_levels: bool = False) -> int:
         """`ledger shrink`: removes the ledger's stale lines and lowers its counts to the scan of
@@ -1041,7 +1059,13 @@ class Commands:
         return 1
 
     def check(
-        self, index: bool, write_ledger: bool, changed: bool, record_growth: bool = False, view: View = HOOK_VIEW
+        self,
+        index: bool,
+        write_ledger: bool,
+        changed: bool,
+        record_growth: bool = False,
+        view: View = HOOK_VIEW,
+        drop_levels: bool = False,
     ) -> int:
         """With `index`, the index is captured once as a git tree, and the run reads everything
         from that tree: code, policy, side inputs and the owners it prints. Without it, the run
@@ -1085,7 +1109,7 @@ class Commands:
         if write_ledger:
             if index:
                 sys.stderr.write("--write-ledger writes the working tree file, not the index\n")
-            refused = self.write_ledger(run, record_growth, moved)
+            refused = self.write_ledger(run, record_growth, moved, drop_levels)
             if refused is not None:
                 return refused
         self.write_outputs(run)
@@ -1541,10 +1565,21 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--changed", action="store_true", help="advisory: only what the touched files show; always exits 0"
     )
+    check.add_argument(
+        "--drop-levels",
+        action="store_true",
+        help="with --write-ledger, a person's switch: also drop the level line of a group that no longer "
+        "passes a level, so the group loses the level. Without it, the line stays and check exits 1",
+    )
     add_view_arguments(check)
     check.set_defaults(
         handler=lambda commands, args: commands.check(
-            args.index, args.write_ledger, args.changed, args.record_growth, view_of(args, "hoglint check")
+            args.index,
+            args.write_ledger,
+            args.changed,
+            args.record_growth,
+            view_of(args, "hoglint check"),
+            drop_levels=args.drop_levels,
         )
     )
     page = sub.add_parser("help", help="print a page: hook, what the pre-commit hook checks and what to do")

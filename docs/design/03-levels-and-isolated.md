@@ -329,7 +329,7 @@ This holds for the locations `drives` names; a location run by name is watched t
 - **Selecting a rule by a product's level or claimed maturity** is not built (architect, Nov 11).
 - **A level ratchet** (a product that holds a level cannot drop).
   It works through the ledger's level lines and the equality check.
-  Since 0.2.5 (t30's finding, round 11) a stale level line needs a person: the hook words it as "needs a person", and `hoglint ledger shrink` keeps it and exits 1 unless a person passes `--drop-levels`.
+  Since 0.2.5 (t30's finding, round 11) a stale level line needs a person: the hook words it as "needs a person", and `hoglint ledger shrink` and `hoglint check --write-ledger` keep it and exit 1 unless a person passes `--drop-levels` (the same person's switch on both).
   Before, the hook offered shrink as a safe fix and shrink removed the line, so an agent could drop a level without a person.
   `check --write-ledger` and `compare` still treat a lost level line as any removed line; no decision entry builds anything beyond that.
 

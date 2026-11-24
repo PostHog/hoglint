@@ -129,7 +129,7 @@ def test_a_run_that_could_not_finish_exits_3_with_one_line_never_1(
     raised: BaseException | None,
     reason: str,
 ) -> None:
-    def crash(self: Commands, *args: object) -> int:
+    def crash(self: Commands, *args: object, **kwargs: object) -> int:
         if raised is None:
             bridge.load()
             return 0
@@ -686,4 +686,60 @@ def test_the_ledger_command_passes_drop_levels(tmp_path: Path, monkeypatch: pyte
     git_in(tmp_path / "repo", "init", "-q")
     assert main(["--repo", str(tmp_path / "repo"), "ledger", "shrink"]) == 0
     assert main(["--repo", str(tmp_path / "repo"), "ledger", "shrink", "--drop-levels"]) == 0
+    assert seen == [False, True]
+
+
+GHOST = "level:isolated\tghost\t1"
+
+
+def with_ghost_level(commands: Commands) -> None:
+    """A level line for a group that does not pass the level (it has no code at all): what a
+    group that lost the level leaves in the ledger."""
+    path = commands.repo / "hoglint.ledger"
+    path.write_text(path.read_text() + GHOST + "\n")
+
+
+def test_write_ledger_keeps_lost_level_lines_by_default(
+    lost_level: Commands, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with_ghost_level(lost_level)
+    capsys.readouterr()
+    assert lost_level.check(index=False, write_ledger=True, changed=False, record_growth=True) == 1
+    printed = capsys.readouterr().out
+    # The scan's lines are written (the fixed finding goes, the recorded crossing comes in, both
+    # groups pass again); the ghost's level line stays, as `ledger shrink` keeps it.
+    assert ledger_lines(lost_level) == [
+        "crossings\tproducts.billing.logic\tproducts.alerts.logic\t1",
+        *LEVEL_LINES,
+        GHOST,
+    ]
+    assert "kept 1 level lines of hoglint.ledger: the groups no longer pass the level\n" in printed
+    assert "  level:isolated\tghost  1 -> 0\n" in printed
+    assert (
+        "`hoglint ledger shrink --drop-levels`" in printed and "`hoglint check --write-ledger --drop-levels`" in printed
+    )
+
+
+def test_write_ledger_with_drop_levels_drops_lost_level_lines(
+    lost_level: Commands, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with_ghost_level(lost_level)
+    capsys.readouterr()
+    assert lost_level.check(index=False, write_ledger=True, changed=False, record_growth=True, drop_levels=True) == 0
+    assert "kept" not in capsys.readouterr().out
+    assert GHOST not in ledger_lines(lost_level)
+
+
+def test_the_check_command_passes_drop_levels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[bool] = []
+
+    def check(self: Commands, *args: object, drop_levels: bool = False, **kwargs: object) -> int:
+        seen.append(drop_levels)
+        return 0
+
+    monkeypatch.setattr(Commands, "check", check)
+    write_config(tmp_path / "repo", CONFIG)
+    git_in(tmp_path / "repo", "init", "-q")
+    assert main(["--repo", str(tmp_path / "repo"), "check", "--write-ledger"]) == 0
+    assert main(["--repo", str(tmp_path / "repo"), "check", "--write-ledger", "--drop-levels"]) == 0
     assert seen == [False, True]
