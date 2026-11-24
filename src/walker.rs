@@ -4840,6 +4840,13 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
         let in_subscript = matches!(self.path.last(), Some(Frame::SubValue(_)));
         if self.is_modules(expr) {
+            // `sys.modules.get("<literal>")` names one module, as `sys.modules["<literal>"]`
+            // does: `follow` reads what is done with it, and it reaches no name of this file
+            // (round 11, item 13: PostHog's `posthog/errors.py` looks up a driver module so).
+            if self.modules_get_literal() && !self.modules_names_only() {
+                self.push_computed(at, pos, "sys.modules", String::new());
+                return;
+            }
             if !in_subscript && !self.modules_names_only() {
                 self.push_computed(at, pos, "sys.modules", String::new());
                 self.emit_everything(pos);
@@ -4954,6 +4961,22 @@ impl<'a, 'w> Walker<'a, 'w> {
         };
         let statement = n >= 2 && matches!(self.path[n - 2], Frame::Terminal("expr"));
         statement && self.resolve(&callee_text(call)).as_deref() == Some("importlib.reload")
+    }
+
+    /// Whether the node being walked is `sys.modules` read by `.get("<literal>")`: one or two
+    /// arguments, the first a string literal, no keyword.
+    fn modules_get_literal(&self) -> bool {
+        let n = self.path.len();
+        let (Some(Frame::Attr("get")), Some(Frame::CallFunc(call))) = (
+            self.path.last().copied(),
+            n.checked_sub(2).map(|i| self.path[i]),
+        ) else {
+            return false;
+        };
+        let args = &call.arguments.args;
+        (1..=2).contains(&args.len())
+            && call.arguments.keywords.is_empty()
+            && args[0].is_string_literal_expr()
     }
 
     /// Whether a read of `sys.modules` (the node being walked) gives only names or a truth value:
