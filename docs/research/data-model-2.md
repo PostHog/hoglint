@@ -1,6 +1,6 @@
 # Data model v0 (part 2: sections 11-20)
 
-> The v0 data model of hoglint, part 2: rule mapping, open decisions, review changes and spike results, Nov 4, 2026. Part 1 (sections 0-10) is `docs/research/data-model.md`.
+> The v0 data model of Hoglint, part 2: rule mapping, open decisions, review changes and spike results, Nov 4, 2026. Part 1 (sections 0-10) is `docs/research/data-model.md`.
 > Partly replaced: later work refined it, and the current state is in `docs/design/`: `02-policy-exceptions-ledger.md` (ledger), `04-rules.md` (rules), `05-engine.md` (engine: an in-process PyO3 design replaced the Rust L1 + Python L2 split of sections 18-20), `06-fact-cache-and-summaries.md` (cache).
 
 ## 11. Rule mapping (54 rules)

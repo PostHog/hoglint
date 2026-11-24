@@ -1,4 +1,4 @@
-# Spike N9: can salsa persistence carry hoglint's reuse between processes?
+# Spike N9: can salsa persistence carry Hoglint's reuse between processes?
 
 > A scratch prototype on salsa 0.28.5 with its `persistence` feature, at the real scale of a 29,000-file repo, Nov 10, 2026.
 > Partly replaced: D59 item 2 and D61 rejected salsa for reuse between processes; see `docs/history/decision-log-3.md` and `docs/design/08-fast-hook.md`.
@@ -6,7 +6,7 @@
 **The question.**
 The N7 spike (`docs/research/spike-n7.md`) showed that a commit's effects stay in the files it changes, with rare spread along re-export chains, so the plan under study was to store each file's answers with a record of what they read and reuse them in the next process.
 Salsa (the incremental query framework of rust-analyzer and ty) does that bookkeeping in memory and has a `persist` option behind its `persistence` feature.
-hoglint's main use is a git pre-commit hook, so a fresh process per check: can a salsa database of hoglint's size be stored and loaded fast enough (budget: about 1 s after a one-file change, against 0.55 s for a fully stored result), can inputs be changed after a load, and what does the API force on the design?
+Hoglint's main use is a git pre-commit hook, so a fresh process per check: can a salsa database of Hoglint's size be stored and loaded fast enough (budget: about 1 s after a one-file change, against 0.55 s for a fully stored result), can inputs be changed after a load, and what does the API force on the design?
 
 Scratch only; nothing committed.
 
@@ -35,7 +35,7 @@ Sources read: the book (`cycles.md`, `plumbing/db_lifetime.md`), the persistence
 - Second check: a plain resolver with no salsa, which cuts cycles by the path. Its digest was equal in every case.
 
 **Data.**
-hoglint's own fact extractor (kinds `imports,defs,assigns`) ran on the snapshot.
+Hoglint's own fact extractor (kinds `imports,defs,assigns`) ran on the snapshot.
 That gave 28,794 files (the config's excludes applied) in 0.8 s.
 A small script turned the result into a flat TSV with 184,409 module-level definitions, 333,432 imports (322,394 of them at module level) and 56 star imports.
 Module names come from the `.` source root, and relative imports are made absolute.
@@ -88,8 +88,8 @@ The change adds only its own re-runs (0.002-0.02 s here).
 - Unstable: no schema check across binary versions, the postcard failure, the init panic, no docs, and the persist attribute documented only on docs.rs.
 
 **Judgment:**
-- Salsa can do the bookkeeping (recorded reads, reuse, early stop on equal results) across processes: all four runs were correct and the change-dependent work was tiny. But it cannot meet the budget for hoglint's real graph, because each fresh process pays a whole-database load.
+- Salsa can do the bookkeeping (recorded reads, reuse, early stop on equal results) across processes: all four runs were correct and the change-dependent work was tiny. But it cannot meet the budget for Hoglint's real graph, because each fresh process pays a whole-database load.
 - That load is 0.41 s for this reduced model, already 75 % of the 0.55 s spent elsewhere. The real link stores far more per file (sites, defs, classes, MROs, edges), and the load grows with it.
-- For this to work, one of these would have to be true: salsa loads lazily or only the touched part (it does not, and nothing on master pointed that way), or hoglint keeps a long-lived process (a daemon), where run 6 shows 0.02-0.04 s per change.
+- For this to work, one of these would have to be true: salsa loads lazily or only the touched part (it does not, and nothing on master pointed that way), or Hoglint keeps a long-lived process (a daemon), where run 6 shows 0.02-0.04 s per change.
 - The init panic needs the touch workaround or an upstream fix.
 - Not tested: the real link's query shapes and size (only this reduction), a memory-mapped or zero-copy format (salsa's deserializer copies into its own tables), file addition and deletion (only content changes), parallel queries, and timings on a quiet machine.

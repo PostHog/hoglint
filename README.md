@@ -1,6 +1,6 @@
-# hoglint
+# Hoglint
 
-hoglint is a boundary linter for large Python and Django monorepos, built at PostHog.
+Hoglint is a boundary linter for large Python and Django monorepos, built at PostHog.
 
 It reads every Python file of a repo and builds one graph of the couplings between its packages: imports, dotted paths in strings, Django model and settings references, and more.
 It checks that graph against rules that you write in TOML.
@@ -18,11 +18,11 @@ uv run hoglint check
 
 The wheel holds the Python package, the native module and the fact extractor, so you do not need a Rust toolchain.
 Wheels exist for Linux (x86_64 and aarch64, manylinux) and macOS (arm64 and x86_64).
-hoglint needs Python 3.14 or newer.
+Hoglint needs Python 3.14 or newer.
 
 ## Configure
 
-hoglint reads `hoglint.toml` at the root of the repo.
+Hoglint reads `hoglint.toml` at the root of the repo.
 The config can extend the built-in Django pack (`extends = ["hoglint:django"]`) and presets of your own.
 `hoglint explain-config` prints the expanded config, with the source of each key.
 
@@ -47,8 +47,8 @@ The config can extend the built-in Django pack (`extends = ["hoglint:django"]`) 
 |---|---|
 | 0 | Clean. |
 | 1 | Violations: new findings, code growth, a ledger that is not equal to the scan, or a stale exception. |
-| 2 | hoglint cannot decide: new code that it cannot judge, a base engine that cannot run fully, or a config error. |
-| 3 | hoglint could not run. It prints one line that says why. |
+| 2 | Hoglint cannot decide: new code that it cannot judge, a base engine that cannot run fully, or a config error. |
+| 3 | Hoglint could not run. It prints one line that says why. |
 
 ## The pre-commit hook
 

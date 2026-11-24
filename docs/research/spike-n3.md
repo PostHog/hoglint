@@ -77,7 +77,7 @@ All are labeled **estimate**; the basis is the profile shares and the quiet pair
 - **A, all producers in Rust:** the uses port kept about 70 % of its producer's time off (0.69 s to 0.22 s in the profile, −0.25 to −0.3 s in quiet pairs). At that rate for all producers, the packs phase goes from about 1.3 s to 0.4 to 0.5 s, so about **−0.8 s**. Cost: about 6,000 to 7,000 lines of Rust for the about 4,500 lines of pack Python (Django 2,800, PostHog 1,700; 1.5x), and the PostHog pack moves out of Python, against D15 and D47 revised. Every new pattern is then a Rust change.
 - **B, coarse queries everywhere:** drives showed no measurable gain. The cheap targets left are the prefilter loops (installs and signals, 28k `may_mention` each, `mentions_many` fits) and the `derived` decode in uses (0.19 s), perhaps 0.1 to 0.2 s together. Estimate **−0.1 to −0.25 s** for maybe 200 lines of Rust; the logic stays Python.
 - **C, leave it:** 0 s, 0 lines.
-- A middle path the numbers support: port only django.uses (Django pack, lives in hoglint, logic changes rarely, about 100k rows) for about −0.3 s, and leave the PostHog pack in Python.
+- A middle path the numbers support: port only django.uses (Django pack, lives in Hoglint, logic changes rarely, about 100k rows) for about −0.3 s, and leave the PostHog pack in Python.
 
 ## What surprised the spike, and what it could not test
 

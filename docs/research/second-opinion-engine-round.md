@@ -1,11 +1,11 @@
 # Second opinion: the engine round
 
-> A second opinion from another model on the design of hoglint's engine, Nov 9, 2026, with the question it got, the architect's view written before it, and what the decisions took from it.
+> A second opinion from another model on the design of Hoglint's engine, Nov 9, 2026, with the question it got, the architect's view written before it, and what the decisions took from it.
 > Partly replaced: its recommendation (persistent queries) was rejected after the adversarial phase; the decisions are D1 to D13 in `docs/history/decision-log.md`, and the round is summarized in `docs/research/engine-synthesis.md`.
 
 ## The question
 
-On Nov 9, 2026, hoglint's user-facing behavior and config were settled, and the engine underneath was not.
+On Nov 9, 2026, Hoglint's user-facing behavior and config were settled, and the engine underneath was not.
 A first implementation existed: a full check of the PostHog monorepo took about 45 s and 4 GB, and the pre-commit form took about 70 s.
 
 The second opinion was asked to design the engine:
@@ -60,7 +60,7 @@ The demand audit later measured 63% unread and refuted A as the main lever (`doc
 
 ## The second opinion
 
-What follows is the second opinion's answer, cleaned. File references point into hoglint's modules at the time.
+What follows is the second opinion's answer, cleaned. File references point into Hoglint's modules at the time.
 
 ### Recommendation
 

@@ -1,6 +1,6 @@
 # Glossary
 
-The words of hoglint that plain English does not explain, as the code, the config and these pages use them.
+The words of Hoglint that plain English does not explain, as the code, the config and these pages use them.
 Each entry says where the term lives: a config key, a file, or a module.
 Some words have two meanings; the entry names both.
 `README.md` has the short list of terms that the design pages use most.
@@ -59,7 +59,7 @@ Some words have two meanings; the entry names both.
   A reusable policy file.
   The code it needs is a pack, which the root config extends next to it.
 - **Core** (two meanings).
-  In hoglint, core is the part that names no framework or company: core producers, core shapes, core edge kinds.
+  In Hoglint, core is the part that names no framework or company: core producers, core shapes, core edge kinds.
   In the PostHog preset, "core" is also a value of the `tier` field: the monorepo's shared packages, as in "a class core defines".
 - **First party** (`[discovery] first_party`).
   The top-level modules that are the repo's own code; any other name is external.
@@ -83,7 +83,7 @@ Some words have two meanings; the entry names both.
   Where a field applies.
   Outside its domain a field reads `none`; inside it, a field that nothing sets reads unknown.
 - **Unknown, `none`** (`hoglint/selectors.py` `State`, `Truth`).
-  Unknown is the third truth value: hoglint cannot tell.
+  Unknown is the third truth value: Hoglint cannot tell.
   `none` is a known absence: the field does not apply.
   Unknown is never clean: a comparison that reads it is unknown, and an edge attr `unknown` lists the attrs its producer could not tell.
 - **Set two ways** (`src/link/rules/conflicts.rs`, D44).
@@ -232,7 +232,7 @@ Some words have two meanings; the entry names both.
 - **Envelope** (`hoglint/ledger/envelope.py`).
   The cache key of a stored run summary: the inputs, the engine, the policy and the framework sources that made it.
 - **Facts id, native id, engine id** (`engine-sources.txt`, `build.rs`, `src/sources.rs`).
-  Digests of three source sets: the extractor, the native engine, and all of hoglint.
+  Digests of three source sets: the extractor, the native engine, and all of Hoglint.
   Any change to a file of a set moves its id, a comment too, so rebuild before tests.
 - **Model repository** (`tests/model_repo/`, `bin/model-repo`).
   A small repo of planted cases, with reviewed rows, table digests and every message stored.

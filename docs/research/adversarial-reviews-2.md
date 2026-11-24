@@ -1,6 +1,6 @@
 # Adversarial reviews of the design, part 2
 
-> Six adversarial reviews of the hoglint design draft, part 2: the ledger, implementation and tool-replacement reviewers, the second opinion's adjudication, and a follow-up measurement, Nov 6 and Nov 9, 2026.
+> Six adversarial reviews of the Hoglint design draft, part 2: the ledger, implementation and tool-replacement reviewers, the second opinion's adjudication, and a follow-up measurement, Nov 6 and Nov 9, 2026.
 > Partly replaced: the fixes are in `docs/design/` (mainly `02-policy-exceptions-ledger.md`, `05-engine.md`, `06-fact-cache-and-summaries.md`, `08-fast-hook.md`, `11-repo-and-packaging.md`) and the decisions in `docs/history/decision-log.md` and its continuation files.
 
 Part 1, with the method, the blockers and fixes, and three reviewers, is `docs/research/adversarial-reviews.md`.
@@ -121,14 +121,14 @@ Checked against parts of the design draft (not published), the data model sectio
 - If the Rust crate is a uv workspace member, the dev environment's `uv sync` builds it from source with the environment's cargo 1.91.1. The ruff parser crates need rustc 1.94 or later, so the build fails and the venv does not come up. The same build runs in every CI workflow that syncs the environment.
 - The other reading is a pure-Python member plus a Rust wheel on PyPI. Then every L1 schema change takes three steps: merge, publish, merge a pin bump. Until the pin bump merges, the in-tree L2 reads facts from the older pinned extractor. The early phases change the schema many times.
 - No document said where the wheel goes, who publishes it, or how in-tree Python stays in step with it.
-- All existing workspace members were pure Python; hoglint would be the first compiled member.
+- All existing workspace members were pure Python; Hoglint would be the first compiled member.
 - The import-map consumer in CI runs with no project sync and no cargo, so the map tool must install from an index.
 - The precedent is PostHog's `hogql-parser-rs` wheel: a maturin build matrix, publish from master only, and a pin in the monorepo. The precedent's own source and pin had once drifted by a patch version, so the lockstep risk is real.
 - Attribution ("replay with the extractor held fixed") needs the base extractor in CI. Built from source, that means two cargo builds per PR.
 
-Smallest fix: ship hoglint as one maturin package (Rust L1 and Python L2 in one wheel) and publish it on the `hogql-parser-rs` model.
+Smallest fix: ship Hoglint as one maturin package (Rust L1 and Python L2 in one wheel) and publish it on the `hogql-parser-rs` model.
 Consume it everywhere by pin (a dev dependency for check and pre-commit, a PEP 723 pin in the map script), exempt it from `exclude-newer`, and keep it out of the uv workspace.
-hoglint's own CI builds from source with a `rust-toolchain.toml`; hoglint developers use an editable install.
+Hoglint's own CI builds from source with a `rust-toolchain.toml`; Hoglint developers use an editable install.
 L2 refuses facts whose schema version differs from its own and reports `incomplete`.
 A side benefit: a pin bump becomes the one place where attribution sees rule growth from an extractor change.
 
@@ -138,7 +138,7 @@ The packaging design is in `docs/design/11-repo-and-packaging.md`.
 
 ### 2. The "staged snapshot" is the working tree, and lint-staged does not fix that (major; confirmed in spike code)
 
-- An agent edits 5 files and stages 2; hoglint judges all 5.
+- An agent edits 5 files and stages 2; Hoglint judges all 5.
 - An untracked scratch file adds an import edge; ledger growth blocks an unrelated commit.
 - A file deleted on disk but not staged drops out of discovery, so ledger equality fails on lines the commit does not touch.
 - CI sees none of this, because its checkout is clean. Local and CI results differ.
@@ -156,7 +156,7 @@ The second opinion added: read config from the index too.
 
 ### 3. The L1 cache key leaves out the extractor build and the parser version (major; confirmed in spike code)
 
-Because hoglint carries the Isolated skip's safety, stale facts can wrongly skip tests, not only cause noise.
+Because Hoglint carries the Isolated skip's safety, stale facts can wrongly skip tests, not only cause noise.
 - A walker fix changes which facts come out of some file shape, and nobody bumps the schema number. Every unchanged file keeps its old entry forever.
 - A warm laptop and a fresh CI runner then report different ledgers.
 - A parser crate bump (weekly 0.0.x releases) can change the AST shape, with the same effect.
@@ -164,7 +164,7 @@ Because hoglint carries the Isolated skip's safety, stale facts can wrongly skip
 
 The spike keyed the cache on a hand-set schema version (still `1` while running v1.1 rules), the config and two caps.
 The crate version, the parser crate versions and the build id were not in the key.
-A helper that lends one checkout's venv to another worktree when the lockfile matches would also run the wrong build after an edit to an editable hoglint.
+A helper that lends one checkout's venv to another worktree when the lockfile matches would also run the wrong build after an edit to an editable Hoglint.
 
 Smallest fix: cache key = (git blob id, build id), where the build id hashes the crate version, `Cargo.lock` and the extraction flags at compile time.
 Keep the cache under the git common dir, so worktrees share entries only within one build.
@@ -175,7 +175,7 @@ The second opinion added: (blob, build) alone is not enough unless the build ide
 
 ### 4. One exit-code contract serves three consumers that need different failure behavior (major; plausible)
 
-- A draft PR has one file with a syntax error. The old `tach map` drops that file and exits 0, which cannot under-test. Under hoglint's doctrine (parse failure = unresolved fact, producer failure = incomplete, exit 2) the map run fails, and the CI test selector widens to every product and every merge-queue lane.
+- A draft PR has one file with a syntax error. The old `tach map` drops that file and exits 0, which cannot under-test. Under Hoglint's doctrine (parse failure = unresolved fact, producer failure = incomplete, exit 2) the map run fails, and the CI test selector widens to every product and every merge-queue lane.
 - The same widening happens when the wheel is missing for a platform, the package index is slow, or a new pin is still inside the `exclude-newer` window.
 - For pre-commit, nothing said whether a missing binary, a timeout or `incomplete` blocks the commit.
 
@@ -187,7 +187,7 @@ CI `check` blocks on `incomplete` only when the incomplete facts sit in files th
 ### 5. The 7 to 9 s budget is not measured as one run, and memory is not measured at all (major for pre-commit; confirmed)
 
 - Agents commit many times per task, often in several worktrees at once, and each commit already runs ruff, format and `ty check`.
-- hoglint adds a whole-repo run on every commit: 12.8 s of CPU for Rust cold, about 1.2 s warm, about 6 s of CPU for Python L2, and an unknown peak RSS. L2 held a 207 MB JSON fact store with 2.98 M rows.
+- Hoglint adds a whole-repo run on every commit: 12.8 s of CPU for Rust cold, about 1.2 s warm, about 6 s of CPU for Python L2, and an unknown peak RSS. L2 held a 207 MB JSON fact store with 2.98 M rows.
 - The warm 7.4 s figure was "composed, not run as one". Every timing was measured under load. No document recorded RSS.
 - The only lever named was a daemon, which is a large new surface.
 
@@ -214,7 +214,7 @@ The design lessons, in tool terms:
 
 1. **A reader that returns empty on a missing source must fail closed.** When a tool's config or baseline is replaced, any reader of the old source that returns an empty result on a missing file reads as "nothing to protect", and a test skip can follow from that. Lesson: switch every consumer before deleting a source, and make each reader raise on a missing source, with a test that proves it. (Confirmed.)
 2. **Fact parity does not prove verdict parity.** The shadow phase compared facts (94,143 of 94,143 map edges, the exact ledger), never the rule results of the old checks against `hoglint check`. Verdicts depend on config semantics the fact diff never exercises: regex `expose` values that match more than a glob, a two-pass mode that treats tests differently per pass, `utility` and `unchecked` flags, a comment marker another tool parses. Some old rules had no row in the inventory and no replacement rule. Lesson: shadow verdicts and selected tests per rule, seed replay fixtures from known escapes (`docs/research/research-round-1-empirical.md`), and list every old rule in the inventory by name. (Plausible.)
-3. **hoglint's own inputs are graph inputs.** Once hoglint draws the import map, `hoglint.toml`, the preset, the tool source and the wheel pin shape the graph, so CI must treat a change to them as a graph change. The map output must say "incomplete" or "file not parsed"; the old map format had no such field. Lesson: a golden-graph test (product-pair edges at a pinned fixture commit) on every tool change, and the old map tool kept as a scheduled oracle for a soak period. (Confirmed.)
+3. **Hoglint's own inputs are graph inputs.** Once Hoglint draws the import map, `hoglint.toml`, the preset, the tool source and the wheel pin shape the graph, so CI must treat a change to them as a graph change. The map output must say "incomplete" or "file not parsed"; the old map format had no such field. Lesson: a golden-graph test (product-pair edges at a pinned fixture commit) on every tool change, and the old map tool kept as a scheduled oracle for a soak period. (Confirmed.)
 4. **Switching and deleting are separate steps.** If one step switches consumers and deletes the old config, a revert does not restore the old protection, because other readers (scaffolding, maturity scoring, CI routing) changed with it. Lesson: switch behind one flag with the old tool as an oracle, delete after a soak with zero diffs, and write the rollback for each step. (Confirmed.)
 5. **Routing test selection through core packages removes "a core change runs everything".** A named infrastructure package is mostly consumed without a product import: settings dotted strings, middleware and Celery config strings, conftest fixtures, package-initializer side effects. The importer of such a reference is the settings module, a core node the product graph drops. Lesson: a core package leaves full-suite routing only when its impact view includes dotted-path and settings edges, an edge into the composition zone (settings, URLs, apps, conftest) maps to "full suite", and `incomplete` maps to "full suite". (Plausible, a later-phase risk.)
 

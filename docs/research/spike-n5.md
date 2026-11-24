@@ -1,6 +1,6 @@
 # Spike N5: where the 1.4 GB goes, and what a mapped fact store buys
 
-> A memory map of one hoglint check and two prototypes (an earlier release, a mapped fact store), Nov 10, 2026.
+> A memory map of one Hoglint check and two prototypes (an earlier release, a mapped fact store), Nov 10, 2026.
 > Partly replaced: D56 withdrew the mapped store and the 0.5 GB target and replaced phase N5 with N5a (release pack records per step, smaller fact database); see `docs/history/decision-log-3.md`, `docs/design/06-fact-cache-and-summaries.md` and `docs/design/07-speed-and-memory.md`.
 
 **The question.**

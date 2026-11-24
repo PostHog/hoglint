@@ -13,7 +13,7 @@ The round had three prior-art studies and one second opinion:
 The same round also ran a second blind design round (two designers, for registries and for generated code) and four blind user tasks with a grading pass.
 Those inputs are not published; this synthesis uses their results.
 
-## The question (Nov 9): does hoglint repeat the mistakes of past decades?
+## The question (Nov 9): does Hoglint repeat the mistakes of past decades?
 
 **Avoided by design:**
 
@@ -43,7 +43,7 @@ Those inputs are not published; this synthesis uses their results.
 **Decisions put to the owner:**
 
 - **A. Incomplete results.** Block only the PR that introduced the unknown. Inherited unknowns go to the tool owner and never block. An unknown still denies the Isolated skip, so the full suite runs. The exit status is computed from what the PR caused. This resolved the open question "who owns an incomplete result".
-- **B. Registries by file convention, not `product.yaml`.** The registries designer and the module-systems study agree. The registry attribute must be a literal that hoglint reads without importing. Slots gain `lifecycle` and `contract_tests`. A slot change runs the product suite plus its contract tests. This resolved the open registries decision.
+- **B. Registries by file convention, not `product.yaml`.** The registries designer and the module-systems study agree. The registry attribute must be a literal that Hoglint reads without importing. Slots gain `lifecycle` and `contract_tests`. A slot change runs the product suite plus its contract tests. This resolved the open registries decision.
 - **C. The hardcoded product app list stays.** The rule is completeness (installed apps equal the product directories that have an `apps.py`), not debt. This corrected the draft.
 - **D. Publish the Isolated `requires` list,** and state per rule whether ledger lines and exception lines count as passing. All four blind users hit this gap. It was already open and became urgent.
 - **E. Exceptions.** The owners of the target package approve too. Add a test-only scope. Define expiry: a passed `review_by` is a finding. An exception that matches nothing fails.
@@ -61,7 +61,7 @@ Those inputs are not published; this synthesis uses their results.
 - F8. Fixed files: cross-owner hook calls only in `backend/wiring.py`; foreign receivers only in `receivers.py`.
 - F9. Hubs: a core module that reaches more than N products needs an allow entry, ratcheted. 80 to 90% of hub edits ship with a product change, so they run the full suite.
 - F10. Generated code gets a shape (projection, split, placed, aggregate) and a lifecycle (regenerated, scaffolded, vendored). Symbol maps only for aggregates. Frontend product registries are composition roots. Migrations are scaffolded. Generated-file headers are never decisive.
-- F11. A pinned hoglint version. A scanner bump must show no new incomplete result on master. A noise budget per rule demotes it to advisory.
+- F11. A pinned Hoglint version. A scanner bump must show no new incomplete result on master. A noise budget per rule demotes it to advisory.
 - F12. `check --changed`, advisory, ships with build slice 5 of the first plan instead of its phase 4.
 - F13. TypeScript: a per-file L1 producer on oxc closes the TypeScript gap. scip-typescript (measured at 12 min 46 s and 11.2 GB) is only an off-path checker.
 - F14. Measure SQL and HogQL strings that name another product's table (blind user task U5).

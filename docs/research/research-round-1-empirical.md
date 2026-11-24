@@ -1,7 +1,7 @@
 # Empirical evidence: where boundary tooling hurts
 
 > Measurements on the PostHog monorepo for research round 1 (speed of the existing boundary checks, debt growth, escapes, friction), Nov 3, 2026.
-> Partly replaced: later timings of hoglint itself are in `docs/design/07-speed-and-memory.md`; the round's synthesis is `docs/research/research-round-1.md`.
+> Partly replaced: later timings of Hoglint itself are in `docs/design/07-speed-and-memory.md`; the round's synthesis is `docs/research/research-round-1.md`.
 
 Checkout: the PostHog monorepo as of 2026-10-13, warm disk cache.
 Measured on 2026-11-03.

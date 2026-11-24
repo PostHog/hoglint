@@ -1,11 +1,11 @@
-# hoglint research and studies
+# Hoglint research and studies
 
-> The index of the earlier research, studies, spikes and second opinions behind hoglint's design, Nov 3 to Nov 11, 2026.
+> The index of the earlier research, studies, spikes and second opinions behind Hoglint's design, Nov 3 to Nov 11, 2026.
 > Each file says at its top whether later work replaced it. The current design is in `docs/design/`; the decisions in order are in `docs/history/`.
 
 These are the real documents, cleaned for a public repo.
 Names, local paths, PostHog policy, adoption plans and findings about PostHog's code were taken out or made general; the technical content is kept.
-"The owner" is hoglint's owner; "the architect" is the AI agent that drove the design; "a second opinion" is another model, given facts and numbers, usually after the architect wrote its own view first.
+"The owner" is Hoglint's owner; "the architect" is the AI agent that drove the design; "a second opinion" is another model, given facts and numbers, usually after the architect wrote its own view first.
 
 Read them in this order.
 

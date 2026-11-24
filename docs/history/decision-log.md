@@ -1,18 +1,18 @@
 # Engine decision log, part 1 (D1 to D21)
 
-> The engine decision log of hoglint, part 1: the shape, the correctness contract, hygiene, the summary store in CI (D14), the own repo (D15) and phase 3b, Nov 9, 2026.
+> The engine decision log of Hoglint, part 1: the shape, the correctness contract, hygiene, the summary store in CI (D14), the own repo (D15) and phase 3b, Nov 9, 2026.
 > Partly replaced: the current state of each topic is in `docs/design/` (start at `docs/design/README.md`); later entries in this log and in `docs/history/decision-log-2.md` and `docs/history/decision-log-3.md` revise several decisions here.
 
 ## How to read this log
 
 This is history. Entries are in the order they were written, from Nov 9 to Nov 11, 2026; a few entries carry an earlier date than their neighbours, because they were written up later. Decisions were revised in place: an entry marked REVISED, amended, superseded or withdrawn is followed by its new form, and a later entry wins over an earlier one. For the current state by topic, read `docs/design/` first (`docs/design/README.md` is the index). The log continues in `docs/history/decision-log-2.md` (D22 to D47) and `docs/history/decision-log-3.md` (D48 to D70).
 
-**Who decided.** A decision marked "the owner" was stated by hoglint's owner. Every other decision is the architect's: an AI agent that designed the engine, wrote this log and directed the agents that built each phase. The owner could veto any of the architect's decisions. "The architect's call" in an entry means the same thing as an unmarked decision.
+**Who decided.** A decision marked "the owner" was stated by Hoglint's owner. Every other decision is the architect's: an AI agent that designed the engine, wrote this log and directed the agents that built each phase. The owner could veto any of the architect's decisions. "The architect's call" in an entry means the same thing as an unmarked decision.
 
 **Names used in the log.**
 - "The native engine" is the Rust engine reached through PyO3; "the Python engine" is the original implementation, kept as the differential oracle.
 - "Parity" and "the ten tables" are the comparison of both engines' full outputs over the PostHog monorepo snapshot.
-- "Crossings 968 + 2" and "tach 0/0" are invariants that compare hoglint with the scanners it replaces.
+- "Crossings 968 + 2" and "tach 0/0" are invariants that compare Hoglint with the scanners it replaces.
 - "adv-performance", "adv-correctness", "adv-extension", "skeptic" and "audit" are the adversarial reviews of the engine round; their findings are summarized in `docs/research/engine-adversarial-reviews.md`.
 - "Bugs 1 to 19" are the numbered defects of the first engine found by those reviews.
 
@@ -124,7 +124,7 @@ The log starts after the engine round of Nov 9. The phase 3 agents built against
 **D14. A consuming repo's main-branch CI can publish run summaries from an existing CI job, with no new workflow (the owner).**
 
 *Where.*
-- An existing CI job of the consuming repo, next to the checks hoglint replaces.
+- An existing CI job of the consuming repo, next to the checks Hoglint replaces.
 - On a push to the main branch, `hoglint check` writes its summary to the CI provider's cache and to a CI artifact, under the D3 key.
 
 *Readers.*
@@ -136,7 +136,7 @@ The log starts after the engine round of Nov 9. The phase 3 agents built against
 - Revisit if a measured fresh-worktree baseline takes more than about 5 s.
 
 *Rollout.*
-- The step must degrade gracefully on branches that predate hoglint.
+- The step must degrade gracefully on branches that predate Hoglint.
 
 *Portability.*
 - The summary key must mean the same thing on Linux CI and on macOS.
@@ -144,7 +144,7 @@ The log starts after the engine round of Nov 9. The phase 3 agents built against
 - Paths come from git, never from the file system, so a case-insensitive macOS file system cannot change a result.
 - A cross-platform determinism check, Linux CI against macOS with the same key, joins the gates.
 
-**D15. hoglint gets its own repo (the owner's proposal, Nov 9).** Agreed: switch once the Rust/Python surface and the pack API are settled.
+**D15. Hoglint gets its own repo (the owner's proposal, Nov 9).** Agreed: switch once the Rust/Python surface and the pack API are settled.
 
 *Why.*
 - The generic core and the Django pack become physically separate.
@@ -152,10 +152,10 @@ The log starts after the engine round of Nov 9. The phase 3 agents built against
 - compare's base engine becomes `uv run --with hoglint==<base pin>`.
 
 *What lives where.*
-- The hoglint repo: all Rust (facts, link, later the rule evaluator, the PyO3 module), the generic core, the Django pack, one abi3 wheel.
+- The Hoglint repo: all Rust (facts, link, later the rule evaluator, the PyO3 module), the generic core, the Django pack, one abi3 wheel.
 - The consuming monorepo:
   - the PostHog preset;
-  - the PostHog plugin (drives, facade facts, owners provider) on hoglint's pack API;
+  - the PostHog plugin (drives, facade facts, owners provider) on Hoglint's pack API;
   - the root `hoglint.toml`, the ledger and exceptions files;
   - the parity and shadow tooling.
 - The monorepo pins the wheel.
@@ -165,7 +165,7 @@ The log starts after the engine round of Nov 9. The phase 3 agents built against
 2. Extract with history, set up CI and a wheels workflow, publish from tags only, then pin.
 3. Afterwards: local iteration through a uv path source.
 
-*The engine id after the split.* The hoglint version plus the digest of the PostHog plugin and preset. The three-id scheme stays inside hoglint, for the fact cache and the rebuild check.
+*The engine id after the split.* The Hoglint version plus the digest of the PostHog plugin and preset. The three-id scheme stays inside Hoglint, for the fact cache and the rebuild check.
 
 Step 2 was done locally on Nov 11; see "D15 step 2" in `docs/history/decision-log-3.md`.
 

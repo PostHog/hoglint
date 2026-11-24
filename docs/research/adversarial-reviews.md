@@ -1,6 +1,6 @@
 # Adversarial reviews of the design
 
-> Six adversarial reviews of the hoglint design draft, verified against the files and adjudicated by a second opinion from another model, Nov 6, 2026 (follow-up measurement Nov 9).
+> Six adversarial reviews of the Hoglint design draft, verified against the files and adjudicated by a second opinion from another model, Nov 6, 2026 (follow-up measurement Nov 9).
 > Partly replaced: the fixes are in `docs/design/` (mainly `02-policy-exceptions-ledger.md`, `04-rules.md`, `05-engine.md`, `11-repo-and-packaging.md`) and the decisions in `docs/history/decision-log.md` and its continuation files.
 
 This file has the method, the blockers and design fixes with their resolution, and the reports of three reviewers (configuration, core purity, gaming).
@@ -72,7 +72,7 @@ The reviewers read the design draft of that date (not published).
     **Fix:** read staged blobs (config too), never the working tree.
     The cache key is content + extractor build + schema + options.
 11. **Replacing the older tools** (cutover findings 1, 3 and 4).
-    The design lessons: a reader of an old tool's file must fail closed when that file is gone; a shadow phase must compare verdicts and selected tests, not only facts; hoglint's own inputs count as graph changes; switching and deleting are separate steps with a tested rollback.
+    The design lessons: a reader of an old tool's file must fail closed when that file is gone; a shadow phase must compare verdicts and selected tests, not only facts; Hoglint's own inputs count as graph changes; switching and deleting are separate steps with a tested rollback.
 
 ## Overstated or wrong
 
@@ -304,7 +304,7 @@ Each fix is a spec decision plus a validator, not a redesign.
 
 ## Reviewer: core purity
 
-Question: is the hoglint core generic, and is it the right core?
+Question: is the Hoglint core generic, and is it the right core?
 Scope: parts of the design draft (not published); the generality study (`docs/research/generality.md`: projection model, Saleor, Zulip, Sentry); `docs/research/exports-and-shapes.md`; `docs/research/research-round-1-prior-art.md`.
 
 Test repos: Saleor, Zulip and Sentry, plus one non-Django shape.
@@ -335,7 +335,7 @@ Version the table as a producer, so a table change counts as rule growth, not co
 - The projection model said "reject ambiguous module identities". In the workspace repo every member's `tests/test_client.py` is `tests.test_client`, and `acme` exists under N roots. Both are legitimate Python (importlib mode, PEP 420), and both get rejected.
 - The resolver behind the tach-map parity target resolved a namespace package without `__init__` to nothing, so every `from acme.core import x` is lost or unresolved.
 - `source_roots` was a literal list. Nothing said it accepts `libs/*/src` or reads workspace members.
-- PostHog has the same problem: its uv workspace has pure-Python members, one in src layout. With `source_roots = ["."]`, an import of a workspace member resolves to site-packages or nothing. That is the tach blind spot recorded in `docs/research/research-round-1-contrarian.md` ("tach resolves a uv distribution as third-party and records no edge"), and hoglint inherited it.
+- PostHog has the same problem: its uv workspace has pure-Python members, one in src layout. With `source_roots = ["."]`, an import of a workspace member resolves to site-packages or nothing. That is the tach blind spot recorded in `docs/research/research-round-1-contrarian.md` ("tach resolves a uv distribution as third-party and records no edge"), and Hoglint inherited it.
 - Core shipped `owners-yaml`, a PostHog format, as a provider, and nothing for `pyproject.toml` (`[project].name`, `dependencies`, `[tool.uv.sources]`, workspace members). In a library monorepo, the main boundary rule is "import only what your distribution declares", and no provider fills the declared-deps set.
 
 Smallest fix: entity identity becomes the repo-relative path, and the dotted name is a resolution alias.

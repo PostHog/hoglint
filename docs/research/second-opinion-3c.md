@@ -68,7 +68,7 @@ Written after phase 3b and before any second opinion.
 
 ## The second opinion
 
-What follows is the second opinion's answer, cleaned. File references point into hoglint's modules at the time.
+What follows is the second opinion's answer, cleaned. File references point into Hoglint's modules at the time.
 
 It would keep Python policy, but replace the object-based execution boundary with native tables, projected batches and explicit refinements. The split had moved resolution into Rust while leaving much of the data expansion in Python. Reaching both gates requires fixing that expansion, not merely moving graph traversal.
 

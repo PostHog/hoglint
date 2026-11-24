@@ -92,7 +92,7 @@ No rule judges a transaction in presentation; with the reference edges below, th
   Core calling a product's facade elsewhere is allowed (D93); a threshold on how many products a module names was rejected, since it reports facade calls and loses the per-product Max presets.
   Limit: a new hard-coded product list in a core module that is not marked as a registration point is not caught.
 - `object` as a mapping's value is an opaque payload in a facade parameter or field, as `Any` is; never in a return value.
-- An edge whose end hoglint cannot tell is incomplete in the graph rules (`no-new-package-cycles`, `foundation-direction`), and the cycle rule leaves migrations out: a migration names models as they were.
+- An edge whose end Hoglint cannot tell is incomplete in the graph rules (`no-new-package-cycles`, `foundation-direction`), and the cycle rule leaves migrations out: a migration names models as they were.
 - `receiver-direction` and `get-model` read an unplaced sender and an unreadable label as incomplete, not as findings.
 - `model-crossings` leaves a use to `public-surface` when that rule reports the module the code named (A5, one rule per coupling): the selector reads that module as `surface.<field>`, next to `dst` at the origin. Kept (the architect, Nov 16): a re-route through a facade drawer shows again as a `model-crossings` row, and `export-shape` flags the drawer.
 
@@ -136,7 +136,7 @@ The config loads before the tree is read, so only a run can tell.
 No decision had allowed the shape.
 
 **Three import contracts of the monorepo are preset rules** (Nov 16).
-They had no hoglint rule, so a new violation would fail the old import checker and pass hoglint.
+They had no Hoglint rule, so a new violation would fail the old import checker and pass Hoglint.
 Each reads every import, in tests, under `TYPE_CHECKING` and inside functions, as the old checker does, and each contract's ignore list is part of the rule.
 - `sources-vendors-use-sdk` (`edge`): a warehouse source vendor imports no core, `ee`, `common` or product module outside the sources tree.
   The SDK may import core and products, its testing module `common`, the tree's conftest products.
@@ -150,9 +150,9 @@ Their limits, in plain words:
 2. A webhook consumers module that imports a test module of a product is `prod-imports-test`'s finding, not this rule's.
 
 **`migration-database` is slim: the repo's own migrations only** (owner, Nov 16, D117; it replaces the stage 2c reading of third-party migrations).
-The monorepo's Django test stays the authority for the migration graph; hoglint's rule is early feedback.
+The monorepo's Django test stays the authority for the migration graph; Hoglint's rule is early feedback.
 - The Django pack reads no migration of an installed third-party app, even where `[discovery] external` gives the run its sources; a dependency key into such an app makes no node and no edge.
-- A key list in a `Migration` class body that hoglint cannot read (`dependencies += [...]`, a computed value) is an unresolved edge, and the rule reads an unresolved edge as incomplete: never silent, never a block.
+- A key list in a `Migration` class body that Hoglint cannot read (`dependencies += [...]`, a computed value) is an unresolved edge, and the rule reads an unresolved edge as incomplete: never silent, never a block.
 - `bin/parity` explains an edge or a crossing of the Django test that has a third-party app at either end by D117, checked per item: the app's module is no first-party module or package.
 
 Reading a package from `[discovery] external` still gives its models and the names it re-exports to every other rule.
@@ -169,7 +169,7 @@ Only the class's own body and methods count, never a base class or code outside 
 Anything else stays unresolved, and so incomplete: a static or class method, a nested function's `self`, two classes, a value it cannot type (a function's result, an assignment by unpacking, `+=`, a loop or `with` target, one in a function the method defines), an attribute the class also defines as a method or property.
 A member is named by its class (`Family.register`).
 A hook the config names through a module-level instance (`registry.console.register_moved_page`, `console = ConsoleRegistry()`) is a method of the instance's class: a call that resolves to that member of that class is a call of the hook.
-A call that resolves to the member of a class the instance's class inherits, or of any class when the instance is no call of a class hoglint can tell, may reach the hook too: it is an unresolved `installs` edge, so incomplete, never clean.
+A call that resolves to the member of a class the instance's class inherits, or of any class when the instance is no call of a class Hoglint can tell, may reach the hook too: it is an unresolved `installs` edge, so incomplete, never clean.
 A same-named member of an unrelated class is no hook call.
 
 **A receiver with no sender listens to its signal** (the architect, Nov 16).
@@ -241,7 +241,7 @@ Never `ignore` (architect default, Nov 4).
 
 - **Ruff-like rule codes** (preset rule codes, engine diagnostic codes, `hoglint rule <code>`): proposed Nov 5, not decided.
 - **A warn severity.**
-  tach has one; hoglint only blocks or ledgers.
+  tach has one; Hoglint only blocks or ledgers.
   The question (Nov 9): was a warn state considered, or must every state be deterministic?
   No answer is recorded.
 - **An `experimental` state** (from the second opinion) and an advisory `check --changed` (agreed in the prior-art round) are not specified together.

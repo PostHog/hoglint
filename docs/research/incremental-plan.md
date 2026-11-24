@@ -6,7 +6,7 @@
 The planner worked from an export of `5469719079c`.
 **Every time, size and percentage is an estimate unless it quotes a spike's measurement.**
 Times are one thread.
-Code paths are relative to the hoglint source tree.
+Code paths are relative to the Hoglint source tree.
 
 ## The main finding: a saving can come earlier than D59 says
 

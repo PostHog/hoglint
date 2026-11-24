@@ -1,9 +1,9 @@
-# hoglint design record, by topic
+# Hoglint design record, by topic
 
-> The design record of hoglint, sorted by topic, compiled Nov 11, 2026.
+> The design record of Hoglint, sorted by topic, compiled Nov 11, 2026.
 > Current as of Nov 11, 2026. The chronological history is in `docs/history/`; the studies behind it are in `docs/research/`.
 
-hoglint is a boundary linter for large Python and Django monorepos, built at PostHog.
+Hoglint is a boundary linter for large Python and Django monorepos, built at PostHog.
 Its design was worked out between Nov 3 and Nov 11, 2026, by its owner and an architect (an AI agent), with many reviews, spikes and second opinions.
 Everything was logged as it happened.
 That log is complete but chronological, and decisions were revised in place.
@@ -35,7 +35,7 @@ Each page has the same sections: what is decided now, why, what was considered a
 
 | Page | One line |
 |---|---|
-| `01-purpose-and-principles.md` | What hoglint replaces; the fixed principles (the test skip's safety, no edge deleted, unknown never clean, a cache never wrong, no framework names in core, exact runs, one graph engine with every changed row named) |
+| `01-purpose-and-principles.md` | What Hoglint replaces; the fixed principles (the test skip's safety, no edge deleted, unknown never clean, a cache never wrong, no framework names in core, exact runs, one graph engine with every changed row named) |
 | `02-policy-exceptions-ledger.md` | Three files; ledger identity, equality and growth; growth per product (D67); move admission; owners; no noise in the ledger |
 | `03-levels-and-isolated.md` | The Isolated test skip specified apart from lint acceptance; who owns an incomplete result; levels from rules |
 | `04-rules.md` | Eleven primitives; selectors and domains; scoping by zone, tier, context and export; graph rules; rule states |

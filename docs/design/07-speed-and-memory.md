@@ -34,7 +34,7 @@ So it needs about 2.2 s or less on a quiet machine.
 | Nov 11, 4719fd5 (N3b and fixes) | 5.17 to 4.79 s against 4328924, median gap -0.43 s | 4.61 to 4.21 s | RSS 1.31 to 1.20 GB; footprint 1.16 GB | under heavy load, so absolute times are high |
 
 **Reference tools** (same snapshot, Nov 10, under load): `ruff check` 1.4 s wall, 17-19 s CPU, 0.39 GB; `tach check` 2.3 s, 10 s CPU, 0.22 GB; `ty check` 9.9 s, 105 s CPU, 7.2 GB; `hoglint check --index` 4.9 s, 4.7 s CPU, 1.40 GB.
-The CI checks hoglint replaces, measured together under load: tach 2.3 s, `lint-imports --no-cache` 18.3 s, `hogli product:lint --all` 42.8 s.
+The CI checks Hoglint replaces, measured together under load: tach 2.3 s, `lint-imports --no-cache` 18.3 s, `hogli product:lint --all` 42.8 s.
 
 **Floor:** a check that hits the stored summary of its tree takes 0.55 s wall and 0.36 s CPU (N7 spike).
 

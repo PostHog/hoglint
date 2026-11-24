@@ -1,6 +1,6 @@
 # Generality checks: config sketches for Sentry, Saleor and Zulip
 
-> The hoglint config sketches written during the generality checks on three public Django repos, Nov 4, 2026. The checks themselves and the projection layer they led to are in `docs/research/generality.md`.
+> The Hoglint config sketches written during the generality checks on three public Django repos, Nov 4, 2026. The checks themselves and the projection layer they led to are in `docs/research/generality.md`.
 > Partly replaced: these sketches use the pre-projection config schema (packages, templates and zones); the projection layer v1 in `docs/research/generality.md` and the rules in `docs/design/04-rules.md` replaced that schema.
 
 Each sketch expresses the repo's own boundary rules (from its docs, tests and lint config) in the config schema of the PostHog fit test, in TOML form.

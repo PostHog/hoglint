@@ -14,7 +14,7 @@
 **Gates every phase passes:**
 - the ten parity tables: zero delta against the base at real size (`bin/prove --real --base`) and against the model repository's stored tables, or a **named delta**, where the architect's own script explains every changed row;
 - the whole-graph digest, a per-row proof, and equal ordinals;
-- invariants against the tools hoglint replaces (the crossings ledger with two known extras; tach's module map with no missing and no extra edge over about 99,000 edges);
+- invariants against the tools Hoglint replaces (the crossings ledger with two known extras; tach's module map with no missing and no extra edge over about 99,000 edges);
 - lint (ruff, ruff format, ty, clippy `--workspace`, cargo fmt `--all`), pytest and cargo tests with `HOGLINT_REQUIRE_NATIVE=1`, so a missing native module fails and never skips;
 - determinism over seeds and thread counts; every repro set from earlier reviews prints what it printed before;
 - the portability gate (macOS arm64, Linux arm64, Linux amd64) at the end of a phase;

@@ -1,7 +1,7 @@
 # Facade facts map
 
 > A read-only map of the PostHog pack's facade producer (`posthog.facade-facts`) and of who reads its edges, Nov 10, 2026; the input to moving facade facts into the engine (N3b).
-> Replaced: N3b built facade facts into the engine as its export analysis (D48, D62-D64); see `docs/design/09-contract-surfaces.md` and `docs/history/decision-log-3.md`. File and line references point at the hoglint code of Nov 10 and are stale.
+> Replaced: N3b built facade facts into the engine as its export analysis (D48, D62-D64); see `docs/design/09-contract-surfaces.md` and `docs/history/decision-log-3.md`. File and line references point at the Hoglint code of Nov 10 and are stale.
 
 Paths: F = `hoglint/presets_py/posthog/facade.py`, L = `hoglint/presets_py/posthog/legacy_ledger.py`, P = `hoglint/presets_py/posthog/pack.py`, T = `presets/posthog.toml`.
 Read only; nothing was run.

@@ -3,7 +3,7 @@
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
 > Current as of Nov 17, 2026.
 
-A PostHog facade (`products/<name>/backend/facade/`) is one export in hoglint's terms.
+A PostHog facade (`products/<name>/backend/facade/`) is one export in Hoglint's terms.
 The engine's word is `export`; "facade" is a name in the PostHog preset (D48).
 
 ## Decided
@@ -22,7 +22,7 @@ The engine's word is `export`; "facade" is a name in the PostHog preset (D48).
 
 **The public surface is first class in the engine** (owner, Nov 10; D48).
 The owner's principle: a facade, or whatever other patterns call it, is a first-class concept.
-It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 4719fd5, verified on Nov 11).
+It was built as phase N3b in the Hoglint repo (7f26c49, then fix rounds up to 4719fd5, verified on Nov 11).
 
 **What "hands out" means** (architect, D62 point 4, D64):
 - `__all__` in every literal form, and a form built from a module-level literal such as `sorted(_LAZY)`;
@@ -60,7 +60,7 @@ It was built as phase N3b in the hoglint repo (7f26c49, then fix rounds up to 47
   A lazy entry whose module does not exist is an import edge that does not resolve and keeps its name, so the hand-out is unknown; only an entry whose name and value read as a name and a dotted path counts, so another dict of text is no lazy map (Nov 12).
   A relative value (`'.foo'`, read by `import_module(value, __package__)`) is anchored at the module's package, as a relative import is; one that does not resolve counts only in a dict where another entry resolves.
   A lazy name that maps to a type alias or an annotated constant is read as that alias or constant: the module binds the name by no statement, so its rows are looked up where the value is assigned (Nov 16).
-- What a lazy map can say that hoglint does not read, in plain words:
+- What a lazy map can say that Hoglint does not read, in plain words:
   1. A map where no entry resolves and every value is one bare name (`{'Foo': 'foo'}`): it hands out nothing, because a dict of plain words looks the same.
   2. A value that names the attribute itself (`'pkg.mod:Name'`): it hands out nothing.
   Where `__all__` lists such a name, the name is unknown (Nov 13).

@@ -1,11 +1,11 @@
 # Prior art, round 2: architecture conformance checking
 
-> A study of architecture conformance tools and what went wrong with them, compared against the hoglint design draft, Nov 9, 2026.
+> A study of architecture conformance tools and what went wrong with them, compared against the Hoglint design draft, Nov 9, 2026.
 > Partly replaced: the synthesis is `docs/research/prior-art.md`, the claims were checked in `docs/research/prior-art-second-opinion.md`, and the resulting design is in `docs/design/`.
 
 Tags: [src: URL] means the study read that source (full text where a PDF is named, otherwise the abstract or the record).
 [mem] means from memory, not checked in this study.
-"The draft" is the hoglint design draft of that date (not published).
+"The draft" is the Hoglint design draft of that date (not published).
 
 ## 1. The work, and what went wrong
 
@@ -81,9 +81,9 @@ How the tools handled edges that should exist:
 So the lesson is to keep "may", "must" and "must not" as separate constructs.
 An absence is only trustworthy when you can show the extractor would have seen the edge.
 
-hoglint already had absence-shaped checks: `require` predicates, `layout` (required files), `coverage` (wiring-watched), `inventory` (FeatureFlag relations, missing and stale both fail), the registry rule "each matching module exports the attribute in the ABC shape", and ledger equality (stale lines fail).
+Hoglint already had absence-shaped checks: `require` predicates, `layout` (required files), `coverage` (wiring-watched), `inventory` (FeatureFlag relations, missing and stale both fail), the registry rule "each matching module exports the attribute in the ABC shape", and ledger equality (stale lines fail).
 
-Where hoglint needed more:
+Where Hoglint needed more:
 - **Edges the Isolated skip depends on.** For the skip, a missing edge is the dangerous direction: no edge means no test. This is Murphy's ambiguity at full strength. Registers, signal and installs edges come only from static extraction. The oracle jobs checked only models and migrations (per the draft).
 - **Registries, both directions.**
   - Every product subclass of a registry ABC must sit in that registry's module. Otherwise it is an unregistered implementation, which is DCL's `only X can-extend` turned around.
@@ -93,7 +93,7 @@ Where hoglint needed more:
 
 ## 3. Repeat, avoid, partly avoid
 
-| Lesson | hoglint | Where |
+| Lesson | Hoglint | Where |
 |---|---|---|
 | Mapping cost blocks adoption (Ali, Murphy, Koschke) | **Avoids for products, partly for core.** Globs on `products/{product}/**` make the layout the map, as Koschke advises. Named core packages and proto-products are hand-mapped with `override = true`, so the cost comes back exactly where the layout is weakest. | the draft |
 | Order-dependent maps and rules (Murphy first match, LDM ordered overrides) | **Avoids.** Conflicts are errors, and duplicate rules are errors. | adversarial-review blocker 2 |
@@ -117,7 +117,7 @@ Where hoglint needed more:
    - Diff these against the static `signal`, `registers` and `installs` edges.
    - A runtime edge with no static twin makes the owning product incomplete, so it gets no Isolated skip.
 
-   This is the only way to tell "no edge" from "edge hoglint cannot see", which is Murphy's absence ambiguity. It covers the hidden callback channels that the adversarial review found (`docs/research/adversarial-reviews.md`).
+   This is the only way to tell "no edge" from "edge Hoglint cannot see", which is Murphy's absence ambiguity. It covers the hidden callback channels that the adversarial review found (`docs/research/adversarial-reviews.md`).
 2. **Registry completeness in both directions.** Add `complete = true` to a registry. Two checks follow:
    - Every product class whose bases reach the registry ABC lives in a registry module.
    - Every module at the convention path is reachable by the loader.

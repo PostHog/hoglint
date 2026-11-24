@@ -1,6 +1,6 @@
 # Second opinion: the engine after phase 3d
 
-> A second opinion from another model on hoglint's engine after phase 3d, Nov 10, 2026: the commit path, memory, the rules phase, and the split between Rust and Python. With the question, the architect's view written before it, and what the decisions took.
+> A second opinion from another model on Hoglint's engine after phase 3d, Nov 10, 2026: the commit path, memory, the rules phase, and the split between Rust and Python. With the question, the architect's view written before it, and what the decisions took.
 > Partly replaced: its findings became D33, D34, D36 (later withdrawn) and amendments to D6, D7 and D32 in `docs/history/decision-log-2.md`; the same day D39 moved everything a check runs into Rust. The engine as built is in `docs/design/05-engine.md`.
 
 ## The question
@@ -18,7 +18,7 @@ Output: at most 120 lines of Markdown; findings ranked by weight with evidence, 
 
 ## What it was given
 
-- What hoglint is: a boundary linter for a large Python monorepo (about 29,000 Python files, 291,000 symbols, 1.47 million edges). It resolves names across the whole repo, builds an edge graph, lets framework packs add and refine edges, and judges about 30 rules written in TOML. A committed ledger holds accepted findings. It is meant to run as a pre-commit hook (`hoglint check --index`), by developers and by many coding agents in many worktrees on one machine, and in CI. Rust holds extraction and the link (PyO3 binding); Python holds packs, labels, rules, the ledger and the CLI.
+- What Hoglint is: a boundary linter for a large Python monorepo (about 29,000 Python files, 291,000 symbols, 1.47 million edges). It resolves names across the whole repo, builds an edge graph, lets framework packs add and refine edges, and judges about 30 rules written in TOML. A committed ledger holds accepted findings. It is meant to run as a pre-commit hook (`hoglint check --index`), by developers and by many coding agents in many worktrees on one machine, and in CI. Rust holds extraction and the link (PyO3 binding); Python holds packs, labels, rules, the ledger and the CLI.
 - The code at commit `dc2271eba47`, the preset, the root config, and the decision log (D1 to D32).
 - The gates: pre-commit `check --index` at most 4 s wall and 1.5 GB peak; ten overlapping checks at most 15 GB in total; the Python reference engine and the native engine equal on ten output tables, with zero or named deltas per commit.
 - Measurements at `dc2271eba47`, one thread: a staged check with a stored baseline, on a quiet machine, 4.83 to 4.90 s wall: analysis (snapshot, fact load, link) 1.05 s; Django pack 0.62 s, PostHog pack 0.56 s; labels and rules 2.0 s; the rest about 0.5 s. Peak RSS 1.40 to 1.46 GB. The existing pre-commit hook for Python files (ruff and `ty check`) takes about 2 to 3 s.
@@ -30,7 +30,7 @@ It was told not to read the architect's view, so that the review stayed independ
 
 Written before the second opinion. Every number measured at `dc2271eba47` unless stated. The machine was about 1.4 times slower that day than in the phase 3d measurements (HEAD 7.0 s measured under load; the older export `33b1723e535` 7.2 s in the same minute), so there was no regression, and timing needed a calibration run.
 
-**F1. A commit with no stored baseline pays for two runs in one process.** Measured 25.0 s wall, 20.0 s CPU, peak 2.33 GB, against 8.3 s and 1.40 GB with a stored baseline in the same minute. `Baselines.prepare` evaluated HEAD's tree inline when the cache had no summary for it, and the allocator did not give the first run's memory back. Gate D26 measured only the hit. A miss happens after a pull, rebase, merge or checkout that moves HEAD; after a commit hoglint did not run for; after a hoglint, preset or Django upgrade; and after F2.
+**F1. A commit with no stored baseline pays for two runs in one process.** Measured 25.0 s wall, 20.0 s CPU, peak 2.33 GB, against 8.3 s and 1.40 GB with a stored baseline in the same minute. `Baselines.prepare` evaluated HEAD's tree inline when the cache had no summary for it, and the allocator did not give the first run's memory back. Gate D26 measured only the hit. A miss happens after a pull, rebase, merge or checkout that moves HEAD; after a commit Hoglint did not run for; after a Hoglint, preset or Django upgrade; and after F2.
 
 **F2. One dirty non-Python file anywhere stops a staged run from storing its summary.** One untracked note file gives "summary of tree ... not stored", and the next commit meets F1. The drift check counted every path not ending in `.py` or `.pyi` in the whole repo. Developers nearly always have such a file, so F1 is the common case.
 
@@ -58,7 +58,7 @@ After the pack phase, 0.42 GB was in use and 0.94 GB held. Ten concurrent checks
 
 **F7. D1's reason for rules in Python does not hold for the evaluator.** Rules are TOML, the primitives are a closed set of ten, and no plugin adds a primitive. Selector evaluation, labels and identity projection are mechanics; packs are the real Python extension point.
 
-**F8. The 4 s gate is not the developer's experience.** The existing Python hook chain is about 2 to 3 s. hoglint on a hit: 4.8 s quiet, 9.5 s each when ten run at once; on a miss, three times that.
+**F8. The 4 s gate is not the developer's experience.** The existing Python hook chain is about 2 to 3 s. Hoglint on a hit: 4.8 s quiet, 9.5 s each when ten run at once; on a miss, three times that.
 
 **F9. Smaller.** 25 native tests skip when the module is missing, and two more skip by file time. The fact cache's validity rests on nine hand-kept exclusion lines; crate boundaries could decide it instead. `Snapshots.index()` checks out every toml and yaml file (784) per staged run: 0.24 s.
 
@@ -73,7 +73,7 @@ Open for the owner: the memory target, the time target (4 s, or "no slower than 
 
 ## The second opinion
 
-What follows is the second opinion's answer, cleaned. "Verified" means established by reading code; "measured" means supplied measurements; "inferred" means a consequence or estimate that needs validation. Paths are hoglint modules.
+What follows is the second opinion's answer, cleaned. "Verified" means established by reading code; "measured" means supplied measurements; "inferred" means a consequence or estimate that needs validation. Paths are Hoglint modules.
 
 It would not approve a pre-commit cutover yet. The engine had improved a lot, but the measured fast path missed the time gate, and ordinary baseline misses exposed costs the reported gates did not establish. It inspected HEAD `dc2271eba47`, the code, the decision log and the profiles. It did not read the architect's view, modify files or rerun benchmarks.
 
@@ -99,7 +99,7 @@ It would not approve a pre-commit cutover yet. The engine had improved a lot, bu
 
 ### 3. The realistic commit path is often two scans, not the advertised one
 
-**Verified.** `Commands.check()` prepared the baseline before trying the current-tree memo. `Baselines.prepare()` read only cached incompletes when available; otherwise it evaluated HEAD under the current policy. `TreeSummaries.put()` refused storage when `side_input_drift()` found *any* relevant-status non-Python file, whether hoglint reads it or not. `RunMemo.lookup()` applied the same broad guard.
+**Verified.** `Commands.check()` prepared the baseline before trying the current-tree memo. `Baselines.prepare()` read only cached incompletes when available; otherwise it evaluated HEAD under the current policy. `TreeSummaries.put()` refused storage when `side_input_drift()` found *any* relevant-status non-Python file, whether Hoglint reads it or not. `RunMemo.lookup()` applied the same broad guard.
 
 | Event | What the machine does |
 |---|---|

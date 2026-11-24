@@ -6,7 +6,7 @@
 Background: in the PostHog monorepo, a product on the Isolated rung skips other products' test suites when only that product changes.
 The skip is sound only if no coupling is missed.
 The doctrine is in the monorepo's `products/architecture.md` ("What makes the skip sound").
-hoglint expresses rungs like this one as **levels**: named sets of rules that a product passes or fails.
+Hoglint expresses rungs like this one as **levels**: named sets of rules that a product passes or fails.
 
 ## Decided
 
@@ -68,7 +68,7 @@ Why a level key and not a rule that reads a level's result:
 - A rule's finding is a ledger line or an advisory row, so "no ledger accepts it" would need an exemption; a failed claim is no finding at all, like a stale exception.
 - The claim lives in the outside input the coverage rules already read, so the level needs no new field, provider or rule.
 
-**Test selection reads the watched files from hoglint** (owner, Nov 17; the design `watched-live-design.md`, the architect's picks).
+**Test selection reads the watched files from Hoglint** (owner, Nov 17; the design `watched-live-design.md`, the architect's picks).
 A repo can drop its hand-kept input lists: `hoglint watched` derives each group's watched files, and the selector reads them.
 - `hoglint watched [--level NAME] [--out FILE] [--map FILE]` prints one JSON object, format 1: `format`, `hoglint` (the version), `engine` (the engine id), `policy` (the policy digest), `level`, `complete`, `problems`, and per group of the level `claimed` (the file that claims it, or null), `passes`, `reasons` (cut to a count over 20) and `watched` (path -> the first reason that asks for it).
   Keys are sorted and nothing in it names a time or a machine: one tree, policy and engine give the same bytes.

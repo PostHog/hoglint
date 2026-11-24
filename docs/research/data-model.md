@@ -1,6 +1,6 @@
 # Data model v0 (part 1: sections 0-10)
 
-> The v0 data model of hoglint (v0.1, with the v0.2 and v0.3 changes from the spikes), Nov 4, 2026. Part 2 (sections 11-20) is `docs/research/data-model-2.md`.
+> The v0 data model of Hoglint (v0.1, with the v0.2 and v0.3 changes from the spikes), Nov 4, 2026. Part 2 (sections 11-20) is `docs/research/data-model-2.md`.
 > Partly replaced: later work refined it, and the current state is in `docs/design/`: `02-policy-exceptions-ledger.md` (ledger), `04-rules.md` (rules), `05-engine.md` (engine: an in-process PyO3 design replaced the Rust/Python split of sections 18-20), `06-fact-cache-and-summaries.md` (cache).
 
 Inputs: a fit test of 54 PostHog boundary rules (not published), `docs/research/research-round-1.md`, the second opinions in `docs/research/research-round-1-second-opinions.md`, and `docs/research/blind-design.md`.

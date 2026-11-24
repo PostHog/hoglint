@@ -58,7 +58,7 @@ Written after phase 2 and before the adjudication, and not shared with the secon
 
 ## The second opinion
 
-What follows is the second opinion's answer, cleaned. Code references are to hoglint's modules at `0c197478064`; "scripts" are the adversaries' experiment scripts.
+What follows is the second opinion's answer, cleaned. Code references are to Hoglint's modules at `0c197478064`; "scripts" are the adversaries' experiment scripts.
 
 **Prototype a revised C2: native full relinking, typed schema-v3-derived facts, and Python packs and predicates.** Phase 2 establishes that native resolution is promising, but does not establish complete linker parity or the proposed end-to-end timings. C3 remains viable; its correctness and maintenance costs now outweigh its demonstrated advantage.
 

@@ -5,7 +5,7 @@
 
 **The question.**
 One check rebuilt everything between the cached per-file facts and the result (link, packs, rules) for all 29,000 files: about 3.2 of 3.75 s.
-The question (Nov 10): should hoglint reuse computed results between checks?
+The question (Nov 10): should Hoglint reuse computed results between checks?
 That works only if a real commit's change stays near the changed files and their importers, and fails if changes appear in files with no import path to them, or if most producers must see the whole repo.
 So: when a real commit changes a few files, how far does the change spread in the graph and in the findings?
 
@@ -19,7 +19,7 @@ Nothing moved in a file with no import path to a changed file.
 Reach, cycle and coverage results never moved.
 
 **Sample.**
-The snapshot (a snapshot tree) is master `dcf2ddf1a31` (Nov 9) plus the hoglint tool, config and preset.
+The snapshot (a snapshot tree) is master `dcf2ddf1a31` (Nov 9) plus the Hoglint tool, config and preset.
 Outside the tool and `.github`, its Python files are byte-equal to master from `8fb43f03542` to `7f4eb25af4c`.
 The spike took the 30 consecutive first-parent commits that touch `.py` files, ending at `8fb43f03542` (58 first-parent commits, Nov 8-9).
 None touches more than 50 Python files, so none was skipped.

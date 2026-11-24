@@ -22,7 +22,7 @@ The first prior-art round (`docs/research/research-round-1-prior-art.md`) covere
 
 **Soufflé and Doop.** Facts from bytecode, analyses in Datalog. Doop was ported from LogicBlox to Soufflé and gained parallelism from the engine alone [src: https://pldi17.sigplan.org/event/soap-2017-papers-porting-doop-to-souffl-a-tale-of-inter-engine-portability-for-datalog-based-analyses]. Each engine has "its unique flavor of Datalog", which blocks interoperability [src: https://www.pl.informatik.uni-mainz.de/files/2024/10/datalog-modules.pdf]. Rules in a dialect get ported when the engine changes.
 
-**NDepend CQLinq.** C# LINQ over a code model; the default rules are editable CQLinq [src: https://www.ndepend.com/docs/cqlinq-syntax]. With a baseline, rules run on both snapshots, and `WasAdded()` and debt deltas drive quality gates [src: https://www.ndepend.com/docs/cqlinq-features]. Issues pair when rule and code element match; unpaired means added [src: https://www.ndepend.com/API/NDepend.API~NDepend.Issue.IIssuesSetDiff~IssuesAdded(ICodeElement).html]. That is hoglint's growth check with a location-free key. What a rename does to pairing could not be verified.
+**NDepend CQLinq.** C# LINQ over a code model; the default rules are editable CQLinq [src: https://www.ndepend.com/docs/cqlinq-syntax]. With a baseline, rules run on both snapshots, and `WasAdded()` and debt deltas drive quality gates [src: https://www.ndepend.com/docs/cqlinq-features]. Issues pair when rule and code element match; unpaired means added [src: https://www.ndepend.com/API/NDepend.API~NDepend.Issue.IIssuesSetDiff~IssuesAdded(ICodeElement).html]. That is Hoglint's growth check with a location-free key. What a rename does to pairing could not be verified.
 
 **Moose and FAMIX.** One language-independent metamodel. Users said entities "have too many properties that do not make sense for them", such as Java's `isAbstract` on a Function [src: the Moose developers' mailing list archive]. FamixNG moved to per-language metamodels composed from small traits [src: https://www.academia.edu/66409229/Modular_Moose_A_new_generation_software_reverse_engineering_environment, https://modularmoose.org/developers/predefinedentities/].
 
@@ -42,17 +42,17 @@ Soufflé shows the porting cost of a dialect.
 Boundary tools that reached product teams use fixed contract types with a plugin escape: import-linter's five types plus custom ones [src: https://import-linter.readthedocs.io/en/stable/], Packwerk, tach, Nx tags (`docs/research/research-round-1-prior-art.md`).
 
 For hoglint: a language belongs where facts are derived (Glean stored derived predicates, jQAssistant concepts); fixed primitives belong where policy is judged.
-hoglint already drew this line: derived edges are producer code, rules are 11 primitives.
+Hoglint already drew this line: derived edges are producer code, rules are 11 primitives.
 The selector language ("selectors are a small expression language", in the draft) is where a query language can creep back.
 
-## 3. Reuse: can scip-typescript feed hoglint?
+## 3. Reuse: can scip-typescript feed Hoglint?
 
 [run] scip-typescript 0.6.1 (TypeScript 6.0.3) on the PostHog checkout's one root tsconfig, which covers `frontend/` and `products/*/frontend/` (about 15k TS files, 2.9M lines in those trees).
 On a developer laptop: 12 min 46 s wall, 11.2 GB max RSS, 14.6 GB peak footprint.
 Output: a 672 MB index, 16,785 documents, 5.4M occurrences.
 A streaming read-back took 4.4 s and 0.9 GB and gives 81k first-party file-to-file import edges.
-A rough area mapping (product dir or `frontend/src/scenes/<x>`) finds 4.8k cross-area file edges; that mapping is not a hoglint rule.
-For scale: hoglint's Python L1 parses 25.5k files in 2.55 s.
+A rough area mapping (product dir or `frontend/src/scenes/<x>`) finds 4.8k cross-area file edges; that mapping is not a Hoglint rule.
+For scale: Hoglint's Python L1 parses 25.5k files in 2.55 s.
 
 What it emits, checked on a fixture and in `dist/src/FileIndexer.js` [run]:
 
@@ -71,9 +71,9 @@ That gives per-file Binding facts (specifier, names, `type_only`, dynamic, re-ex
 oxc was not measured on this tree.
 Run scip-typescript the way the django pack runs oracle jobs: off the commit path, to check that oxc resolution agrees.
 
-## 4. Does hoglint repeat the mistakes?
+## 4. Does Hoglint repeat the mistakes?
 
-| Mistake | Who hit it | hoglint |
+| Mistake | Who hit it | Hoglint |
 |---|---|---|
 | Extraction tied to the build or a boot | Kythe, CodeQL traced builds | Avoids. L1 is syntax only; Django boots only in oracle jobs (as the draft has it). |
 | Opaque or unstable ids | LSIF ids; Kythe signatures | Mostly avoids: string ids, ledger identity without lines. But `Edge.id` hashes `ordinal-in-scope` (data model section 4); an earlier same-surface use shifts it. Fine run-local, wrong if it persists. |

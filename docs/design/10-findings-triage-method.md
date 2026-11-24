@@ -46,7 +46,7 @@ The architect then checked five of the largest claims against the dump and the c
 - a third-party package with the same top-level name as a first-party package resolved as first-party;
 - one producer's results kept at a coarser grain than the rule needs.
 
-**Cross-checks against the tools hoglint replaces** were part of the triage.
+**Cross-checks against the tools Hoglint replaces** were part of the triage.
 Where a rule has a predecessor, its findings matched the predecessor's baseline almost line for line, plus a few new rows.
 
 ## Why

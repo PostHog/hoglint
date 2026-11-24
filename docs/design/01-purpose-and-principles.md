@@ -1,4 +1,4 @@
-# 1. What hoglint is for, and its fixed principles
+# 1. What Hoglint is for, and its fixed principles
 
 > Design record by topic, compiled Nov 11, 2026, from the decision log and the research.
 > Current as of Nov 16, 2026.
@@ -6,13 +6,13 @@
 ## Decided
 
 **Purpose.**
-hoglint is one boundary linter for a large Python and Django monorepo.
+Hoglint is one boundary linter for a large Python and Django monorepo.
 Its case study is the PostHog monorepo.
 There it replaces five tools: tach, the boundary contracts of import-linter, the isolation checks in `hogli product:lint`, the crossings scanner, and repo invariants that boot Django.
-- A real build, under the name hoglint (owner, Nov 4).
+- A real build, under the name Hoglint (owner, Nov 4).
 - tach and import-linter are not kept as a base.
-  Their outputs serve only as parity oracles while hoglint runs in shadow (owner, Nov 5).
-- hoglint can still write tach's module map JSON, so tools that read it keep working until they switch.
+  Their outputs serve only as parity oracles while Hoglint runs in shadow (owner, Nov 5).
+- Hoglint can still write tach's module map JSON, so tools that read it keep working until they switch.
 - A later `hoglint impact` command is to give other tools one graph of what a change reaches, in place of several partial graphs (owner, in principle, Nov 9).
 
 **Principle 1: the linter carries the safety of the test skip.**
@@ -47,7 +47,7 @@ It may only cost time (D28).
 
 **Principle 5: core holds no framework or company name.**
 - Code splits into the `hoglint` core (no Django, no PostHog), the Django pack, and the PostHog preset.
-  hoglint itself enforces that direction (architect, Nov 4, after the generality spike).
+  Hoglint itself enforces that direction (architect, Nov 4, after the generality spike).
 - Django shapes (lock, write, DRF) moved out of core into the Django pack (review blocker 5).
 - The fact format (owner, Nov 9): neutral use positions in core, Django shapes in the pack, language-qualified ids, a schema hash in the ledger, run-local edge ids.
 - Checked in the code on Nov 9: no Django or PostHog names in the extractor or core.
@@ -76,7 +76,7 @@ See `05-engine.md`.
   In the prior art, semgrep reported findings in files that failed to parse as "fixed".
 - The cache rule: one cache per machine serves every worktree, so its failure modes must degrade to a recompute.
   An adversarial review showed that one editor save could poison a machine-wide entry.
-- No framework names in core: the owner did not want hoglint coupled to PostHog's shape; not every repo has a `products/` folder.
+- No framework names in core: the owner did not want Hoglint coupled to PostHog's shape; not every repo has a `products/` folder.
   The generality spike on Sentry, Saleor and Zulip showed that a built-in package, zone and level model failed there.
 
 ## Considered and rejected
@@ -93,7 +93,7 @@ See `05-engine.md`.
 
 - The doctrine itself.
   If the Isolated test skip were dropped, or moved to a runtime proof, coverage and level rules could advise instead of block.
-- A second repo that uses hoglint with no `products/` folder tests principle 5.
+- A second repo that uses Hoglint with no `products/` folder tests principle 5.
   Configs for Sentry, Saleor and Zulip exist in `docs/research/generality.md`.
 
 

@@ -21,7 +21,7 @@ It was asked for its own judgment, and to say if something in the description lo
 
 ## What it was given
 
-- **The system.** hoglint is a boundary linter for a large Python monorepo (about 29,000 Python files, 267 MB of source): a Python CLI over a Rust engine (PyO3, one abi3 wheel). A fixed export of the code: the Rust engine (fact extraction, the linker, the rule evaluator, pack producers), the PyO3 layer, the Python shell (CLI, rules, native bridge, Django and PostHog packs, ledger).
+- **The system.** Hoglint is a boundary linter for a large Python monorepo (about 29,000 Python files, 267 MB of source): a Python CLI over a Rust engine (PyO3, one abi3 wheel). A fixed export of the code: the Rust engine (fact extraction, the linker, the rule evaluator, pack producers), the PyO3 layer, the Python shell (CLI, rules, native bridge, Django and PostHog packs, ledger).
 - **One check:**
   1. list the tree (index blobs or a tree) and digest the declared inputs;
   2. facts per file, extracted by a Rust parser and cached in SQLite by content; a warm run parses nothing, but reads and decodes all files' cached facts;
@@ -48,7 +48,7 @@ Written on the night of Nov 10, before any second opinion.
 
 **The reading.** Outputs are local, so reuse can pay. Whether it can be made exact depends on a second question: can a file's stored answer name everything it read from other files, so that "none of it changed" is checkable without recomputing?
 
-**The model that fits hoglint's identity design (D3, D4, D5, D28): stored answers with a record of what they read.** No daemon, nothing mutable, everything keyed by content.
+**The model that fits Hoglint's identity design (D3, D4, D5, D28): stored answers with a record of what they read.** No daemon, nothing mutable, everything keyed by content.
 
 - Every file has an *interface*: what other files' answers can read from it (its definitions and their kinds, bases, decorators and signatures, its imports that serve re-exports, the facts packs attach to its symbols, its module's labels). The interface has a digest.
 - Every stored answer for a file (its edges per producer, its symbol facts, its rule rows) carries a *trace*: the files it read from and the interface digest each had.
@@ -195,17 +195,17 @@ From the decision log (`docs/history/decision-log-3.md`, Nov 10 to 11). The arch
 5. Its targeted mutation list went to the N7 agent as part 3 (eleven mutations in the end).
 6. **Both corrections were right:** the analysis substeps sum to 0.63 s of 1.05 s (the rest is the Python snapshot and discovery, 0.42 s), and the Django migrations pack has a narrower cache of its own.
 
-**On salsa,** an earlier statement was wrong: persistence is a documented, feature-gated part of salsa's API (the `persist` option on tracked structs and functions, salsa 0.28.5), not only a prototype. Whether it loads a database of hoglint's size in a fresh process fast enough, and lets inputs change after a load, could not be read off the docs, so the N9 spike measured it on a reduced model of the link's name resolution over the real 28,794 files. A fresh process paid a whole-database load (0.41 s, more than the 0.27 s to compute that model from nothing), with no partial or lazy load; inside one live process a change cost 0.02 to 0.04 s (`docs/research/spike-n9.md`).
+**On salsa,** an earlier statement was wrong: persistence is a documented, feature-gated part of salsa's API (the `persist` option on tracked structs and functions, salsa 0.28.5), not only a prototype. Whether it loads a database of Hoglint's size in a fresh process fast enough, and lets inputs change after a load, could not be read off the docs, so the N9 spike measured it on a reduced model of the link's name resolution over the real 28,794 files. A fresh process paid a whole-database load (0.41 s, more than the 0.27 s to compute that model from nothing), with no partial or lazy load; inside one live process a change cost 0.02 to 0.04 s (`docs/research/spike-n9.md`).
 
 **The results of the experiments it proposed or confirmed** (`docs/research/spike-n7.md`, parts 2 and 3): with three widenings of the trace (the module an edge spells, rule rows kept under the files their identity names, aggregate rules reused by the digest of the relation they read), the prediction missed no file over the 33 commits and 11 mutations. At name grain the median recompute was 6 files (4 really changed). The packs were the blocker: a pack step builds its whole output in one batch, so no read could be tied to an item; drives would rerun whole in 20 of 33 commits.
 
 **D59 (the architect, Nov 10 to 11):**
 
 - Prewarm by git hook (S1): not pursued. The N8 spike showed it helps one flow of five and storms without a guard (`docs/research/spike-n8.md`).
-- Salsa: not the vehicle for the hook, because its persistence loads the whole database per process. It stays the right tool if hoglint ever runs as a long-lived process (an editor server or a watch mode).
+- Salsa: not the vehicle for the hook, because its persistence loads the whole database per process. It stays the right tool if Hoglint ever runs as a long-lived process (an editor server or a watch mode).
 - Stored answers with traces (S2) is sound on everything tested and is the only route to a check near 1 s in a fresh process. Its rules: name grain, with not-found lookups and spelled modules in the trace; a store read by key from the changed files outward, never loaded whole (the N9 lesson); rule rows under site and identity files; aggregate rules by relation digest; provider-file labels with their own trace; an oracle in CI that the incremental result of a commit replay equals the full result.
 - A declared fast mode that links and judges only the changed files was measured and rejected: it saw 11 of 88 findings that 33 real commits introduced, because most new findings come from the facade and export rules that read a pack producer.
 
-**D61 (the architect, Nov 11): the road is exact reuse on hoglint's own store, all eight stages; not salsa.** The fork with salsa is narrow and late: the first stages are needed on both roads, and they part only at where answers live between two commits (on disk read by key, or in a live process). The lesson from ty for a hook is "compute only what the change needs", from nothing, in each process; hoglint needs more than ty for it, because a finding also depends on who imports the changed file and on pack facts.
+**D61 (the architect, Nov 11): the road is exact reuse on Hoglint's own store, all eight stages; not salsa.** The fork with salsa is narrow and late: the first stages are needed on both roads, and they part only at where answers live between two commits (on disk read by key, or in a live process). The lesson from ty for a hook is "compute only what the change needs", from nothing, in each process; Hoglint needs more than ty for it, because a finding also depends on who imports the changed file and on pack facts.
 
 **Not taken:** the second opinion's daemon-later option stayed later; its stop condition on hook frequency was answered by the design target of a hook that runs on every commit in 2 to 3 s (D60). D69 later found that one stage of the plan (a forward check of rule rows over the full link) cost three times the judging it would skip, which confirms its warning that validation can approach recomputation unless unchanged rows are not read at all.

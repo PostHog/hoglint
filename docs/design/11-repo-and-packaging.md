@@ -5,22 +5,22 @@
 
 ## Decided
 
-**hoglint gets its own repo** (owner's proposal, Nov 9; D15).
+**Hoglint gets its own repo** (owner's proposal, Nov 9; D15).
 - Timing (owner, Nov 9): first stabilize the split between Rust and Python and the pack API, then move.
 - The owner confirmed the move on Nov 10.
-- Done on Nov 11 (D15 step 2): 256 commits replayed from the monorepo folder that held hoglint.
+- Done on Nov 11 (D15 step 2): 256 commits replayed from the monorepo folder that held Hoglint.
   Each kept the old commit's tree for the folder, its author, dates and message.
   The head tree is equal to the old folder's tree.
   One commit was skipped, because it changed only the monorepo's root config.
 
 **What lives where** (D15; "Every pack in the wheel", owner, Nov 17):
-- The hoglint repo: all Rust (facts, link, evaluator, the PyO3 module), the generic core and every pack, each under `hoglint/packs/<name>/` with its `pack.toml` (Django; PostHog: `drives`, the owners provider, name lists).
+- The Hoglint repo: all Rust (facts, link, evaluator, the PyO3 module), the generic core and every pack, each under `hoglint/packs/<name>/` with its `pack.toml` (Django; PostHog: `drives`, the owners provider, name lists).
   It ships one abi3 wheel.
 - A consuming monorepo: its preset, the root `hoglint.toml` (which extends the packs it uses, such as `hoglint:posthog`), and the ledger and exceptions files.
-  It pins the wheel and holds no hoglint Python.
+  It pins the wheel and holds no Hoglint Python.
 
 **compare's base engine** (architect, Nov 17):
-- When the base commit pins another hoglint version, `compare` installs that version without its dependencies (`[engine] install`, by default `uv pip install --no-deps --target`) into `engines/<version>` under the cache root.
+- When the base commit pins another Hoglint version, `compare` installs that version without its dependencies (`[engine] install`, by default `uv pip install --no-deps --target`) into `engines/<version>` under the cache root.
   It runs that engine under the head's interpreter, so both engines read the same third-party sources.
 - A base scan with a producer failure that the head scan does not have makes `compare` exit 2.
   Such a base is no reference for the head's unknowns.
@@ -31,14 +31,14 @@
 - Release wheels are built in a manylinux container, from tags only.
   Local builds use `--compatibility linux` (D32, "Local builds").
 - The toolchain is pinned by `rust-toolchain.toml`.
-  Older cargo versions are too old for the ruff crates hoglint uses.
+  Older cargo versions are too old for the ruff crates Hoglint uses.
 
 ## Why
 
 - Own repo: frequent coordinated source changes between the tool and the monorepo do not happen.
-  hoglint can iterate, release and build on its own, and the monorepo pins a version.
+  Hoglint can iterate, release and build on its own, and the monorepo pins a version.
   `compare` can then run its base engine from the base pin.
-- The base engine in the head's environment: hoglint reads third-party sources, such as Django's, from the interpreter's site-packages.
+- The base engine in the head's environment: Hoglint reads third-party sources, such as Django's, from the interpreter's site-packages.
   A base scan in another environment is not comparable with the head scan.
 - Prebuilt wheel: a Rust workspace member built locally conflicted with the dev environment's older cargo.
 - The generic core and the Django pack become physically separate from PostHog's preset.

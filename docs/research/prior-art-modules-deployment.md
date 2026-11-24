@@ -1,13 +1,13 @@
 # Prior art, round 2: module systems, registries, and deploying static analysis
 
-> A study of module systems, plugin registries, and how static analysis tools were rolled out, compared against the hoglint design draft, Nov 9, 2026.
+> A study of module systems, plugin registries, and how static analysis tools were rolled out, compared against the Hoglint design draft, Nov 9, 2026.
 > Partly replaced: the synthesis is `docs/research/prior-art.md`, the claims were checked in `docs/research/prior-art-second-opinion.md`, and the exceptions and registry design is in `docs/design/02-policy-exceptions-ledger.md` and `docs/design/09-contract-surfaces.md`.
 
 Tags: [src: URL] means the study read that source.
 [src-summary: URL] means it saw only a search summary of it.
 [mem] means memory, not checked here.
 This pass does not repeat Packwerk, Kraken, ArchUnit, Bazel, Nx and Sentry from `docs/research/research-round-1-prior-art.md`.
-"The draft" is the hoglint design draft of that date (not published).
+"The draft" is the Hoglint design draft of that date (not published).
 
 ## 1. Items: what they do and what went wrong
 
@@ -32,7 +32,7 @@ This pass does not repeat Packwerk, Kraken, ArchUnit, Bazel, Nx and Sentry from 
 - **Error Prone.** A default ERROR check needs "no false positives" [src: https://errorprone.info/docs/criteria].
 - **Facebook Infer (2019).** A nightly batch got "near silence" and a fix rate near zero, at under 20% false positives. The same analysis at diff time reached over 70%, because of context switching and relevance. Issue identity is a location-independent hash [src: https://6826.csail.mit.edu/2020/papers/facebook-infer-cacm.pdf].
 - **SonarQube new code.** The quality gate judges only new code, with four ways to define it: previous version, X days, a reference branch, or a specific analysis. The leak: an unfixed new-code issue "becomes part of the overall code" after 30 days [src: https://docs.sonarsource.com/sonarqube-server/latest/user-guide/about-new-code/].
-- **ESLint bulk suppressions.** These work much like hoglint's ledger. `eslint-suppressions.json` holds existing violations, fixed violations fail with "unused suppressions" until you run `--prune-suppressions`, and `--pass-on-unpruned-suppressions` turns that off [src: https://eslint.org/docs/latest/use/suppressions].
+- **ESLint bulk suppressions.** These work much like Hoglint's ledger. `eslint-suppressions.json` holds existing violations, fixed violations fail with "unused suppressions" until you run `--prune-suppressions`, and `--pass-on-unpruned-suppressions` turns that off [src: https://eslint.org/docs/latest/use/suppressions].
 
 ## 2. Escape hatches: how they spread, what contained them
 
@@ -47,7 +47,7 @@ Compared with hoglint:
 - Gaps:
   - The tool's owners approve exceptions, not the owners of the target package. The prior art puts the grant with the provider.
   - Nothing says what happens on `review_by`. Sonar shows that silent aging launders debt. Failing every PR on that date repeats the Coverity churn problem.
-  - Nothing limits an exception's purpose. Sorbet allows test-only internals, while hoglint says "test path alone never grants exemptions" and leaves no reviewed test-scoped grant.
+  - Nothing limits an exception's purpose. Sorbet allows test-only internals, while Hoglint says "test path alone never grants exemptions" and leaves no reviewed test-scoped grant.
 - The proposal that relaxations in `hoglint.toml` need review by the tool's owners is right. It is the lesson of `--illegal-access` and the Sorbet relax flag: a global relaxation is the hatch that spreads. Judging a relaxation by its effect on base code goes further than any system above did.
 
 ## 3. Registration: convention or declared manifest
@@ -62,14 +62,14 @@ What the history says:
 `products/{p}/backend/<registry>.py` plays the role of `provides`.
 Keep the registry declared once in the preset (loader, module, attribute, shape), which plays the role of `uses`.
 Add three rules:
-1. The registry attribute must be a literal list of names that hoglint resolves without importing (Sorbet's literal rule). Anything else makes the registry incomplete.
+1. The registry attribute must be a literal list of names that Hoglint resolves without importing (Sorbet's literal rule). Anything else makes the registry incomplete.
 2. A file that matches a convention path but no declared registry is a config error, and so is a registry with no loader call.
 3. `hoglint explain <registry>` lists the members, so readers do not need to know the convention.
 
 If lazy startup later needs an index, generate it as a projection and check it for equality, as the ledger is checked.
 Do not hand-write it in `product.yaml`.
 That keeps `product.yaml` ownership-only (the draft) and avoids two sources of truth.
-The second opinion's manifest option (`docs/research/exports-and-shapes-second-opinion.md`, round 4) is sound only if hoglint also verifies it against the files, and then the files already carry the information.
+The second opinion's manifest option (`docs/research/exports-and-shapes-second-opinion.md`, round 4) is sound only if Hoglint also verifies it against the files, and then the files already carry the information.
 
 ## 4. Soundness and noise; who owns an incomplete result
 
@@ -80,7 +80,7 @@ To a PR author, an incomplete result their PR did not cause is an effective fals
 
 So unknown should never be clean for the claim it affects: Isolated and test skipping.
 The safe failure there costs CI time, not a blocked developer.
-That half of hoglint is right and matches "No Check = No Bug".
+That half of Hoglint is right and matches "No Check = No Bug".
 For merge blocking, attribute incompleteness like growth:
 - **Introduced by the PR:** a new dynamic-import fact, an unresolved name in changed code, or a new registry without a loader. The author owns it, and it blocks.
 - **Inherited from the base or caused by a scanner or policy bump:** the tool owner owns it, Tricorder style. It does not block. It removes Isolated for the affected products, so the full suite runs, and it pages or files to the tool owner with a fix-by target.
@@ -102,7 +102,7 @@ For merge blocking, attribute incompleteness like growth:
 
 **Changes, ranked**
 1. Attribute incompleteness the way growth is attributed. PR-introduced unknowns block. Inherited unknowns drop Isolated, route to the tool owner, and never block. Compute the exit status from attributed results, so exit 2 cannot hide exit 1.
-2. Pin the hoglint version and require scanner or policy bumps to show incomplete-delta = 0, plus listed rule growth or shrink, on master. Treat shrink without a code change as a relaxation that needs review.
+2. Pin the Hoglint version and require scanner or policy bumps to show incomplete-delta = 0, plus listed rule growth or shrink, on master. Treat shrink without a code change as a relaxation that needs review.
 3. Add a noise budget per rule: count exception requests and "not useful" marks. Above a threshold, demote the rule to advisory until it is fixed (Tricorder's 10%).
 4. Exceptions:
    - Approval from the owners of the target package (CODEOWNERS on the dst package), with the tool owner only for policy.

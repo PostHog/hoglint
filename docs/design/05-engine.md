@@ -47,11 +47,11 @@ Each phase landed with zero delta unless a delta is named.
 | N1b, N2, N2b, N2c | All rule types in the evaluator; fixes D43-D55 | up to 2ac1c21e243, Nov 10 |
 | N3a | `django.uses` as a Rust producer | ad83640b66e, Nov 10 |
 | N4a, N5a, N6 | Findings as a table; pack records released per step; record compression | up to 461ef834c48, Nov 10-11 (D56-D58) |
-| N3b | Facade facts into the engine (see `09-contract-surfaces.md`) | 7f26c49 to 4719fd5, Nov 11, in the hoglint repo (D62-D64) |
+| N3b | Facade facts into the engine (see `09-contract-surfaces.md`) | 7f26c49 to 4719fd5, Nov 11, in the Hoglint repo (D62-D64) |
 
 **The pack API, and where PostHog's parts live** (D49; "Every pack in the wheel", owner, Nov 17):
-- All Rust and every pack live in the hoglint repo and ship as one abi3 wheel.
-  The consuming monorepo pins the wheel and holds config, ledger and exceptions, and no hoglint Python.
+- All Rust and every pack live in the Hoglint repo and ship as one abi3 wheel.
+  The consuming monorepo pins the wheel and holds config, ledger and exceptions, and no Hoglint Python.
 - A pack is a directory of `hoglint/packs/` with its `pack.toml` (vocabulary, sections).
   A config loads it only by naming it, with `extends = ["hoglint:<name>"]`; that reads the `pack.toml` and imports the pack's module.
   Core (the rest of `hoglint/`) imports no pack; a test holds it.
@@ -84,7 +84,7 @@ Each phase landed with zero delta unless a delta is named.
 | Make the Python layer cheaper (D29, D30, D38) | D29 saved about 10 % where the profile promised 45-50 % | Architect, stopped by D39, Nov 10 | `docs/history/decision-log-2.md` |
 | One Rust binary, Python plugins in a child process (D47, first version) | A preference stated as a requirement; about 0.1 s gain | Architect withdrew it, Nov 10 | `docs/history/decision-log-2.md` |
 | Publish a polished Python pack API (D31) | Packs became built-in or a monorepo plugin | Architect, Nov 10 | `docs/history/decision-log-2.md` |
-| The PostHog pack as a built-in Rust module in the hoglint repo | D47 revised removed the reason | Architect; owner, Nov 10 | `docs/history/decision-log-2.md` |
+| The PostHog pack as a built-in Rust module in the Hoglint repo | D47 revised removed the reason | Architect; owner, Nov 10 | `docs/history/decision-log-2.md` |
 | The PostHog pack as the monorepo's own plugin, loaded by `[discovery] plugins` ("The PostHog pack's home", Nov 10) | Packs in two places, loaded two ways. The engine id and the base pin cover a pack in the wheel, and the monorepo needs no repo root on `sys.path` | Owner, Nov 17 | not published |
 | Port `drives` to Rust | See Why | Architect, D49 | `docs/history/decision-log-3.md` |
 | `mentions_many` for installs and signals | 0.43 to 0.42 s, inside the noise | N3a build; skipped | not published |
@@ -101,10 +101,10 @@ Each phase landed with zero delta unless a delta is named.
 ## Open
 
 - **A contradiction in the notes, settled.**
-  `docs/research/native-engine-design.md` sections 4 and 9 move the PostHog pack into the hoglint repo.
+  `docs/research/native-engine-design.md` sections 4 and 9 move the PostHog pack into the Hoglint repo.
   The decision of Nov 10 ("The PostHog pack's home") reversed that.
-  On Nov 17 the owner put the pack back in the hoglint repo, as Python (`hoglint/packs/posthog/`).
-- The PostHog preset (`presets/posthog.toml`) still sits in the hoglint repo, to move to the monorepo (D15).
+  On Nov 17 the owner put the pack back in the Hoglint repo, as Python (`hoglint/packs/posthog/`).
+- The PostHog preset (`presets/posthog.toml`) still sits in the Hoglint repo, to move to the monorepo (D15).
 - One snapshot object per run, to replace process-wide registries (`PLUGIN_ROOTS`, `WorktreeStatus.taken`, `WorktreeListing.taken`, `RunInputs.taken`).
 - Proposals not yet decided by measurement: facade facts as a generic engine analysis for any repo (partly done in N3b); the PostHog pack's name lists moved into a `[posthog]` config section.
 

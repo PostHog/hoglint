@@ -5,7 +5,7 @@
 
 The questions (Nov 6):
 1. Is "facade" a core concept, or made up through config?
-2. Generated code is a wide surface in the agentic era. How does it fit into hoglint?
+2. Generated code is a wide surface in the agentic era. How does it fit into Hoglint?
 3. Packages inside `posthog/` and `ee/`: keep for example ingress and egress pure (Django-free?), and declare proto-products to help migrate code out. Is there test-isolation leverage?
 
 Order of work in round 3: the architect wrote a view first; a second opinion from another model answered independently (round 1); both answers were judged too narrow (owner, Nov 6), so the architect did a widening pass; then the second opinion answered again (round 2).
@@ -53,7 +53,7 @@ Result:
 - **Core:** `generated` provenance (producer; inputs, including templates, generator config, locks and formatter version; outputs). Rules: exactly one producer per generated file (inventory); generated executable code is subject to ordinary boundary rules, because it makes real imports; a finding witnessed in a generated file is attributed to the source.
 - **Advisory `unexplained-generated-change` in `compare`:** an output changed while no declared input or producer changed. Not a gate; exact regeneration (each pipeline's drift check) stays authoritative.
 - **Graph:** one fact store, separate views. The impact view is input / producer → generation → output → consumer → test. The runtime cycle view excludes generation edges. Consumers: `compare` (base and head), test selection (impact view), owner routing (source provenance; mixed-source outputs keep several owners).
-- It replaces PostHog's generated-files registration test, whose name heuristic misses `schema.py`, `schema_enums.py`, warehouse `_config.py` files, protobuf and kea types. hoglint reads the projection registry; the projection runner keeps rendering and drift checks. hoglint never generates.
+- It replaces PostHog's generated-files registration test, whose name heuristic misses `schema.py`, `schema_enums.py`, warehouse `_config.py` files, protobuf and kea types. Hoglint reads the projection registry; the projection runner keeps rendering and drift checks. Hoglint never generates.
 - **Contract-first, long term:** product-owned schema sources that generate frozen DTOs are the right form for data contracts consumed by several languages (frontend, MCP, AI). Not for behavior. Split `posthog.schema` per product incrementally, guided by symbol provenance (needs a generator-emitted symbol → source map).
 - **Not covered yet:** TS and Rust resolution, symbol maps, CI trigger facts. A Python-only L1 cannot certify cross-language boundaries; such rules report incomplete.
 
@@ -85,7 +85,7 @@ High fan-in (`posthog.schema`, ingress, egress) does not make something foundati
 ### 5. What both missed (widening)
 
 1. **Compatibility analysis:** diff surfaces between base and head (removed operations, new required fields, changed defaults). Boundary legality misses breaking changes that travel through generated clients and MCP tools.
-2. **hoglint as a migration planner:** `hoglint plan <proposed package>` reports crossing edges, affected tests, generator entanglement and isolation blockers before files move. Useful now for legacy extraction.
+2. **Hoglint as a migration planner:** `hoglint plan <proposed package>` reports crossing edges, affected tests, generator entanglement and isolation blockers before files move. Useful now for legacy extraction.
 3. **Uncertainty as output:** unresolved symbols, dynamic registration (ingress loading discovers product consumers at runtime) and missing language packs are coverage gaps; "no violations" never authorizes a test skip. The draft had `incomplete`; extend it to dynamic registration.
 4. **Shape unchanged does not mean behavior unchanged:** contract-based test skipping needs explicit assumptions (provider conformance tests, integration tests).
 5. **One graph for the repo:** lint, test selection, codegen impact and review routing read the same fact store. Pants infers dependencies from imports with a Rust parser and selects tests from them.
@@ -192,7 +192,7 @@ This is the outside view, from prior art and the owner's own doctrine.
 - The owner's catch-all-drawer doctrine: publicness by location rots into a catch-all drawer of models, services and jobs. PostHog facades already showed it (ORM re-exports, a manager class, a test mixin in a facade's testing module).
 - Packwerk moved privacy out of core into an extension (Packwerk PR #247). A Packwerk maintainer: "the value proposition of packwerk is in dependencies, and privacy as an option is a nice cherry on top". Packwerk discussion #219 weighed export annotations over a public folder.
 - Bazel and Pants: visibility is declared per target, for an audience (`package_group`). Pants 2.16 visibility applies to real imports (inferred dependencies).
-- Wider answer: the core concept is a contract surface = door (which symbols, for which audience) + shape (what may cross: data boxes, core-owned ABCs, never ORM). An export with no shape policy is a config error. The word "facade" and its folder stay in the preset. hoglint's `signature` primitive is the shape check that the doctrine said no static tool has.
+- Wider answer: the core concept is a contract surface = door (which symbols, for which audience) + shape (what may cross: data boxes, core-owned ABCs, never ORM). An export with no shape policy is a config error. The word "facade" and its folder stay in the preset. Hoglint's `signature` primitive is the shape check that the doctrine said no static tool has.
 
 ### Generated code: in PostHog the strongest contracts are already generated
 
@@ -200,11 +200,11 @@ This is the outside view, from prior art and the owner's own doctrine.
 - So generated code is not only a hygiene problem (hand edits, side generators); it is where contracts live, and where they are authored decides who owns them (product query types authored in the core frontend).
 - Bazel: a generated file has the visibility of the rule that produces it. That is prior art for "a generated output takes the labels of its producer or inputs".
 - Wider answer: `generates` as an edge kind in the graph (input → output). Then `compare`, test selection and ownership see codegen; a change to a schema source reaches every consumer through the generated module. Contract-first surfaces (schema → generated DTOs) give shape by construction: the long-term form of a facade.
-- Agentic angle: agents edit outputs instead of inputs and add side generators. A non-blocking hook for writes to generated paths exists in the wild. hoglint can do the diff-based version in `compare`.
+- Agentic angle: agents edit outputs instead of inputs and add side generators. A non-blocking hook for writes to generated paths exists in the wild. Hoglint can do the diff-based version in `compare`.
 
 ### Core packages: the graph is a build graph
 
-- Pants infers dependencies from imports with a Rust parser (2.17) and selects tests from them; Bazel query answers reverse dependencies. hoglint's L2 is the same graph.
+- Pants infers dependencies from imports with a Rust parser (2.17) and selects tests from them; Bazel query answers reverse dependencies. Hoglint's L2 is the same graph.
 - Concrete test leverage of a pure package: a package with no Django imports runs its tests under plain pytest, with no settings and no database (egress tests used Django's `SimpleTestCase` only for settings overrides). That is a fast test lane, not just a lint rule.
 - Wider answer: one dependency graph for the repo (lint, test selection, codegen triggers, review routing), with packages anywhere, not only under `products/`.
 
@@ -259,7 +259,7 @@ shape     = "abc:posthog.ingress.contracts.WebhookConsumer"
 
 ### 4. One graph
 
-hoglint's fact store becomes the repo dependency graph: import, dotted-path, registers (registries), generates (codegen) and relation edges, with views.
+Hoglint's fact store becomes the repo dependency graph: import, dotted-path, registers (registries), generates (codegen) and relation edges, with views.
 The CI test selector reads it instead of `tach map`, and registry edges close the gap the watched-channels lint covers by hand.
 
 ---

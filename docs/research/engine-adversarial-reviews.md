@@ -23,7 +23,7 @@ Each adversary had one angle, the code, and the phase 1 reports:
 
 Rules for all reviewers:
 
-- Read-only on the hoglint code (commit `0c197478064`); experiments ran on copies, monkeypatches or fixture repos.
+- Read-only on the Hoglint code (commit `0c197478064`); experiments ran on copies, monkeypatches or fixture repos.
 - Every number carries a tag: **(m)** measured in the review, **(c)** counted from git or files or computed from measured numbers, **(e)** estimated.
 - Every finding names the claim it attacks, the evidence, the consequence and a fix.
 - Findings are ranked by severity.
@@ -31,7 +31,7 @@ Rules for all reviewers:
 A second opinion from another model then adjudicated every finding rated critical, high or medium-high, against the code and the scripts (`docs/research/second-opinion-adjudication.md`).
 Its verdict is noted below each finding.
 
-File references below point into hoglint's own modules at that commit (Python under `hoglint/`, Rust under `src/`).
+File references below point into Hoglint's own modules at that commit (Python under `hoglint/`, Rust under `src/`).
 Measurements ran on a developer laptop, often measured under load; the performance adversary reports timings as ranges for that reason.
 
 A note on the candidates' labels: "blind-a" and "blind-b" are the two blind architects (`docs/research/engine-blind-design-a.md` and `docs/research/engine-blind-design-b.md`).

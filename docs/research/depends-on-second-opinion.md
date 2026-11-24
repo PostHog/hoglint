@@ -60,14 +60,14 @@ Recommendation:
 - **Generate the actual package-edge inventory,** with added and removed edges and representative source locations in review output. Route relevant changes to source and target owners. This keeps the useful visibility without pretending the inventory is normative policy.
 - **Enforce cycles and selected tier or zone constraints.** Examples: foundational permission logic must not acquire feature dependencies; shared query execution must not depend on dashboards or AI orchestration.
 - **Keep explicit allowlists as an optional `edge` rule** for genuinely closed components. Do not require every product to repeat its imports in configuration.
-- **Keep separate graph views:** production dependencies for architecture; tests and supported registration and dynamic references for CI impact. Move the CI test selector to hoglint's actual graph, not its inventory or debt ledger.
+- **Keep separate graph views:** production dependencies for architecture; tests and supported registration and dynamic references for CI impact. Move the CI test selector to Hoglint's actual graph, not its inventory or debt ledger.
 - Make unclassified modules and unresolved labels visible failures where a rule requires classification. Three-valued selectors must not turn "unknown tier" into permission.
 
 This fits the useful lessons from the cited systems:
 
 - **Packwerk:** dependency permission and public API access are distinct. Shopify's retrospective names protecting the base layer as a concrete success, and warns that imposing the wrong package graph creates costly indirection. Its strict dependency mode also prevents automatic debt growth. [Shopify retrospective](https://shopify.engineering/a-packwerk-retrospective), [Packwerk usage](https://github.com/Shopify/packwerk/blob/main/USAGE.md).
 - **Nx:** multidimensional tag constraints express architectural categories more economically than enumerating every legal pair. They still require sensible tags; tags do not design the architecture. [Nx boundary rules](https://nx.dev/docs/kb/enforce-module-boundaries).
-- **ArchUnit:** layers and cycle checks are independent executable architectural assertions. Its freezing mechanism shows incremental adoption, but hoglint should choose package-edge identities rather than incidental diagnostic locations. [ArchUnit guide](https://www.archunit.org/userguide/html/000_Index.html).
+- **ArchUnit:** layers and cycle checks are independent executable architectural assertions. Its freezing mechanism shows incremental adoption, but Hoglint should choose package-edge identities rather than incidental diagnostic locations. [ArchUnit guide](https://www.archunit.org/userguide/html/000_Index.html).
 - **Go:** forbids direct and indirect package import cycles without a separate internal dependency permission list. That shows the value of graph properties, not that Python imports have Go's runtime semantics. [Go specification](https://go.dev/ref/spec#Import_declarations).
 - **Martin's ADP and SDP:** acyclicity and dependency direction toward stability are separate requirements. Fan-in indicates responsibility to consumers; it does not establish a stable contract. Do not turn a fan-in/fan-out formula into policy automatically. [Martin](https://objectmentor.com/resources/articles/Principles_and_Patterns.pdf).
 - **Parnas and Lakos:** the payoff is usable and testable lower-level subsets and independently understandable components. Imports approximate Parnas's semantic "uses" relation; levelizing SCCs only orders the knots, it does not untangle them. [Parnas](https://users.ece.utexas.edu/~perry/education/SE-Intro/parnas.pdf), [Lakos](https://www.informit.com/store/large-scale-c-plus-plus-volume-i-process-and-architecture-9780133927719).
@@ -195,7 +195,7 @@ The sampled imports are materially different:
 - `ee.hogai` is product orchestration.
 - `posthog.caching` includes dashboard and insight computation; `posthog.storage` includes flag metadata and LLM prompt caches. Directory names alone do not establish infrastructure.
 
-Proposed initial classification, as **config shape, not hoglint syntax of that date**:
+Proposed initial classification, as **config shape, not Hoglint syntax of that date**:
 
 ```yaml
 zones:

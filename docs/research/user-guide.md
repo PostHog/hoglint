@@ -1,4 +1,4 @@
-# hoglint user guide (proposed v0)
+# Hoglint user guide (proposed v0)
 
 > A user guide written for blind user tests, Nov 9, 2026: four testers got this guide and a task each, not the code, and answered as users of a tool that was not built yet.
 > Partly replaced: the current behavior is in `docs/design/` (mainly `02-policy-exceptions-ledger.md`, `03-levels-and-isolated.md` and `04-rules.md`). The section "What changed since" lists where this guide no longer matches.
@@ -16,14 +16,14 @@ The guide itself follows as the testers read it, with one change: the exceptions
 
 ---
 
-hoglint is PostHog's boundary linter.
+Hoglint is PostHog's boundary linter.
 It is not built yet.
 This guide describes how it is meant to behave, so you can reason about what it would report.
 Where this guide is silent, say so in your answer instead of guessing.
 
 ## What it does
 
-hoglint reads the Python source once and turns it into facts and edges.
+Hoglint reads the Python source once and turns it into facts and edges.
 An edge is one coupling between two pieces of code: an import, a use of a name, a string that names code, a model label, a relation between models, a migration dependency, a signal receiver, a callback registered into a hook.
 Each edge records:
 
@@ -135,12 +135,12 @@ Remedy kinds: `permitted-destination`, `documented-replacement`, `safe-rewrite`,
 |---|---|---|---|
 | `hoglint.toml` and the preset: rules, labels | people | judged by effect: a change that removes findings on the base code (a relabel, a widened export, a weaker rule) is a relaxation and needs the tool's owners review | same |
 | `hoglint.exceptions.toml`: reviewed allowances, each with a reason and owners | people | always needs the tool's owners | always fine |
-| `hoglint.ledger`: accepted debt, generated, no prose | hoglint | fails the growth check if the code grew the debt | always fine |
+| `hoglint.ledger`: accepted debt, generated, no prose | Hoglint | fails the growth check if the code grew the debt | always fine |
 
 Two ledger checks run separately:
 
 1. **Equality.** The scan of the head code and the ledger file match line by line, with counts. A new line fails. A stale line fails too, so fixed debt leaves the file in the same PR.
-2. **Growth by attribution.** hoglint scans base and head code with the base scanner and base policy, and sums debt per growth key. For `model-crossings` the growth key is (target, shape), summed over all consumers. More debt in head code is "code growth" and fails. More debt only under the new scanner or policy is "rule growth" and passes, listed in the PR. This runs again in the merge queue on the merge candidate.
+2. **Growth by attribution.** Hoglint scans base and head code with the base scanner and base policy, and sums debt per growth key. For `model-crossings` the growth key is (target, shape), summed over all consumers. More debt in head code is "code growth" and fails. More debt only under the new scanner or policy is "rule growth" and passes, listed in the PR. This runs again in the merge queue on the merge candidate.
 
 Moves: moving or splitting a consumer module keeps the sums per growth key, so it passes.
 A target that moves keeps its identity through the model's table name, the package id, or git rename detection.

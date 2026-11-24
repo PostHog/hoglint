@@ -11,7 +11,7 @@ It may check a subset (the staged files and everything related) if the lint qual
   A hook on every commit adds bars that speed does not cover: the memory of several checks at once, a cold first run, and a wrong block being worse than a miss.
   A subset is allowed only when the replay check (stage S0) shows that it reports what the full check reports for the commit.
 
-**The road: exact reuse on hoglint's own store, in stages; not salsa** (architect, D61, Nov 11).
+**The road: exact reuse on Hoglint's own store, in stages; not salsa** (architect, D61, Nov 11).
 - **The model: stored answers with traces.**
   Each file has an interface with a digest.
   Each stored answer records the files it read and their interface digests.
@@ -51,7 +51,7 @@ It may check a subset (the staged files and everything related) if the lint qual
   At name grain the median recompute set is 6 files, against 4 really changed (worst: 361 files, against 3,686 at file grain).
 - **ty, measured Nov 11 (version 0.0.80):** one leaf file 0.08 s, a hub model file 0.21 s, with no disk cache.
   It is fast in a hook because it computes only what the staged files need.
-  A hoglint finding also depends on who imports the changed file and on pack facts, so hoglint needs importers and per-name interfaces on disk, read by key.
+  A Hoglint finding also depends on who imports the changed file and on pack facts, so Hoglint needs importers and per-name interfaces on disk, read by key.
 - **A second opinion** from another model, given facts and numbers only, chose the same model: persistent, dependency-validated reuse of per-file producer outputs.
 
 ## The three roads turned down
@@ -59,7 +59,7 @@ It may check a subset (the staged files and everything related) if the lint qual
 | Road | Why turned down | Evidence | Who, when |
 |---|---|---|---|
 | **Salsa** for reuse between processes | A fresh process loads the whole database: 0.41 s for a reduced model that computes from nothing in 0.27 s; no partial or lazy load; a panic on load out of the box; no schema check across versions | N9 spike on the real 28,794 files, salsa 0.28.5 with `persistence` (`docs/research/spike-n9.md`) | Architect, D59 and D61 |
-| **Prewarm by a git hook** | Helps one flow of five (stage, wait 6 s, commit: 4.6-6.8 s down to 0.8-1.2 s); nothing for `commit -a` or for staging and committing at once; unguarded it storms (up to 20 checks at once, 17-20 GB), because hoglint's own `write-tree` fires the hook | N8 spike, measured under heavy load (`docs/research/spike-n8.md`) | Architect, D59: not pursued; at most an opt-in extra |
+| **Prewarm by a git hook** | Helps one flow of five (stage, wait 6 s, commit: 4.6-6.8 s down to 0.8-1.2 s); nothing for `commit -a` or for staging and committing at once; unguarded it storms (up to 20 checks at once, 17-20 GB), because Hoglint's own `write-tree` fires the hook | N8 spike, measured under heavy load (`docs/research/spike-n8.md`) | Architect, D59: not pursued; at most an opt-in extra |
 | **A declared fast subset mode** (link and judge only the changed files, with rules that read nothing a pack produces) | Sees 11 of the 88 findings that 33 real commits introduced (12.5 %); 76 of the 88 come from `export-shape`, `public-surface` and `facade-signature` | N7 part 4 (`docs/research/spike-n7.md`) | Architect, Nov 10: a hook that stays silent on seven of eight new findings teaches people that it passes when CI will fail |
 
 Also turned down:
@@ -79,7 +79,7 @@ Also turned down:
 
 ## Open (the owner's calls)
 
-- What the hook does when hoglint itself fails (an engine error, a missing wheel): block the commit, or let it through to CI.
+- What the hook does when Hoglint itself fails (an engine error, a missing wheel): block the commit, or let it through to CI.
 - Memory with several checks at once, and a cold first check after a pull.
 - Package-grain relation digests for whole-graph rules were not measured (the spike's package mapping was wrong).
 - A surprise to look at: the engine did not read `__all__` for star imports (N7).

@@ -87,7 +87,7 @@ Recommended split:
 - **Django pack:** migration dependency and model-reference facts. Keep historical migration edges separate from current runtime architecture.
 - **Still missing:** TS, JS, Rust and C++ resolution, symbol-level source → output maps, generator manifests, CI trigger facts, and dynamic registration facts. A Python-only L1 cannot certify cross-language boundary compliance.
 
-Proposed shape, not hoglint syntax of that date:
+Proposed shape, not Hoglint syntax of that date:
 
 ```toml
 [providers.codegen]
@@ -111,7 +111,7 @@ This can replace the registration, existence and uniqueness, CI-filter coverage 
 That test's naming heuristic misses `schema.py`, `schema_enums.py`, warehouse `_config.py`, protobuf filenames and kea types; whole-directory allowances also do not establish individual provenance.
 
 **Keep the projection runner:** rendering, exact output-set validation, formatting and byte-for-byte drift checking are execution responsibilities.
-hoglint should not become a generator or infer freshness from imports.
+Hoglint should not become a generator or infer freshness from imports.
 Agent-written code is not "generated" in this reproducible-pipeline sense.
 
 ### 3. Packages inside legacy trees: yes, selectively
@@ -229,7 +229,7 @@ Product-owned schemas generating frozen DTOs are a good long-term direction wher
 They do not generate behavioral semantics, authorization, transactions, or ABC implementations.
 
 The existing pipelines show reach, not compliance: generated pydantic models are not automatically frozen dataclasses, and serializer-derived schemas are implementation-first.
-hoglint should enforce ownership, output shape, and provenance; it should not require every small Python-only contract to acquire a schema compiler.
+Hoglint should enforce ownership, output shape, and provenance; it should not require every small Python-only contract to acquire a schema compiler.
 
 Prefer product-owned sources and outputs, with explicitly shared contracts owned separately.
 Split `posthog.schema` incrementally using symbol provenance; changing filenames alone does not restore ownership.
@@ -295,7 +295,7 @@ Keep roles; optionally compile rank into direction rules; treat unranked coverag
 1. **Unchanged shape does not imply unchanged behavior.** An implementation fix can break a consumer without changing DTOs. Contract-based test skipping needs explicit assumptions about mocks, provider conformance, and integration tests.
 2. **Make uncertainty an output.** Unresolved symbols, dynamic registration, and missing language adapters must produce coverage gaps. "No violations found" cannot authorize test skipping.
 3. **Add compatibility analysis.** Surface diffs can flag removed operations, newly required fields, and changed defaults. Boundary legality alone misses breaking changes that travel through PostHog's generated clients and MCP.
-4. **Make hoglint a migration planner.** A proposed package boundary should report crossing edges, affected tests, generator entanglement, and remaining isolation blockers before files move. That is useful for legacy extraction right away, beyond another lint gate.
+4. **Make Hoglint a migration planner.** A proposed package boundary should report crossing edges, affected tests, generator entanglement, and remaining isolation blockers before files move. That is useful for legacy extraction right away, beyond another lint gate.
 
 ## Round 4
 
@@ -412,7 +412,7 @@ channels:
 Discover manifests without importing product code, and derive installed apps before Django initializes.
 Products declare contributions; core declares channel contracts and lifecycle.
 
-hoglint should enforce:
+Hoglint should enforce:
 
 - Product-loading operations use the sanctioned protocol; framework loaders get explicit adapters.
 - Registration targets exist, belong to their declaring package and satisfy the channel's export and shape policy.
@@ -449,6 +449,6 @@ Named infrastructure packages allow traversal through useful parts of core, whic
 
 **Do not** promise fewer tests merely from shared storage: composition hubs still legitimately fan out.
 Missing extractors or unresolved dispatch must widen selection.
-The CI runner keeps scheduling, sharding and execution; hoglint supplies explainable dependency facts.
+The CI runner keeps scheduling, sharding and execution; Hoglint supplies explainable dependency facts.
 
 Counts above are read-only source measurements, not a semantic certification.

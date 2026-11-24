@@ -89,7 +89,7 @@ The target is Ruff-like speed from the tool itself, not a job that hides a secon
 | Never store a working-tree run (a reviewer's smaller fix) | Leaves two meanings of "working tree" in two engines | Architect, D40 | `docs/history/decision-log-2.md` |
 | Fetch main-branch summaries over the network locally | Costs about the same as computing; needs auth | Architect, D14 | `docs/history/decision-log.md` |
 | A background warm from git hooks on a baseline miss | The target is Ruff-like speed, with no job (owner, Nov 10) | Architect, D39 | `docs/history/decision-log-2.md` |
-| A stronger database (Redis-like) under hoglint | Storage is about 0.1 s of a 3.75 s check | Brainstorm only, Nov 10 | `docs/history/decision-log-3.md` |
+| A stronger database (Redis-like) under Hoglint | Storage is about 0.1 s of a 3.75 s check | Brainstorm only, Nov 10 | `docs/history/decision-log-3.md` |
 
 ## What would change the answer
 

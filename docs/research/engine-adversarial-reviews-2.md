@@ -12,7 +12,7 @@ What it ran:
 - a probe of fact reads and resolver calls per producer, by monkeypatching (one run of the core reference producer plus both packs: 16 s, 3.1 GB);
 - a probe of function-scope import hits, def-use hop depth, and the files the drives call view reads;
 - counts of syntax forms in the facts, and of `get_model` receivers;
-- the git history of the scanner of the day, `tach.toml`, semgrep and the hoglint build (a helper agent; the adversary checked its classes against the diffs it quotes).
+- the git history of the scanner of the day, `tach.toml`, semgrep and the Hoglint build (a helper agent; the adversary checked its classes against the diffs it quotes).
 
 "C2-A" is blind-a's design, "C2-B" is blind-b's. "Field" means a new entry in the Rust catalog. "Q" means a new index query in Rust. Both cost a wheel release.
 
@@ -271,7 +271,7 @@ No fix needed: it is evidence that shapes and vocabulary belong in Python or TOM
 6. **A native test seam for rules and packs,** so tests need neither a released wheel nor a second evaluator.
 7. **The release train itself.** A pack PR that needs a field means a release workflow run, a publish from the main branch only, and a second PR for the pin. Nobody budgeted the rate of about 1 to 2 releases a month (e).
 
-Items 1 and 3 led to D7 and D11; item 2 to D17; item 7 to D15 (hoglint in its own repo, published from tags only).
+Items 1 and 3 led to D7 and D11; item 2 to D17; item 7 to D15 (Hoglint in its own repo, published from tags only).
 
 
 
@@ -350,7 +350,7 @@ Machine: a developer laptop. Every timing here was measured under load, so range
 
 **Consequence.** All pre-commit numbers are p50 on an idle machine. The p90 a developer feels is about 3x higher.
 
-**Fix.** State the pre-commit budget at ten concurrent processes. Run single-threaded when more than N hoglint processes are running. Keep per-process memory under 1.5 GB.
+**Fix.** State the pre-commit budget at ten concurrent processes. Run single-threaded when more than N Hoglint processes are running. Keep per-process memory under 1.5 GB.
 
 **Adjudication:** partly confirmed. A valuable missing workload; the slowdown of the linker does not establish a universal 3x for Python or a developer p90, and ten simultaneous checks need a measured frequency.
 
@@ -451,7 +451,7 @@ Over 10x faster than Python is enough. Three things change the budget: CI x86 co
 **Consequences.**
 
 - C3's steady-state pre-commit can reach 1.3 to 2.5 s (e), if the whole-repo queries are cheap. `origins` alone reruns on every import change (0.11 s, m); the package graph, the module graph for reach, coverage, ledger equality over about 55k findings and levels each read every file's contribution.
-- The cold path is Python F times 1.2 to 1.6, 20 to 55 s, on every CI run without a store artifact, after any engine change, on new machines, and once per worktree after a pull of a new hoglint.
+- The cold path is Python F times 1.2 to 1.6, 20 to 55 s, on every CI run without a store artifact, after any engine change, on new machines, and once per worktree after a pull of a new Hoglint.
 
 **Fix.** Make every whole-repo query an incremental projection. Keep per-blob input fingerprints in Rust. Use a per-worktree revision diff, so a no-change run costs a manifest compare (about 10 ms). Publish a master store artifact for CI, or accept 20 to 55 s.
 

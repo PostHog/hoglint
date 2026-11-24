@@ -17,7 +17,7 @@ Unguarded, it is a storm for many index changes (up to 20 checks at once, 17-20 
 A scratch clone of a staging repo, a fixed engine export, the native engine, one private cache directory, warmed once.
 Two hooks: `post-index-change` starts the check detached in the background and returns at once; `pre-commit` runs the same check in the foreground and prints its wall time (it never blocks the commit).
 The check is `python -m hoglint --engine native check --index` under `/usr/bin/time -l`.
-Peak memory is the maximum over 0.15 s samples of the summed RSS of the spike's hoglint process trees (RSS double counts shared pages a little).
+Peak memory is the maximum over 0.15 s samples of the summed RSS of the spike's Hoglint process trees (RSS double counts shared pages a little).
 CPU is user+sys of all the spike's checks.
 Measured under heavy load, so each run is listed.
 Each flow ran three times, each with a new one-line edit to one file.
@@ -56,7 +56,7 @@ It saves 4-6 s per commit when the developer pauses 5 s or more after `git add`.
 It does not help flow 2 (see below), flow 3, or any flow where the final index is written less than one check length before pre-commit.
 
 **Flow 2: the pre-commit check neither waits nor reuses.**
-hoglint writes a summary only at the end of a run and has no "run in progress" marker (the store's `get` reads finished files only; the only claim is the daily prune mark).
+Hoglint writes a summary only at the end of a run and has no "run in progress" marker (the store's `get` reads finished files only; the only claim is the daily prune mark).
 In the log, the add-hook background run starts at t+0.60 s, `git commit` itself fires post-index-change again (a second background run, t+0.80), and pre-commit starts at t+0.83: three cold runs of the same tree side by side, all ~4.9 s.
 The wait is the same as the control; CPU 3x (14.5 s vs 4.5 s), memory 3x (3.7 GB).
 
@@ -69,8 +69,8 @@ Not at `commit` end.
 `git commit` therefore always starts one extra background run that finds a stored result when the tree is warm, or races pre-commit when it is not.
 
 **The storm (the real problem).**
-hoglint itself runs `git write-tree` on a copy of the index.
-That write fires post-index-change again, with `GIT_INDEX_FILE` pointing at hoglint's temp copy.
+Hoglint itself runs `git write-tree` on a copy of the index.
+That write fires post-index-change again, with `GIT_INDEX_FILE` pointing at Hoglint's temp copy.
 So each background run can spawn one more, and the extra run reads a temp index that is about to be deleted.
 This showed in 4a (about two starts per `git add`: 19-20 for 10 adds) and in flow 1 (3 starts for add + commit).
 The recursion stops after one level, because the copy's cache tree is then valid.
@@ -82,7 +82,7 @@ Also, each hook call cost about 80 ms in the spike's script (two python3 starts 
 Result: 1 background run for 4a and 4b, 2.5 GB and ~10 s CPU.
 Weakness: the skipped later index states get no prewarm, so after a burst the pre-commit check runs cold beside the old background run (4a still waited 5.4-5.8 s).
 "Cancel the older, start the newer" would fix this; it needs a process-group kill, not just shell lines, so it was not built.
-hoglint as it stood could not tell a second process that a run for the same tree is under way.
+Hoglint as it stood could not tell a second process that a run for the same tree is under way.
 A marker file keyed by the envelope would let pre-commit wait for it (flow 2) and let the hook skip an equal tree.
 That is an engine change.
 

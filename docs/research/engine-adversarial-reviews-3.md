@@ -66,7 +66,7 @@ Verdicts: keep, change, drop, unsure. The most important rows:
 | `check --changed` | advisory feedback on touched files | a full run, then a filter: 66.8 s with `--index` [pm] | local rules on touched files and by-name dependents (see correctness F1: unsafe) | change |
 | `compare` and growth | PR mode | 2 to 4 builds and evaluations; common path 110 s, 5.4 GB [m]; plus a base checkout of 69k files that runs the repo's hooks | see wrong approach 2 | change |
 | `explain <path>`, `explain edge:<id>`, `query` | debugging | each a full run, about 45 s; no output prints an edge id | labels without a run (0.47 s); print the id or explain by `path:line` | change |
-| tach-format map | turbo cascade input | resolves each surface again the way tach does; ships an oracle diff and its own CLI | write the map from hoglint's own resolved targets | change |
+| tach-format map | turbo cascade input | resolves each surface again the way tach does; ships an oracle diff and its own CLI | write the map from Hoglint's own resolved targets | change |
 | Generic edge JSON dump | any non-tach output | 1.58M dicts when configured | remove | drop |
 | `[django] oracles` key | the two Django-booting oracle jobs | the key is ignored; no oracle code exists | build the jobs, or reject the key until they exist | unsure |
 | Legacy ledger tool in the package | diff against the crossings baseline | a second policy source inside the package; the only reason for the 10,251 parity edges | move it into the shadow job's script; delete at cutover | change |
@@ -257,7 +257,7 @@ A rule-derived filter that asked the rules' own selectors per edge kept exactly 
 
 ## Bugs and waste found in the round
 
-These hold in any architecture. Sources: audit (A), skeptic (S), correctness adversary (C), extension adversary (X), performance adversary (P). File references are to hoglint's own modules at the time.
+These hold in any architecture. Sources: audit (A), skeptic (S), correctness adversary (C), extension adversary (X), performance adversary (P). File references are to Hoglint's own modules at the time.
 
 ### Unknown reported as clean (blocks cutover)
 

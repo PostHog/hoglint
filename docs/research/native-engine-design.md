@@ -1,6 +1,6 @@
-# hoglint as a native tool: the target design
+# Hoglint as a native tool: the target design
 
-> The architect's target design for moving a hoglint check out of per-row Python, Nov 10, 2026, with the measured state at each checkpoint of that day.
+> The architect's target design for moving a Hoglint check out of per-row Python, Nov 10, 2026, with the measured state at each checkpoint of that day.
 > Partly replaced: D47 revised (a thin Python shell over one PyO3 extension, not a single binary) and "The PostHog pack's home" (`drives` stays a Python plugin in the consuming monorepo) reverse sections 4 and 9; see `docs/history/decision-log-2.md`, `docs/history/decision-log-3.md` and `docs/design/05-engine.md`.
 
 The question (Nov 10): can the linter run like Ruff, fast over tens of thousands of files?
@@ -22,9 +22,9 @@ Same repo snapshot (29,110 Python files), same machine, same hour, measured unde
 
 Three things follow.
 
-1. **hoglint does less work than any of them.** With its per-file cache warm it spends 4.7 CPU-seconds on the whole repo. Ruff spends 17 without its cache.
-2. **hoglint is slow on the clock because it runs on one core.** Ruff, tach and ty spread their work over every core. hoglint cannot: 3.7 of its 4.9 s are Python (packs 1.2 s, labels and rules 2.0 s, start and output 0.5 s), and Python runs one thread at a time.
-3. **Memory: Rust tools hold 0.2 to 0.4 GB on this repo.** hoglint holds 1.40 GB because it keeps a private copy of every file's facts, decoded from JSON on every run, plus Python objects for packs and rules.
+1. **Hoglint does less work than any of them.** With its per-file cache warm it spends 4.7 CPU-seconds on the whole repo. Ruff spends 17 without its cache.
+2. **Hoglint is slow on the clock because it runs on one core.** Ruff, tach and ty spread their work over every core. Hoglint cannot: 3.7 of its 4.9 s are Python (packs 1.2 s, labels and rules 2.0 s, start and output 0.5 s), and Python runs one thread at a time.
+3. **Memory: Rust tools hold 0.2 to 0.4 GB on this repo.** Hoglint holds 1.40 GB because it keeps a private copy of every file's facts, decoded from JSON on every run, plus Python objects for packs and rules.
 
 Where a port gains, measured in this project: the name resolver went from 5.0 s in Python to 0.42 to 0.57 s in Rust on one thread.
 That is 10 times before any parallelism.
@@ -80,17 +80,17 @@ One batch pipeline in Rust, parallel where the work is per file or per rule:
 | Start | Python interpreter and imports: 0.06 to 0.10 s, measured | the same. A thin Python shell over PyO3 stays, as in tach (D47 revised); a binary would save a tenth of a second |
 
 "Linking" means the join across files: a file's facts say `from x import y`, and only the other files' facts say what `y` is.
-hoglint redoes that join for all files on every run.
+Hoglint redoes that join for all files on every run.
 It is cheap (about 0.5 s of CPU, and it parallelizes).
 What is expensive today is decoding the facts before it and holding private copies after it.
 
 ## 4. Where meaning lives
 
-> **Reversed in part.** D47 revised keeps a thin Python shell, and "The PostHog pack's home" keeps the PostHog pack (`drives`) as a Python plugin in the consuming monorepo, not as a module in the hoglint repo. Facade facts went into the engine as a generic export analysis (D48, built as N3b). The text below is the Nov 10 design as written. Current state: `docs/design/05-engine.md`.
+> **Reversed in part.** D47 revised keeps a thin Python shell, and "The PostHog pack's home" keeps the PostHog pack (`drives`) as a Python plugin in the consuming monorepo, not as a module in the Hoglint repo. Facade facts went into the engine as a generic export analysis (D48, built as N3b). The text below is the Nov 10 design as written. Current state: `docs/design/05-engine.md`.
 
 - **Rules stay TOML.** Selectors, fields, zones, exports, identities and levels do not change. Only their evaluator moves.
 - **Packs become built-in analyses**, selected and parameterized in config, the way Ruff ships its Django and FastAPI rule sets. The Django pack's knobs (hooks, receiver decorators, settings proxies, database routing) are config already.
-- **The PostHog pack** (drives, facade facts) moves into the hoglint repo as its own module, enabled by the PostHog preset. A change to it becomes a hoglint release and a pin bump.
+- **The PostHog pack** (drives, facade facts) moves into the Hoglint repo as its own module, enabled by the PostHog preset. A change to it becomes a Hoglint release and a pin bump.
 - **A Python plugin API stays as an escape hatch**, off the default path and not a stable public surface. D31's work to polish that API for publication is dropped.
 - D1 becomes: Rust runs everything a check does; TOML holds the policy; Python is packaging and an optional plugin host.
 
@@ -166,13 +166,13 @@ Rust computed the labels and judged all 17 `edge` and `entrypoint` rules per edg
 
 ## 9. Risks
 
-> **Reversed in part.** The last point argues for the PostHog pack living in the hoglint repo. "The PostHog pack's home" reversed that: with a Python shell kept (D47 revised), the reason went away, and `drives` stays a Python plugin in the consuming monorepo. The rest of the section stands. Current state: `docs/design/05-engine.md`.
+> **Reversed in part.** The last point argues for the PostHog pack living in the Hoglint repo. "The PostHog pack's home" reversed that: with a Python shell kept (D47 revised), the reason went away, and `drives` stays a Python plugin in the consuming monorepo. The rest of the section stands. Current state: `docs/design/05-engine.md`.
 
 - **The estimates.** They rest on one measured port (10 times) and on Ruff's and tach's figures. The N1 spike tests them first.
 - **Fidelity of the port.** The oracle, the stage switches and the generated configs cover it; the link port met the same bar on 1.47 million edges.
 - **A PostHog module inside the tool's repo.** It is coupling. It is acceptable while PostHog is the tool's owner, and other repos use config and the Django pack.
 - **More Rust to own:** about 16,000 lines in the end, against about 14,500 lines of Python that leave the run.
-- **How often a pack needs a new read.** The history of the monorepo's earlier boundary scanner (read Nov 10) shows about 3 new static-Python reads a month since August (get_model, wiring ancestry, system checks, signal receivers), and 12 of 14 need facts from other files. In the native tool each one is a hoglint change, a release and a pin bump. Two consequences: a release must be one tag that CI turns into wheels, and the Python plugin host is the place to try a new read before it is ported, not only an escape hatch. It also argues for the PostHog pack living in the hoglint repo (one change, one release) while that rate lasts.
+- **How often a pack needs a new read.** The history of the monorepo's earlier boundary scanner (read Nov 10) shows about 3 new static-Python reads a month since August (get_model, wiring ancestry, system checks, signal receivers), and 12 of 14 need facts from other files. In the native tool each one is a Hoglint change, a release and a pin bump. Two consequences: a release must be one tag that CI turns into wheels, and the Python plugin host is the place to try a new read before it is ported, not only an escape hatch. It also argues for the PostHog pack living in the Hoglint repo (one change, one release) while that rate lasts.
 
 ## 10. What stays from the earlier decisions
 

@@ -1,9 +1,9 @@
 # Engine decision log, part 3 (D48 to D70)
 
-> The engine decision log of hoglint, part 3: the public surface in the engine (D48), the packs, N2, memory and the fact cache, the reuse spikes (N7 to N9, D59 to D61), the own repo, contract surfaces (D62 to D65), the ledger and triage (D66, D67), the public record (D68) and the settled contradictions (D70), Nov 10 to Nov 11, 2026.
+> The engine decision log of Hoglint, part 3: the public surface in the engine (D48), the packs, N2, memory and the fact cache, the reuse spikes (N7 to N9, D59 to D61), the own repo, contract surfaces (D62 to D65), the ledger and triage (D66, D67), the public record (D68) and the settled contradictions (D70), Nov 10 to Nov 11, 2026.
 > Partly replaced: the current state of each topic is in `docs/design/` (start at `docs/design/README.md`); the last section of this file settles contradictions in the earlier entries.
 
-This is part 3 of a chronological log; read the note on how to read it, and who decided, at the top of `docs/history/decision-log.md`. A decision marked "the owner" was stated by hoglint's owner; every other decision is the architect's (an AI agent), and the owner could veto it.
+This is part 3 of a chronological log; read the note on how to read it, and who decided, at the top of `docs/history/decision-log.md`. A decision marked "the owner" was stated by Hoglint's owner; every other decision is the architect's (an AI agent), and the owner could veto it.
 
 **D48. The public surface is first class in the engine (the owner, Nov 10).** The owner decided that the facade, or whatever other patterns call a public surface, is a first-class concept of the engine.
 - The policy side is first class already: `[exports.*]` (membership by path or by class, with an audience), `[shapes.*]` (what an export may hand out) and the `export-shape` rule.
@@ -22,7 +22,7 @@ This is part 3 of a chronological log; read the note on how to read it, and who 
 - **A new pattern** (signal receivers with `sender=`): 10 to 30 lines of Python; an estimated 400 to 600 lines of Rust plus a wheel release if the producer lives in Rust.
 
 **D49. The packs move to Rust by measured value, producer by producer; the PostHog plugin stays Python (the architect).**
-1. `django.uses` (with `shapes`) becomes a Rust producer in the hoglint engine, with the sink's conflict bookkeeping. Generic Django, about 100,000 rows, logic that rarely changes: the case a port pays for.
+1. `django.uses` (with `shapes`) becomes a Rust producer in the Hoglint engine, with the sink's conflict bookkeeping. Generic Django, about 100,000 rows, logic that rarely changes: the case a port pays for.
 2. Facade facts become the engine's export analysis (D48), written in Rust, so their 0.21 s and their 42,000 `Edge` objects go with the move they need anyway.
 3. `PackSink.add_edges` takes columns, so a Python producer makes no `Edge` object per row.
 4. `mentions_many` replaces the per-file `may_mention` loops in installs and signals.
@@ -64,7 +64,7 @@ Built as phase N2b, in parallel with N3a on disjoint paths.
 A read-only study of who reads the facade producer's edges changed the size of this work.
 
 - **The engine's public surface is first class already.** The core link emits `declares`, `decorate`, `inherit` and `exposes` edges for every module. `[exports.*]` names the surfaces, and the export primitive walks core edges by itself.
-- **Most of what the PostHog facade producer writes has no reader in the engine.** No rule can name an `export` edge (the kind is in no kind list). Its `declares`, `inherit` and `decorate` edges repeat core's under other attr names, so the symbol facts ignore them. Seven of its attrs (`mode`, `def_kind`, `hops`, `defined_here`, `whole_any`, `stub`, `wiring_decorator`) have no engine reader. Their one reader is `legacy_ledger.py`, the script that proves hoglint against the old scanner (the "crossings 968 + 2" invariant).
+- **Most of what the PostHog facade producer writes has no reader in the engine.** No rule can name an `export` edge (the kind is in no kind list). Its `declares`, `inherit` and `decorate` edges repeat core's under other attr names, so the symbol facts ignore them. Seven of its attrs (`mode`, `def_kind`, `hops`, `defined_here`, `whole_any`, `stub`, `wiring_decorator`) have no engine reader. Their one reader is `legacy_ledger.py`, the script that proves Hoglint against the old scanner (the "crossings 968 + 2" invariant).
 - **Three things it adds that rules do read**, all through `exposes` edges:
   1. the signature slots of a function a surface re-exports from elsewhere;
   2. a slot for a parameter with no annotation (`annotation=missing`); core skips those;
@@ -186,9 +186,9 @@ Expected (an estimate from this profile, to be replaced by pairs): 0.3 to 0.4 s 
 
 **Round 6 timing (the architect's, ad83640b66e against 2ac1c21e243, measured under load, so absolute times are higher than the earlier ones):** one thread, six pairs: whole check median 5.40 against 5.36 s (median of pair gaps +0.03), rules phase 1.48 against 1.47, PostHog pack 0.84 against 0.87, peak footprint 1.25 against 1.16 GB, peak RSS 1.38 against 1.31 GB. Four threads, four pairs: 4.82 against 4.83 s (median of pair gaps +0.06). No measurable change in time; 0.09 GB less memory.
 
-## Should a stronger database back hoglint? (Nov 10, a brainstorm, nothing decided)
+## Should a stronger database back Hoglint? (Nov 10, a brainstorm, nothing decided)
 
-The question (Nov 10): should hoglint, unlike ruff and tach, sit on a database with the convenience of SQLite and the speed of a server store, and what does the Rust world have? The architect's answer, with the numbers it rests on:
+The question (Nov 10): should Hoglint, unlike ruff and tach, sit on a database with the convenience of SQLite and the speed of a server store, and what does the Rust world have? The architect's answer, with the numbers it rests on:
 - **Storage is not where the time is.** SQLite reads the keys and the 183 MB of bodies in about 0.1 s of a 3.75 s check (N5 spike). A faster store moves that 0.1 s. The cache's size is a duplicate copy (D57), not SQLite.
 - **A general query engine would be slower than the evaluator.** The rules are already selectors over an edge table; the special-purpose evaluator judges 1.48 M edges in about 0.45 s.
 - **The form of the idea that pays is incremental reuse.** Only per-file facts and whole-tree summaries were cached. Link, packs and rules run over the whole repo on every check (about 3.2 of 3.75 s). CodeQL and Glean keep a program database for this reason, at a far larger scale. For a pre-commit check near 1 s, not redoing work is the only route left: D49 puts whole-program recomputation at 2 to 3 s.
@@ -204,10 +204,10 @@ Decided (owner, Nov 10): a spike, as cheap as necessary, with salsa and ty's use
 - **A persistence prototype exists.** PR #967, "Initial persistent caching prototype", merged in August 2025 behind the `persistence` feature. Its author lists the limits: every transitive dependency must be serializable, there is no easy way to update inputs after they are deserialized, query hashing is not implemented. The second limit is the pre-commit case itself: load, change a few files, recompute.
 - **ty uses salsa for the editor and for `ty check --watch`**, where one process stays alive (ty docs, "Type checking"). The architect found no source that says a one-shot `ty check` reuses results of an earlier process; ty's published speed figures are without caching. A note by an engineer on the ty team says ty wants results to persist across invocations and points at issue #10.
 
-**What follows for hoglint (the architect's):**
-- Salsa pays only inside a process that stays alive. For a hook that starts a new process per commit it gives nothing, unless hoglint runs as a daemon or takes on the persistence prototype with its limits.
+**What follows for Hoglint (the architect's):**
+- Salsa pays only inside a process that stays alive. For a hook that starts a new process per commit it gives nothing, unless Hoglint runs as a daemon or takes on the persistence prototype with its limits.
 - Adopting it means the link, the packs and the rules become demand-driven queries with recorded reads. The link is one batch pass over shared tables, and the largest pack producer is Python (D49). That is a rewrite of the core, not an addition.
-- Reuse between processes, without salsa, is what hoglint already does at two levels (facts by file content, summaries by tree): the open question is the levels between, and the spike's spread numbers answer whether per-file or per-module answers can be reused.
+- Reuse between processes, without salsa, is what Hoglint already does at two levels (facts by file content, summaries by tree): the open question is the levels between, and the spike's spread numbers answer whether per-file or per-module answers can be reused.
 - So the choice the spike informs has three arms, not two: (a) content-keyed stored answers per step, no daemon; (b) a daemon with an in-memory graph, where salsa or a hand-written delta applies; (c) stay at whole-program recomputation near 2 to 3 s.
 
 **N4a checkpoint 1 (the agent's numbers, no profiler, measured under load):** the four per-finding consumers cost about 0.25 s of a 4.2 s warm check (made 0.08, `mark_accepted` 0.07, `FindingRecord.of` 0.06, the write about 0.035); native `Rules.judge` 0.47 s. The architect's estimate from the profile was 0.3 to 0.4 s: again too high, as the profiler weighs Python heavier than it is. One plain check makes 82,549 `Finding` objects for 44 new findings. Decided: go on in proportion: only judge rows become columns; no new stored format unless pairs show the gain; step 6 (the judge call itself) matters as much.
@@ -262,7 +262,7 @@ Ten findings; the architect read the code for each. Outcome:
 
 **The architect's reading.** Outputs are local, so reuse can pay. Whether it can be made exact depends on a second question: can a file's stored answer name everything it read from other files, so that "none of it changed" is checkable without recomputing?
 
-**The model that fits hoglint's identity design (D3, D4, D5, D28): stored answers with a record of what they read.** No daemon, nothing mutable, everything keyed by content.
+**The model that fits Hoglint's identity design (D3, D4, D5, D28): stored answers with a record of what they read.** No daemon, nothing mutable, everything keyed by content.
 - Every file has an *interface*: what other files' answers can read from it (its definitions and their kinds, bases, decorators and signatures, its imports that serve re-exports, the facts packs attach to its symbols, its module's labels). The interface has a digest.
 - Every stored answer for a file (its edges per producer, its symbol facts, its rule rows) carries a *trace*: the files it read from and the interface digest each had.
 - A check lists the tree, builds the table of interface digests, and reuses a file's answer when the file's content and every digest in its trace are the same. It recomputes the rest. A change that leaves a file's interface alone reaches nobody: that is the 2,500-importer case.
@@ -293,12 +293,12 @@ The second opinion was given the facts and numbers and none of the architect's c
   4. **Persist semantic identities, never interner numbers or graph positions.**
   5. A targeted mutation list for the hard carriers; the architect sent it to the N7 agent as part 3 (ten mutations).
 - **On the other options:** a daemon does not supply invalidation and start-up is only 0.05 s, so it comes later if loading dominates; a background hook run is opportunistic and needs coalescing; an embedded database is storage, not correctness, and SQLite is a fine start; a remote database is rejected.
-- **On salsa:** it gives the tracked-query semantics wanted, and its docs show persistence options, so it is not memory-only. It cannot see reads inside Python producers. The second opinion favors a narrow layer of hoglint's own first, and would reconsider salsa if that layer grows into a generic scheduler.
+- **On salsa:** it gives the tracked-query semantics wanted, and its docs show persistence options, so it is not memory-only. It cannot see reads inside Python producers. The second opinion favors a narrow layer of Hoglint's own first, and would reconsider salsa if that layer grows into a generic scheduler.
 - **Its planning range:** 0.7 to 1.1 s for a one-file edit, only if the packs and the rules are incremental too; the linker alone cannot deliver it.
 - **Its stop conditions:** broad dependencies force most packs and rules to run; validation costs approach recomputation; the Python producers cannot be confined to tracked reads; or the hook is not used enough to justify a persistent incremental engine to save roughly three seconds.
 - **Two corrections it asked for, both right:** the analysis substeps the architect gave it sum to 0.63 s of 1.05 (the rest is the Python snapshot and discovery, 0.42 s), and the Django migrations pack has a narrower cache of its own.
 
-**Correction on record (salsa).** An earlier statement that salsa's saving to disk is a prototype behind a flag was wrong. The current docs (salsa 0.28.5, `attr.tracked`) show a `persist` option on tracked structs and functions under the `persistence` feature, so it is a documented, feature-gated part of the API. Whether it loads a database of hoglint's size in a fresh process fast enough, and lets inputs change after a load, cannot be read off the docs. So the architect started **N9**: a reduced model of the link's name resolution on the real 29,000 files, on salsa with persistence, measured in fresh processes.
+**Correction on record (salsa).** An earlier statement that salsa's saving to disk is a prototype behind a flag was wrong. The current docs (salsa 0.28.5, `attr.tracked`) show a `persist` option on tracked structs and functions under the `persistence` feature, so it is a documented, feature-gated part of the API. Whether it loads a database of Hoglint's size in a fresh process fast enough, and lets inputs change after a load, cannot be read off the docs. So the architect started **N9**: a reduced model of the link's name resolution on the real 29,000 files, on salsa with persistence, measured in fresh processes.
 
 **Three measurements decide the reuse question:** N7 parts 2 and 3 (is per-file reuse exact, and what does it recompute), N8 (prewarm hooks), N9 (salsa with persistence at real scale).
 
@@ -322,7 +322,7 @@ A `post-index-change` hook starts the normal check in the background; the pre-co
 
 - The storm has a cause inside hoglint: its own `git write-tree` on its index copy fires the hook again, so each background run starts another.
 - A guard (skip when `GIT_INDEX_FILE` is set; one background check at a time) cuts the storm to one check, and then the final index state is not the one that was warmed.
-- hoglint has no "run in progress" mark, so a second process cannot wait for or reuse a run of the same tree. A stale background run is harmless: a result is keyed by the tree it read.
+- Hoglint has no "run in progress" mark, so a second process cannot wait for or reuse a run of the same tree. A stale background run is harmless: a result is keyed by the tree it read.
 
 **The architect's reading: S1 is not a solution, at most an opt-in extra.** It helps one flow of five, does nothing for `commit -a`, costs a whole check and about 1.2 GB per staging, and needs a guard that makes it miss. It does show the floor is real: a developer who waits six seconds sees about one second.
 
@@ -398,7 +398,7 @@ Labels that come from provider files (`product.yaml`, owners files) were covered
 ### D59 (the architect, Nov 10, night). What follows from the four spikes
 
 1. **Prewarm by git hook (option S1 of that night's list): not pursued.** It helps one flow of five and storms without a guard (N8).
-2. **Salsa: not the vehicle for the hook.** Its persistence loads the whole database per process (N9). It stays the right tool if hoglint ever runs as a long-lived process (an editor server or watch mode).
+2. **Salsa: not the vehicle for the hook.** Its persistence loads the whole database per process (N9). It stays the right tool if Hoglint ever runs as a long-lived process (an editor server or watch mode).
 3. **Stored answers with traces (option S2 of that night's list) is sound on everything tested and is the only route to a check near 1 s in a fresh process.** Its rules, from the spikes:
    - name grain, with not-found lookups and spelled modules in the trace;
    - a store read by key from the changed files outward, never loaded whole;
@@ -442,7 +442,7 @@ Labels that come from provider files (`product.yaml`, owners files) were covered
 **The owner's calls.**
 1. The hook's bar: the design targets a hook that runs on every commit in 2 to 3 s.
 2. A subset in the hook: allowed (for example the staged files and everything related), if the lint quality is on par.
-3. The repo (D15): hoglint moves into its own repo.
+3. The repo (D15): Hoglint moves into its own repo.
 4. The two cache trade-offs (bodies uncompressed, bound 1 GB): not decided.
 5. The size of the reuse program is no obstacle. Open question: are salsa and "exact reuse, all eight stages" a fork in the road, and how does ty stay fast?
 
@@ -451,10 +451,10 @@ Labels that come from provider files (`product.yaml`, owners files) were covered
 - A hook on every commit adds bars that speed does not cover: memory of several checks at once (1.16 GB each), a cold first run, and a wrong block being worse than a miss (CI stays exact, so a miss is caught later; a wrong block stops a commit).
 - A subset is allowed only with the replay check (S0) showing it reports what the full check reports for the commit.
 
-**D61 (the architect). The road: exact reuse on hoglint's own store, all eight stages; not salsa.**
+**D61 (the architect). The road: exact reuse on Hoglint's own store, all eight stages; not salsa.**
 - ty measured (0.0.80, the PostHog monorepo): one leaf file 0.08 s, a hub model file 0.21 s, four files 0.17 s, 30 to 140 MB. The whole repo on Nov 10: 9.9 s wall, 105 s CPU, 7.2 GB. It keeps no cache on disk. It is fast in the hook because it checks only the staged files and computes only what they need, from nothing, in each process. Salsa's memo pays in the editor server, which is a process that stays alive.
-- So the lesson from ty for a hook is "compute only what the change needs", which is stage 7 (the partial link) and the owner's "staged files and all related". hoglint needs more than ty for it: a ty diagnostic depends on what a file imports; a hoglint finding also depends on who imports the changed file and on pack facts, so it needs importers and per-name interfaces on disk, read by key (S5, S6), and packs that run per item (S3).
-- The fork with salsa is narrow and late: S0 to S5 are needed on both roads. They part at where answers live between two commits: on disk read by key (hoglint's), or in a live process (salsa). Salsa's disk form loads whole (N9: 0.41 s to load against 0.27 s to compute the reduced model). Salsa stays possible later for an editor server, on S5's per-name queries.
+- So the lesson from ty for a hook is "compute only what the change needs", which is stage 7 (the partial link) and the owner's "staged files and all related". Hoglint needs more than ty for it: a ty diagnostic depends on what a file imports; a Hoglint finding also depends on who imports the changed file and on pack facts, so it needs importers and per-name interfaces on disk, read by key (S5, S6), and packs that run per item (S3).
+- The fork with salsa is narrow and late: S0 to S5 are needed on both roads. They part at where answers live between two commits: on disk read by key (Hoglint's), or in a live process (salsa). Salsa's disk form loads whole (N9: 0.41 s to load against 0.27 s to compute the reduced model). Salsa stays possible later for an editor server, on S5's per-name queries.
 - Order: S0 (replay check) and N3b first; then S3 and S5 side by side; S1 and S2 are reviewed again before they start, because a hook that may report only the affected files may not need every stored row S1 keeps.
 
 **D15 step 2, done (Nov 11).**
@@ -471,7 +471,7 @@ Labels that come from provider files (`product.yaml`, owners files) were covered
 - Waves: 1 = S0 and N3b (running). Then T1 alone (types and lint config). 2 = S1 (rules), S3 (packs), S5 (link), three disjoint areas, each build agent working apart so that no agent commits another's files. 3 = S2, S6. 4 = S7.
 
 **Open, from the every-commit target (the owner's calls).**
-- What the hook does when hoglint itself fails (an engine error, a missing wheel): block the commit, or let it through and leave it to CI.
+- What the hook does when Hoglint itself fails (an engine error, a missing wheel): block the commit, or let it through and leave it to CI.
 - Memory: one check peaks at 1.16 GB; several agents committing at once multiply it. Stage 7 should cut it; by how much is not measured.
 - The first check after a pull re-reads every changed file (a cold start costs more than a warm check).
 
@@ -552,7 +552,7 @@ Ten findings on how core derives the slots of a contract surface. None shows on 
 
 **D67 (the owner, Nov 11). Growth is judged per product.** Proposed after the second opinion. Every rule's growth key gains the source package, so a coupling removed in one product no longer pays for a new one in another. Moves inside a product stay free; a move across products goes through move admission. To build: a growth key may name `src.package` also where the identity holds `src.module` (the growth columns were identity columns), and the preset's growth keys change. It goes into the next engine phase with the triage defects.
 
-**D68 (the owner, Nov 11). The record is versioned, and a public version lives in the hoglint repo.** The owner decided that the working notes are versioned and that a public version of the record goes into the hoglint repo, so future agents and engineers have the learnings and the earlier research, as much of it as possible.
+**D68 (the owner, Nov 11). The record is versioned, and a public version lives in the Hoglint repo.** The owner decided that the working notes are versioned and that a public version of the record goes into the Hoglint repo, so future agents and engineers have the learnings and the earlier research, as much of it as possible.
 - To do, after the record by topic is compiled: the repo gets `docs/` with the design record by topic, the list of traps, the decision log, and the earlier research (data model, prior art, reviews, spikes, second opinions), plus an `AGENTS.md` that sends an agent there before it proposes a design change.
 - The architect's rules for the public form: no person's name (the owner is "the owner"), no local paths or session links, no finding about PostHog's code that is security-relevant, and PostHog-specific policy and the triage reports are not published.
 
@@ -572,7 +572,7 @@ Ten findings on how core derives the slots of a contract surface. None shows on 
 - **D70 (the architect). An alias whose expansion is known is not a finding.** D62 accepted the alias-name rows as findings (class C3, 114 of them). The triage showed they are noise: 385 `facade-signature` findings report an alias as an unknown type although its expansion is known. Reversed, and fixed with the other triage defects. This log did not record the reversal until then.
 - **The cycle rule stays as decided (owner, Nov 5 and Nov 9): new or growing package cycles block, the existing cycle is recorded.** The triage called its 349 findings noise and proposed "advisory". A recommendation to drop the rule repeated the count-ledger trap: it did not name the earlier decision, and it was withdrawn. The owner had also decided on Nov 9 that every rule family blocks and that "advisory" was turned down as a way to start rules.
 - **The fact cache is 321 MB** for the PostHog monorepo (layout 4, measured in the architect's verification round before the repo move). "305 MB" in "D57, closing notes" was the layout 3 number.
-- **The PostHog pack's home:** `docs/research/native-engine-design.md` sections 4 and 9 still move it into the hoglint repo. This log reversed that on Nov 10 (drives stays a Python plugin in the monorepo; owner, Nov 10). The log is right; the design page is history.
+- **The PostHog pack's home:** `docs/research/native-engine-design.md` sections 4 and 9 still move it into the Hoglint repo. This log reversed that on Nov 10 (drives stays a Python plugin in the monorepo; owner, Nov 10). The log is right; the design page is history.
 - **`featureflag-relations`:** a note of Nov 10 says to write its missing classification file; the triage says to retire the rule because a test in the monorepo already enforces the same. Open, the owner's.
 - **Ledger identity grain:** the question (Nov 4): is a finer grain more future-proof? It was left for deliberation. The module-level default stayed after spike D, with no later decision. Open.
 - **The level ratchet** (a product that holds a level cannot drop) works through the ledger's level lines and the equality check. No decision entry said so. Recorded here.

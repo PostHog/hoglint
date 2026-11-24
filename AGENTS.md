@@ -1,6 +1,6 @@
 # hoglint: notes for agents and engineers
 
-hoglint is a boundary linter for large Python and Django monorepos, built at PostHog.
+Hoglint is a boundary linter for large Python and Django monorepos, built at PostHog.
 It extracts facts from every Python file, links them into one graph of couplings, and judges that graph against rules written in TOML, with existing debt carried in a generated ledger.
 A Rust engine does the per-row work behind a thin Python shell (PyO3); it alone builds the graph.
 
@@ -71,7 +71,7 @@ bin/prove                                   # all of the above side by side, plu
 - `bin/prove` builds first, runs every check above with a private copy of the native module and a private cache per check, and prints one line per check, with a log file each.
   With `--real <snapshot> --base <rev>` it also compares the head with the base row by row at real size; `--replay <sample>` adds the replay sample.
   `bin/prove --help` names the options and the environment variables for real-size runs.
-- `bin/parity <monorepo root>` runs each old boundary tool of the PostHog monorepo (tach, its map, the import-linter contracts, the crossings scanner, the product lint's isolation checks, the migration invariant test) and hoglint on the same tree, and prints one verdict per tool: equal, explained, or unexplained.
+- `bin/parity <monorepo root>` runs each old boundary tool of the PostHog monorepo (tach, its map, the import-linter contracts, the crossings scanner, the product lint's isolation checks, the migration invariant test) and Hoglint on the same tree, and prints one verdict per tool: equal, explained, or unexplained.
   A difference is explained only by a reason that code checks for that item; the file per tool lists every difference with its reason.
   Set `HOGLINT_PYTHON` to the monorepo's own interpreter, which holds the old tools.
 - One wheel named `hoglint` ships the package, the native module and the `hoglint-facts` binary.
@@ -110,6 +110,7 @@ bin/prove                                   # all of the above side by side, plu
 - Commit with `git commit -F <message file> -- <paths named by hand>`, after `git diff` on each path.
   Parallel agents use one git worktree each.
 - Conventional commits; the body says why.
+- In prose, write the tool as "Hoglint", like Ruff or Turbo. Literal uses stay lowercase: the command, the package, file names, config keys, rule IDs, paths and the messages the tool prints.
 - No push, no remote, no publishing without the owner's explicit go.
 - Code is boring and easy to read.
   A rule type is declared once, on its class; derive the schema, the plan and the generator from it.

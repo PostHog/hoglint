@@ -1,10 +1,10 @@
 # Generality checks: Sentry, Saleor, Zulip, and the projection layer
 
-> Generality checks of the hoglint spike engine on three public Django repos (Sentry, Saleor, Zulip), and the projection layer (L3) designed from them, Nov 4, 2026. The config sketches for the three repos are in `docs/research/generality-2.md`.
+> Generality checks of the Hoglint spike engine on three public Django repos (Sentry, Saleor, Zulip), and the projection layer (L3) designed from them, Nov 4, 2026. The config sketches for the three repos are in `docs/research/generality-2.md`.
 > Partly replaced: the projection layer and rules are now in `docs/design/04-rules.md`, and the engine in `docs/design/05-engine.md`.
 
 The v0 data model (`docs/research/data-model.md`) and the spikes were built against PostHog.
-To find PostHog assumptions in the "generic" code, the architect ran the spike engine (Rust L1 + Python L2) on three other public Django repos, with no oracle (no Django boot), and sketched each repo's own boundary rules as hoglint config.
+To find PostHog assumptions in the "generic" code, the architect ran the spike engine (Rust L1 + Python L2) on three other public Django repos, with no oracle (no Django boot), and sketched each repo's own boundary rules as Hoglint config.
 Each check below lists what ran, the PostHog assumptions and bugs it found, the repo's own rules, what fits the model, and what is new.
 After the checks, the architect drafted a projection layer, and a second opinion from another model designed one independently from the same evidence; the merged result is "Projection layer v1" below.
 

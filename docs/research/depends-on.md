@@ -4,7 +4,7 @@
 > Partly replaced: the cycle, infrastructure and foundation rules are in `docs/design/04-rules.md` and `presets/posthog.toml`; the second opinion's full text is `docs/research/depends-on-second-opinion.md`.
 
 The question: tach's `depends_on` lists in the PostHog monorepo declare, per product, which other products it may depend on.
-What does hoglint put in their place?
+What does Hoglint put in their place?
 The architect wrote a view first, then a second opinion from another model answered independently (round 1), then both answered each other (round 2).
 All numbers are measurements of the public PostHog monorepo on Nov 5, 2026.
 
@@ -43,7 +43,7 @@ The second opinion moved the foundation tier from "later" to "now" because it ha
 
 Written Nov 5, before the second opinion answered.
 
-Replace tach `depends_on` with three hoglint rules:
+Replace tach `depends_on` with three Hoglint rules:
 1. No new or growing package cycles (the cycle primitive). The SCC of that day (41 products on declared dependencies) and the 43 two-way pairs go in the ledger, shrink-only.
 2. Base layer: core (`posthog`, `ee`, `common`) gains no product dependency. The 109 declared core → product edges are ledgered and drained by inversion (the `register_routes` pattern).
 3. Later, Nx-style tag constraints, for example "foundational products must not depend on feature products".

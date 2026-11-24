@@ -240,7 +240,7 @@ Salsa red-green caching, CodeQL overlay and Bazel action caching are in the earl
 - Absence is closed-world. "A negation formula matches any tuple that does not match the nested formula" [src: QL spec]. A missing fact therefore reads as false.
 - The Python library models unknown values as values: `TUnknown`, `TUnknownClass`, `TUndefined`, and `AbsentModuleObjectInternal` ("absent from the database, but has been inferred to likely exist") [src: https://github.com/github/codeql/blob/main/python/ql/lib/semmle/python/objects/ObjectAPI.qll, ObjectInternal.qll].
 - Failed type inference is a fact with a reason, such as "Missing base", "Decorator not understood" or "Failed to infer metaclass" [src: https://github.com/github/codeql/blob/main/python/ql/lib/semmle/python/pointsto/PointsTo.qll `failedInference`].
-- Queries use that fact to suppress results: `not t.failedInference(_)` appears in NonCallableCalled, IllegalRaise, NonIteratorInForLoop, HashedButNoHash and others. A meta query, `analysis/FailedInference.ql`, lists the failures [src: `gh search code --repo github/codeql failedInference`]. Here unknown means "stay quiet", which is the opposite polarity to hoglint.
+- Queries use that fact to suppress results: `not t.failedInference(_)` appears in NonCallableCalled, IllegalRaise, NonIteratorInForLoop, HashedButNoHash and others. A meta query, `analysis/FailedInference.ql`, lists the failures [src: `gh search code --repo github/codeql failedInference`]. Here unknown means "stay quiet", which is the opposite polarity to Hoglint.
 
 **Bazel Skyframe.**
 
@@ -489,7 +489,7 @@ Requirement numbers refer to the requirements given to the blind architects of t
   - Pyrefly and pks show the result: framework support becomes a core-team backlog.
   - Dynamic cases drift ("highly dynamic metaclass cases can produce different types").
   - That conflicts with a generic core and with pack authors who are Python developers.
-- **Lesson: scripted layers that stayed fast restrict the script.** Pants rules are pure, with hashable inputs and outputs. Starlark freezes values. Each restriction matches a hoglint requirement: determinism, and equality to a clean run.
+- **Lesson: scripted layers that stayed fast restrict the script.** Pants rules are pure, with hashable inputs and outputs. Starlark freezes values. Each restriction matches a Hoglint requirement: determinism, and equality to a clean run.
 - **Trap: a Python callback per row inside a native engine.** It ran 2x to 6x slower than a plain Python loop, at 64 to 380 ns per row [run]. Compiled predicates ran at 1 to 2 ns per row [run].
 - **Lesson: authors can debug compiled predicates.** Polars `explain()`, DuckDB `EXPLAIN` and CodeQL Quick Evaluation show the plan and the rows. None of them shows why a row is missing.
 - **Trap: wiring by type.** Pants needed a solver to pick rules by signature. The solver became the scaling limit, and Pants moved to call-by-name. A pack registry that resolves producers by declared fact type takes on the same job.
@@ -517,7 +517,7 @@ Requirement numbers refer to the requirements given to the blind architects of t
 - **Trap: copying CodeQL idioms flips the guarantee.** CodeQL's Python queries use `not failedInference(_)` to stay quiet on unknown classes. Ported as is, that idiom reads "unknown" as "clean".
 - **Lesson: store unknown as data that negation must check.** Every engine that needed a third state stored it: `TUnknown`, WFS undefined, `ErrorGuaranteed`, Skyframe error values.
 - **Lesson: absence-shaped rules need complete base relations under any demand scheme.** These are reach (contracts-no-django), cycle (no-new-package-cycles), coverage (wiring-watched) and "no forbidden import". Soufflé computes negated relations in full, and XSB waits for completion. A "no path" claim holds only when every edge in the demand cone is resolved or marked unknown.
-- **Lesson: carry an incomplete marker that cannot be dropped silently.** rustc's `ErrorGuaranteed` turns "suppressed downstream" into "the run still fails". Bazel's exit 3 and exit 4 match hoglint's exit 2. Keep-going recovery that returns "all found targets" is the failure mode to avoid.
+- **Lesson: carry an incomplete marker that cannot be dropped silently.** rustc's `ErrorGuaranteed` turns "suppressed downstream" into "the run still fails". Bazel's exit 3 and exit 4 match Hoglint's exit 2. Keep-going recovery that returns "all found targets" is the failure mode to avoid.
 - **Lesson: "incomplete" needs its own record of what was not computed.** No engine explains absence, and provenance costs about 1.3x runtime and 1.45x memory (Soufflé).
 
 **Demand and determinism (requirements 2 and 3)**
@@ -526,8 +526,8 @@ Requirement numbers refer to the requirements given to the blind architects of t
   - Pyrefly chose it at Instagram scale, "if solving all bindings in a module is fast enough".
   - The workload notes measure a median of 5 files for "changed plus dependents by changed name".
   - Per-identifier demand (Salsa-style, magic sets) brings the cycle-order and negation hazards above.
-- **Trap: evaluation order that differs by mode.** hoglint runs the same rules in pre-commit, `explain`, `query` and CI. Salsa's cycle head depends on which query is asked first, and Swift had multi-file-only bugs. Any lazy path is a second evaluation order to keep equal.
-- **Lesson: purity is the whole equivalence argument.** Skyframe, rustc and Pants each name their leaks (`eval_always`, read side effects). For hoglint, the inputs that can bypass the snapshot are:
+- **Trap: evaluation order that differs by mode.** Hoglint runs the same rules in pre-commit, `explain`, `query` and CI. Salsa's cycle head depends on which query is asked first, and Swift had multi-file-only bugs. Any lazy path is a second evaluation order to keep equal.
+- **Lesson: purity is the whole equivalence argument.** Skyframe, rustc and Pants each name their leaks (`eval_always`, read side effects). For Hoglint, the inputs that can bypass the snapshot are:
   - the environment;
   - Django settings;
   - files outside the git index;

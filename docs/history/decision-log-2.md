@@ -1,9 +1,9 @@
 # Engine decision log, part 2 (D22 to D47)
 
-> The engine decision log of hoglint, part 2: phase 3c, phase 3d and its reviews, phase 4a and 4b, the native-tool direction (D39), phase N1 and its reviews, and the PyO3 end state (D47), Nov 9 to Nov 10, 2026.
+> The engine decision log of Hoglint, part 2: phase 3c, phase 3d and its reviews, phase 4a and 4b, the native-tool direction (D39), phase N1 and its reviews, and the PyO3 end state (D47), Nov 9 to Nov 10, 2026.
 > Partly replaced: the current state of each topic is in `docs/design/` (start at `docs/design/README.md`); later entries here and in `docs/history/decision-log-3.md` revise several decisions.
 
-This is part 2 of a chronological log; read the note on how to read it, and who decided, at the top of `docs/history/decision-log.md`. A decision marked "the owner" was stated by hoglint's owner; every other decision is the architect's (an AI agent), and the owner could veto it.
+This is part 2 of a chronological log; read the note on how to read it, and who decided, at the top of `docs/history/decision-log.md`. A decision marked "the owner" was stated by Hoglint's owner; every other decision is the architect's (an AI agent), and the owner could veto it.
 
 ## Phase 3c: no bulk expansion into Python (after phase 3b, Nov 9 evening)
 
@@ -133,7 +133,7 @@ Parity tests added for phase 3c (from the second opinion):
 
 Phase 3d (6a061a406aa to 33b1723e535, all zero delta): staged `check --index` takes 4.83–4.90 s wall at its best paired runs (4.8–5.2 s CPU), against 5.2 s before. Peak 1.46 GB, so the 1.5 GB gate is met. Ten overlapping checks take 10.1 GB, so that gate is met. Each further step saves 0.2–0.3 s, spread over many small Python costs.
 
-Context for the gate: the PostHog monorepo's pre-commit hook runs ruff fix, ruff format and `ty check` on staged Python files. tach, import-linter and product:lint run only in CI, so hoglint is a new pre-commit cost. lint-staged runs its glob groups in parallel, so hoglint overlaps the existing Python chain.
+Context for the gate: the PostHog monorepo's pre-commit hook runs ruff fix, ruff format and `ty check` on staged Python files. tach, import-linter and product:lint run only in CI, so Hoglint is a new pre-commit cost. lint-staged runs its glob groups in parallel, so Hoglint overlaps the existing Python chain.
 
 **D6 REVISED. A staged run picks its thread count from the load.**
 - Threads = clamp(cores − 1-minute load average, 1, 4). `HOGLINT_THREADS` still overrides.
@@ -174,7 +174,7 @@ The architect wrote a view with the measurements first. A second opinion from an
 - A commit with no stored baseline evaluates HEAD inline, then the staged tree, in one process: 25.0 s wall, 2.33 GB, against 8.3 s and 1.40 GB on a hit in the same minute.
 - One dirty or untracked non-Python file anywhere in the working tree stops a staged run from storing its summary, so the next commit has no baseline.
 - A staged run reads its side inputs (owners, CODEOWNERS, turbo and package files, provenance, layout file checks) from the working tree. D4 says they come from the snapshot.
-- The key holds the whole repo's tree, so a commit with no hoglint input still changes it.
+- The key holds the whole repo's tree, so a commit with no Hoglint input still changes it.
 
 **D33 (proposed). A staged run reads every input from the index.**
 - A provider or adapter declares the path patterns it reads. The run materializes those from the snapshot, and nothing else is visible to the plugin.
@@ -230,14 +230,14 @@ The architect wrote a view with the measurements first. A second opinion from an
 
 **Still the owner's:** D35, the memory target and the time target. D37 and D38 stay directions until the targets are set; each needs a spike with timers first (the second opinion's acceptance bar for D38: public-surface plus one shape-sensitive rule, 0.7 to 1.0 s saved in the rules phase).
 
-## Direction: hoglint as a native tool (Nov 10)
+## Direction: Hoglint as a native tool (Nov 10)
 
 **The owner's targets, Nov 10.**
 - Memory: no target set.
 - Time: no slower than the existing hook is the aim, traded against effort; 4 s on a commit is acceptable if less takes a very large effort.
 - Baseline miss: no background job; the tool itself must be fast enough (Ruff-like speed over tens of thousands of files).
 
-**Reference values, same snapshot and hour:** `ruff check` whole repo without cache 1.4 s wall, 17 to 19 s CPU, 0.39 GB; `tach check` 2.3 s, 10 s CPU, 0.22 GB; `ty check` 9.9 s, 105 s CPU, 7.2 GB; `hoglint check --index` 4.9 s, 4.7 s CPU, 1.40 GB. hoglint does the least work and is the only one on one core, because 3.7 of its 4.9 s are Python.
+**Reference values, same snapshot and hour:** `ruff check` whole repo without cache 1.4 s wall, 17 to 19 s CPU, 0.39 GB; `tach check` 2.3 s, 10 s CPU, 0.22 GB; `ty check` 9.9 s, 105 s CPU, 7.2 GB; `hoglint check --index` 4.9 s, 4.7 s CPU, 1.40 GB. Hoglint does the least work and is the only one on one core, because 3.7 of its 4.9 s are Python.
 
 **D39 (the architect). Rust runs everything a check does. TOML holds the policy. Python is packaging and an optional plugin host.** Full design: `docs/research/native-engine-design.md`.
 - Targets: one whole-repo check in at most 1 s wall (1.5 s on one thread) and at most 0.5 GB. Targets, not results, until the spike confirms them.
@@ -251,7 +251,7 @@ The architect wrote a view with the measurements first. A second opinion from an
 - D7 as amended holds: the Python implementation is the oracle through the port, then stays in the test suite until a golden corpus replaces it.
 
 **The owner's calls that remain:**
-- The PostHog pack moving into the hoglint repo as a built-in module (part of D15). Settled below under "The PostHog pack's home".
+- The PostHog pack moving into the Hoglint repo as a built-in module (part of D15). Settled below under "The PostHog pack's home".
 
 **N1 spike result (Nov 10, `docs/research/spike-n1.md`).** Labels and all 17 `edge` and `entrypoint` rules judged per edge in Rust, no grouping: 0 differences on 290,380 label values and 3,648,152 judged pairs. One thread: 0.08 s labels and 0.20 s judging, against 0.24 s and 0.66 s for the Python engine in the same minute (about 0.6 s saved; 0.055 s wall on four threads). Plain Python per edge takes 12.3 s, so grouping had bought 18 times and Rust adds 3 times on this part. The correctness half of the gate passed; the time half is 0.1 s short on one thread for the scope measured. D39 stands, with the estimate corrected in `docs/research/native-engine-design.md`: about 1.7 s on one thread after N1 to N4, about 0.6 s wall on four threads after N5. N1 is built after phase 4a lands, because both touch `labels.py` and `engine-sources.txt`.
 
@@ -344,7 +344,7 @@ Commits cd213751e71 (the edge's own audience apart from the export cache), 2a5d5
 
 **D42. A shadow run of the Python engine guards the native one after cutover (the architect).**
 - The native evaluator's `clean` is never judged again at run time: only rows that are not clean go back to the rule's Python code. A wrong `clean` is a missed finding that nothing reports.
-- The proofs (every preset rule at snapshot scale, generated configs, the permanent per-edge test) run in hoglint's own CI. They cover the tool, not the day a consuming repo's config change reaches a corner no test holds.
+- The proofs (every preset rule at snapshot scale, generated configs, the permanent per-edge test) run in Hoglint's own CI. They cover the tool, not the day a consuming repo's config change reaches a corner no test holds.
 - So a consuming repo runs one scheduled shadow job: both engines over the repo, the ten tables compared, a difference fails the job. The Python engine needs about 35 s for it. This is D7's "small independent oracle" in its first form; a golden corpus replaces it when the Python engine leaves the wheel.
 - It sits next to the D14 summary step.
 
@@ -398,18 +398,18 @@ Built as phase N1b, in parallel with 4c on disjoint paths. N2 starts from the ve
 
 **D47 revised (Nov 10; the question: why would a Python shell over PyO3 be bad?). It is not bad. The end state is a thin Python shell over PyO3; the binary is dropped as a goal.**
 - Measured on the export of b10fc74cf04 (the architect's own script, three runs): interpreter start 0.01 s; importing the CLI, the plugins and the native module 0.06 to 0.10 s. A binary would save about a tenth of a second.
-- tach, one of the tools hoglint replaces, has this shape: a Python CLI over an abi3 PyO3 extension. It checks the PostHog monorepo in 2.3 s wall on all cores.
+- tach, one of the tools Hoglint replaces, has this shape: a Python CLI over an abi3 PyO3 extension. It checks the PostHog monorepo in 2.3 s wall on all cores.
 - What costs time and memory is not that Python is present. It is Python work per row (per edge, per finding, per module: 3.0 of the 5.3 s of that time, in the rule types not yet ported and in the packs) and Python copies of the data (the 1.4 GB). Those go; the shell stays.
 - So: N2 (remaining rule types), N3 (packs) and N5 (mapped fact store, parallel link) stay. **N4 as "one binary" is dropped.** What stays of it is only what measurement shows per-row or slow in the ledger, summary and compare code. The CODEOWNERS, owners-file and turbo readers stay Python plugins; no child-process protocol is needed.
 - The rule for the seam: Python hands Rust the config and the snapshot once, and gets back rows it prints. A call per row, or a row turned into an object nobody prints, is the defect to look for.
 - The first version of D47 above (a binary, plugins in a child process) is withdrawn. It was the architect's preference stated as a requirement.
 
 **The PostHog pack's home: back to D15 as agreed on Nov 9 (Nov 10).**
-- D15 already says the PostHog pack stays in the monorepo as a plugin on hoglint's pack API. That morning's native design (D39, section 4 of `docs/research/native-engine-design.md`) wanted it inside the hoglint repo as a built-in Rust module. D47 revised removes the reason: Python stays as the shell and plugins stay Python.
-- Decided (owner, Nov 10): `drives`, the only producer left, stays in the monorepo as a plugin, and hoglint moves to its own repo. So D15 stands as written, and the open call is withdrawn.
-- No Rust is split. All Rust (facts, link, rule evaluator, the PyO3 module) lives in the hoglint repo and ships as one abi3 wheel; the monorepo pins it and holds config, ledger, exceptions and Python plugins.
-- The architect's proposals on top, not yet decided by measurement: facade facts become a generic analysis in the hoglint repo, switched on by config (any repo with a public-API convention can use it); the pack's name lists and paths (`DISPATCH_CALLS`, the dispatcher and enum paths, decorator names) move into the `[posthog]` config section; `drives` (1,044 lines, specific to PostHog's query-runner dispatch) stays the one PostHog pack producer, in Python, in the monorepo. The N3 spike shows how the pack's 0.6 s splits between drives and facade facts.
-- Consequence for D31: the pack API has one user outside the hoglint repo (the monorepo's plugin), so it needs to be stable enough for a version pin, not published as a public surface.
+- D15 already says the PostHog pack stays in the monorepo as a plugin on Hoglint's pack API. That morning's native design (D39, section 4 of `docs/research/native-engine-design.md`) wanted it inside the Hoglint repo as a built-in Rust module. D47 revised removes the reason: Python stays as the shell and plugins stay Python.
+- Decided (owner, Nov 10): `drives`, the only producer left, stays in the monorepo as a plugin, and Hoglint moves to its own repo. So D15 stands as written, and the open call is withdrawn.
+- No Rust is split. All Rust (facts, link, rule evaluator, the PyO3 module) lives in the Hoglint repo and ships as one abi3 wheel; the monorepo pins it and holds config, ledger, exceptions and Python plugins.
+- The architect's proposals on top, not yet decided by measurement: facade facts become a generic analysis in the Hoglint repo, switched on by config (any repo with a public-API convention can use it); the pack's name lists and paths (`DISPATCH_CALLS`, the dispatcher and enum paths, decorator names) move into the `[posthog]` config section; `drives` (1,044 lines, specific to PostHog's query-runner dispatch) stays the one PostHog pack producer, in Python, in the monorepo. The N3 spike shows how the pack's 0.6 s splits between drives and facade facts.
+- Consequence for D31: the pack API has one user outside the Hoglint repo (the monorepo's plugin), so it needs to be stable enough for a version pin, not published as a public surface.
 
 ## From the simplification reviews of the commit path (Nov 10)
 

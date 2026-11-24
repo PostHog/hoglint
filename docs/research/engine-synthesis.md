@@ -5,7 +5,7 @@
 
 ## Context
 
-On Nov 9, 2026, the first implementation of hoglint took about 45 s and 4 GB for a full check of the PostHog monorepo, and about 70 s for the pre-commit form (`check --index`).
+On Nov 9, 2026, the first implementation of Hoglint took about 45 s and 4 GB for a full check of the PostHog monorepo, and about 70 s for the pre-commit form (`check --index`).
 The engine round asked how the engine underneath the settled user-facing behavior should work.
 
 Phase 1 had these inputs:
