@@ -35,6 +35,7 @@ from model_repo.shapes_round8 import ROUND8
 from model_repo.shapes_round9 import ROUND9
 from model_repo.shapes_round9b_cases import CASES as ROUND9B
 from model_repo.shapes_round10_cases import CASES as ROUND10
+from model_repo.shapes_round11_cases import CASES as ROUND11
 from model_repo.test_watched_shapes import SHAPES
 
 Binding = tuple[str, str]  # (the class's dotted name, empty for the module; the name)
@@ -50,6 +51,7 @@ DATASETS: dict[str, dict[str, dict[str, Any]]] = {
     "round9": ROUND9,
     "round9b": ROUND9B,
     "round10": ROUND10,
+    "round11": ROUND11,
 }
 
 

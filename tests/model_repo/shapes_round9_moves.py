@@ -3,7 +3,9 @@ with what it gives now (`outcome` and `reason`, or `unread` for the first shapes
 Every move but one is a read the round no longer makes: it fails closed. The pinned data stays as it
 was; `moved` lays this over it. Round 9b (`moved9b`) moves the `__globals__` rows limit 9 kept to
 unread, and marks `alone` the rows whose change reaches every module: they run in an answer of
-their own. Round 10 (`MOVES10`, `moved10`) moves the rows its narrowed entries fail closed."""
+their own. Round 10 (`MOVES10`, `moved10`) moves the rows its narrowed entries fail closed. Round 11
+(`MOVES11`, `moved11`) marks `alone` the rows whose change now reaches every module: a builtin the
+walker's own proofs trust replaced, or `builtins` handed on (ruling C)."""
 
 from __future__ import annotations
 
@@ -919,7 +921,154 @@ MOVES10: dict[str, dict[str, Any]] = {
     },
 }
 
+MOVES11: dict[str, dict[str, Any]] = {
+    "r6_t_class_global": {
+        "moved11": "round 11 family 11: a class body's `global W; W = ...` writes a `global` row, as a function's does, so the list is bound more than once (still unread)",
+        "reason": "products.r6_t_class_global.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
+    },
+    "r6_g_class_global_list": {
+        "moved11": "round 11 family 11: a class body's `global W; W = ...` writes a `global` row, as a function's does, so the list is bound more than once (still unread)",
+        "reason": "products.r6_g_class_global_list.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
+    },
+    "r6f_class_global": {
+        "moved11": "round 11 family 11: a class body's `global W; W = ...` writes a `global` row, as a function's does, so the list is bound more than once (still unread)",
+        "reason": "products.r6f_class_global.backend.facade.temporal.WORKFLOWS' (it is bound more than once)",
+    },
+    "r6_g_builtins_patch": {
+        "moved11": "round 11, ruling C: a builtin the walker's proofs trust (`len`, `sorted`) replaced is every first-party name",
+        "alone": True,
+    },
+    "r6_g_builtins_patch_init": {
+        "moved11": "round 11, ruling C: a builtin the walker's proofs trust (`len`, `sorted`) replaced is every first-party name",
+        "alone": True,
+    },
+    "r6_g_dunder_builtins_patch": {
+        "moved11": "round 11, ruling C: a builtin the walker's proofs trust (`len`, `sorted`) replaced is every first-party name",
+        "alone": True,
+    },
+    "r7e_s_patched_alias": {
+        "moved11": "round 11, ruling C: a builtin the walker's proofs trust (`len`, `sorted`) replaced is every first-party name",
+        "alone": True,
+    },
+    "r7e_s_patched_builtin": {
+        "moved11": "round 11, ruling C: a builtin the walker's proofs trust (`len`, `sorted`) replaced is every first-party name",
+        "alone": True,
+    },
+    "r9_g7_dunder_import_dict_setitem": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_dunder_import_dict_update": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_dunder_import_dunder_setattr": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_dunder_import_for": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_dunder_import_lambda": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_dunder_import_object_setattr": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_dunder_import_param": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_import_module_dict_setitem": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_import_module_dict_update": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_import_module_dunder_setattr": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_import_module_for": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_import_module_lambda": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_import_module_object_setattr": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_import_module_param": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_inspect_attr_dict_setitem": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_inspect_attr_dict_update": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_inspect_attr_dunder_setattr": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_inspect_attr_for": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_inspect_attr_lambda": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_inspect_attr_object_setattr": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_inspect_attr_param": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_sysmod_dict_setitem": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_sysmod_dict_update": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_sysmod_dunder_setattr": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_sysmod_for": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_sysmod_lambda": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_sysmod_object_setattr": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+    "r9_g7_sysmod_param": {
+        "moved11": "round 11, ruling C: `builtins` handed on (a list, a lambda, a parameter, `object.__setattr__`, `__setattr__`, a namespace update or a computed key) is every builtin and every first-party name",
+        "alone": True,
+    },
+}
+
 
 def moved(rows: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """The rows with the moves of round 9 and round 10 laid over them."""
-    return {p: {**row, **MOVES.get(p, {}), **MOVES10.get(p, {})} for p, row in rows.items()}
+    """The rows with the moves of rounds 9, 10 and 11 laid over them."""
+    return {p: {**row, **MOVES.get(p, {}), **MOVES10.get(p, {}), **MOVES11.get(p, {})} for p, row in rows.items()}
