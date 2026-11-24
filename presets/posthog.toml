@@ -14,11 +14,10 @@ sections   = ["posthog"]  # the PostHog pack (hoglint:posthog): drives
 [discovery]
 dataclass_decorators        = ["dataclasses.dataclass", "posthog.dataclasses.frozen", "pydantic.dataclasses.dataclass"]
 frozen_dataclass_decorators = ["posthog.dataclasses.frozen"]
-# Limit 12 (the owner, Nov 24, option (a) of `codex-limit12-answer.md`): a registered Temporal item
-# is read as itself when its outermost decorator is Temporal's own `defn` and each decorator under
-# it is one of these, in this form (`name()`: a factory a call of which is the decorator). The
-# first-party wrappers' files are watched with the item. Any other decorated item is unread. The
-# live measurement (Nov 20): 393 of 1,294 Temporal items carry one of these nine, in 172 files.
+# Limit 12: a registered Temporal item is read as itself when its outermost decorator is
+# Temporal's own `defn` and each decorator under it is one of these, in this form (`name()`: a
+# factory whose call is the decorator). The first-party wrappers' files are watched with the
+# item. Any other decorated item is unread.
 registering_decorators = ["temporalio.activity.defn", "temporalio.workflow.defn"]
 wrapper_decorators = [
   "posthog.temporal.common.utils.close_db_connections",
