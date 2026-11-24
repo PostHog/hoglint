@@ -451,6 +451,12 @@ impl Link {
             .collect()
     }
 
+    /// (the file of a decorated item, the file of a first-party wrapper limit 12 trusts on it),
+    /// sorted, once each (the link's `item_wrappers`).
+    fn item_wrappers(&self) -> Vec<(String, String)> {
+        self.inner.item_wrappers.clone()
+    }
+
     /// What each export module hands out by import (`Graph.hand_outs`): (module, handed names,
     /// kept names, whether its `__all__` cannot be read, listed names it binds by nothing the
     /// engine can tell, private names it lists and defines, the assignments of no literal constant

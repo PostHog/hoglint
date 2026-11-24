@@ -124,6 +124,11 @@ class CoreConfig:
       `__init__` fields as well (a model library's base class).
     - frozen_dataclass_decorators: those of them that always make a frozen dataclass; any other
       freezes it only when its call passes `frozen=True`.
+    - registering_decorators, wrapper_decorators: limit 12 of the watched reading. A def or class
+      item with decorators is read as itself only when its outermost decorator is a registering
+      one (a library's, bare or called) and each decorator under it is a wrapper in its recorded
+      form (`name()` for a factory a call of which is the decorator); a first-party wrapper's file
+      is watched with the item. Any other decorated item is unread.
     - patch_callees: last names of callees whose first argument is a dotted patch target.
     - path_callees: callees whose first argument is a dotted path (an import by name, a URL
       include), by last name, or by last dotted parts for an entry with a dot (`patch.dict`).
@@ -161,6 +166,8 @@ class CoreConfig:
     dynamic_loaders: tuple[str, ...] = DEFAULT_DYNAMIC_LOADERS
     dataclass_decorators: tuple[str, ...] = DEFAULT_DATACLASS_DECORATORS
     frozen_dataclass_decorators: tuple[str, ...] = ()
+    registering_decorators: tuple[str, ...] = ()
+    wrapper_decorators: tuple[str, ...] = ()
     dataclass_bases: tuple[str, ...] = ()
     patch_callees: tuple[str, ...] = DEFAULT_PATCH_CALLEES
     path_callees: tuple[str, ...] = ()
@@ -194,6 +201,8 @@ class CoreConfig:
             ("dataclass_decorators", "dataclass_decorators"),
             ("path_callees", "path_callees"),
             ("frozen_dataclass_decorators", "frozen_dataclass_decorators"),
+            ("registering_decorators", "registering_decorators"),
+            ("wrapper_decorators", "wrapper_decorators"),
             ("dataclass_bases", "dataclass_bases"),
             ("reference_names", "reference_names"),
         ):

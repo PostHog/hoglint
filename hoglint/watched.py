@@ -212,8 +212,17 @@ class WatchedSets:
                         found.add(init, f"{STRUCTURAL}: the package above a watched file")
                     directory = posixpath.dirname(directory)
 
+    def add_wrappers(self) -> None:
+        """Limit 12: the file of each first-party wrapper trusted on a decorated item, in every
+        group that watches the item's file."""
+        for item, wrapper in self.result.wrappers:
+            for found in self.groups.values():
+                if item in found.files:
+                    found.add(wrapper, f"limit-12: a wrapper of the registered item in {item}")
+
     def build(self) -> dict[str, GroupFiles]:
         self.add_required()
+        self.add_wrappers()
         self.add_zones()
         self.add_parent_packages()
         return self.groups

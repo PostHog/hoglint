@@ -339,6 +339,9 @@ pub struct Producing {
     pub loaders: Vec<Sid>,
     pub loader_last_names: Vec<String>,
     pub dataclass_decorators: Vec<Sid>,
+    /// Limit 12 (`registering_decorators`, `wrapper_decorators` of the config).
+    pub registering_decorators: Vec<String>,
+    pub wrapper_decorators: Vec<String>,
     pub dataclass_bases: Vec<Sid>,
     pub patch_callees: Vec<String>,
     pub path_callees: Vec<String>,
@@ -550,6 +553,8 @@ impl Producing {
                 .iter()
                 .map(|name| it.intern(name))
                 .collect(),
+            registering_decorators: config.registering_decorators.clone(),
+            wrapper_decorators: config.wrapper_decorators.clone(),
             dataclass_bases: config
                 .dataclass_bases
                 .iter()
@@ -769,6 +774,10 @@ pub struct RegistryCall {
     pub name: String,
     pub literal: bool,
 }
+
+/// What a limit 12 site says (`decorated_item`).
+const LIMIT_12_WHAT: &str = "the decorator stack is trusted to register the item itself: a change \
+     only to a file a wrapper calls is not seen";
 
 /// A site where a written limit of the reading applies (the walker's `%limit-N:WHAT` escape
 /// rows, t30, Nov 24): the reading knowingly does not follow it, and the run lists it.
@@ -1372,6 +1381,8 @@ pub struct Producers<'p> {
     pub registry_calls: Vec<RegistryCall>,
     /// Each site where a written limit of the reading applies (`limit_sites`).
     pub limit_sites: Vec<LimitSite>,
+    /// (item file, wrapper file) of each first-party wrapper limit 12 trusts (`decorated_item`).
+    pub item_wrappers: Vec<(String, String)>,
     /// Why a name the reading cannot read is unread, when a binding says it, by (module, key):
     /// "bound" (bound more than once) or "rebound" (bound again by a form it cannot read).
     pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
@@ -4150,6 +4161,11 @@ impl Producers<'_> {
             out.push(None);
             return;
         }
+        // A decorated def or class is itself only under limit 12 (`decorated_item`).
+        if !self.decorated_item(target) {
+            out.push(None);
+            return;
+        }
         out.push(Some(target));
         let origin = self.core.it.join(target.m, target.s);
         let rest = (self.core.it.s(surface).strip_prefix(self.core.it.s(origin)))
@@ -6572,6 +6588,123 @@ impl Producers<'_> {
                 literal,
             });
         }
+    }
+
+    /// Limit 12 (the owner, Nov 24; `codex-limit12-answer.md`, option (a)): whether a def or
+    /// class item is read as itself. One with no decorator is; a class whose decorators are all
+    /// dataclass decorators is (the record proof's own reading). Any other is only when its
+    /// outermost decorator is a registering one (`registering_decorators`, a library's, bare or
+    /// called) and every decorator under it is a trusted wrapper in its recorded form
+    /// (`wrapper_decorators`; `name()` a factory's call), each resolved, a first-party one bound
+    /// once in a module nothing replaces, and no name of the stack stored into the item's module
+    /// from another file. Then the item is a limit 12 site, with its resolved stack, and each
+    /// first-party wrapper's file is watched with it (`item_wrappers`). Else it is unread.
+    fn decorated_item(&mut self, target: Ent) -> bool {
+        let found = (self.def_of(target.m, target.s, HitKind::Def))
+            .or_else(|| self.def_of(target.m, target.s, HitKind::Class));
+        let Some((owner, idx)) = found else {
+            return true;
+        };
+        let facts = self.core.facts.clone();
+        let file = &facts.files[self.scopes[owner].file as usize];
+        let def = &file.defs[idx as usize];
+        if def.dec.is_empty() {
+            return true;
+        }
+        if def.kind == DefKind::Class && self.dataclass_decorated(owner, def) {
+            return true;
+        }
+        let module = self.scopes[owner].module;
+        let mut stack = Vec::new();
+        let mut wrappers = Vec::new();
+        for (index, decorator) in def.dec.iter().enumerate() {
+            let (callee, called) = match decorator {
+                V::Call(callee, ..) => (&**callee, true),
+                decorator => (decorator, false),
+            };
+            let V::Chain(chain) = callee else {
+                return false;
+            };
+            let chain = self.core.it.s(*chain).to_string();
+            let head = chain.split('.').next().unwrap_or_default().to_string();
+            if self.stored_into(module, &head) {
+                return false;
+            }
+            let (surface, resolved) = self.lookup_value(owner, callee, def.s, def.l);
+            let surface = self.core.it.s(surface).to_string();
+            let target_name = resolved.target.map(|ent| {
+                let sid = self.core.ent_sid(ent);
+                self.core.it.s(sid).to_string()
+            });
+            // A library's binding (Temporal's own `defn`, `posthoganalytics.scoped`), or a
+            // first-party definition; anything unresolved qualifies as neither.
+            let library = match resolved.res {
+                Res::External => true,
+                Res::Resolved => resolved
+                    .target
+                    .is_some_and(|ent| self.core.is_external(ent.m)),
+                _ => false,
+            };
+            let first_party = resolved.res == Res::Resolved && !library;
+            let names = [Some(surface), target_name];
+            let named = |list: &[String], suffix: &str| {
+                (names.iter().flatten()).find(|name| list.contains(&format!("{name}{suffix}")))
+            };
+            if index == 0 {
+                let Some(name) = named(&self.settings.registering_decorators, "") else {
+                    return false;
+                };
+                if !library {
+                    return false;
+                }
+                stack.push(format!("`@{name}`"));
+                continue;
+            }
+            let suffix = if called { "()" } else { "" };
+            let Some(name) = named(&self.settings.wrapper_decorators, suffix) else {
+                return false;
+            };
+            let form = format!("{name}{suffix}");
+            if first_party {
+                let Some(wrapper) = resolved.target else {
+                    return false;
+                };
+                if !self.sole_binding(wrapper) {
+                    return false;
+                }
+                let Some((wrapper_owner, _)) = self.def_of(wrapper.m, wrapper.s, HitKind::Def)
+                else {
+                    return false;
+                };
+                let path = &facts.files[self.scopes[wrapper_owner].file as usize].path;
+                wrappers.push(path.to_string());
+            } else if !library {
+                return false;
+            }
+            stack.push(format!("`@{form}`"));
+        }
+        let path = file.path.to_string();
+        let item = self.core.it.s(target.s).to_string();
+        self.limit_sites.push(LimitSite {
+            path: path.clone(),
+            line: def.l,
+            limit: "limit-12".to_string(),
+            scope: item,
+            operation: stack.join(" over "),
+            what: LIMIT_12_WHAT.to_string(),
+        });
+        for wrapper in wrappers {
+            self.item_wrappers.push((path.clone(), wrapper));
+        }
+        true
+    }
+
+    /// Whether every decorator of a class is a dataclass decorator (`is_dataclass_like`'s test).
+    fn dataclass_decorated(&mut self, owner: usize, node: &Def) -> bool {
+        node.dec.iter().all(|decorator| {
+            let (surface, resolved) = self.lookup_value(owner, decorator, node.s, node.l);
+            self.is_dataclass_decorator(surface, resolved)
+        })
     }
 
     /// The limit rows of the module's file (`%limit-N:DEF\tOPERATION\tWHAT`, the walker's

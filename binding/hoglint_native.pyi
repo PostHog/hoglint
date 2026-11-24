@@ -76,6 +76,9 @@ class Link:
     def limit_sites(self) -> list[tuple[str, int, str, str, str, str]]:
         """(path, line, limit, enclosing def, operation, what) of each site where a written limit
         of the watched reading applies, sorted, once each."""
+    def item_wrappers(self) -> list[tuple[str, str]]:
+        """(the file of a decorated item, the file of a first-party wrapper limit 12 trusts on it),
+        sorted, once each."""
     def core_count(self) -> int:
         """The core edges: ids below it; pack edges come after them."""
     def add_edges(

@@ -227,6 +227,8 @@ DISCOVERY_KEYS = frozenset(
         "migrations",
         "dataclass_decorators",
         "frozen_dataclass_decorators",
+        "registering_decorators",
+        "wrapper_decorators",
         "dataclass_bases",
         "path_callees",
         "reference_names",

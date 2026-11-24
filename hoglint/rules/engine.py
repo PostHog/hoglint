@@ -131,6 +131,15 @@ def limit_sites(graph: Graph) -> list[LimitSite]:
     return [LimitSite(*site) for site in link.limit_sites()]
 
 
+def item_wrappers(graph: Graph) -> list[tuple[str, str]]:
+    """(item file, wrapper file) of each first-party wrapper limit 12 trusts on a decorated item
+    (`item_wrappers` of the native link)."""
+    link = getattr(graph, "link", None)
+    if link is None:
+        raise EngineError("rules run in the native evaluator only: link the graph natively first")
+    return [(item, wrapper) for item, wrapper in link.item_wrappers()]
+
+
 class RegistryCalls:
     """The calls of a registry's loader whose name no `[registries]` entry of that loader declares,
     or that the link cannot read (`registry_calls` of the native link). The link records them while
@@ -209,6 +218,8 @@ class RunResult:
     ledger: LedgerFile | None = None
     # Where a written limit of the watched reading applies: listed, never blocking.
     limits: list[LimitSite] = field(default_factory=list)
+    # (item file, wrapper file) of each first-party wrapper limit 12 trusts: watched with the item.
+    wrappers: list[tuple[str, str]] = field(default_factory=list)
 
     def findings(self) -> list[Finding]:
         return [finding for run in self.runs.values() for finding in run.findings]
@@ -405,6 +416,7 @@ class Engine:
         ctx = self.rule_context()
         result = RunResult(self.config, self.labeler, self.run_rules(ctx))
         result.limits = limit_sites(self.graph)
+        result.wrappers = item_wrappers(self.graph)
         if exceptions is not None:
             result.exceptions = apply_exceptions(result.runs, exceptions, self.today)
         result.scan = self.scan_lines(result)

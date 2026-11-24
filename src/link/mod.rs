@@ -184,6 +184,13 @@ pub struct LinkConfig {
     /// Those of `dataclass_decorators` that always make a frozen dataclass.
     #[serde(default)]
     pub frozen_dataclass_decorators: Vec<String>,
+    /// Limit 12: the decorators that register a decorated item as itself, outermost.
+    #[serde(default)]
+    pub registering_decorators: Vec<String>,
+    /// Limit 12: the decorators trusted under a registering one; `name()` for a factory a call
+    /// of which is the decorator.
+    #[serde(default)]
+    pub wrapper_decorators: Vec<String>,
     /// Base classes whose subclasses' annotated class attributes are `__init__` fields too.
     #[serde(default)]
     pub dataclass_bases: Vec<String>,
@@ -311,6 +318,9 @@ pub struct Link {
     /// Each site where a written limit of the reading applies, by path and line, once each
     /// (produce.rs `limit_sites`).
     pub limit_sites: Vec<LimitSite>,
+    /// (the file of a decorated item, the file of a first-party wrapper limit 12 trusts on it),
+    /// once each (produce.rs `item_wrappers`).
+    pub item_wrappers: Vec<(String, String)>,
     /// Why a name the reading cannot read is unread, when a binding says it (produce.rs
     /// `unread_causes`).
     pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
@@ -460,6 +470,7 @@ impl Link {
             computed_loads: Vec::new(),
             registry_calls: Vec::new(),
             limit_sites: Vec::new(),
+            item_wrappers: Vec::new(),
             unread_causes: FxHashMap::default(),
             rebound_imports: FxHashSet::default(),
             foreign: FxHashMap::default(),
@@ -493,6 +504,9 @@ impl Link {
         let mut limit_sites = std::mem::take(&mut producers.limit_sites);
         limit_sites.sort();
         limit_sites.dedup();
+        let mut item_wrappers = std::mem::take(&mut producers.item_wrappers);
+        item_wrappers.sort();
+        item_wrappers.dedup();
         let unread_causes = std::mem::take(&mut producers.unread_causes);
         let rebound_imports = std::mem::take(&mut producers.rebound_imports);
         let bound = std::mem::take(&mut producers.bound);
@@ -523,6 +537,7 @@ impl Link {
             computed_loads,
             registry_calls,
             limit_sites,
+            item_wrappers,
             unread_causes,
             rebound_imports,
             bound,

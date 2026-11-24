@@ -24,6 +24,8 @@ def link_config(config: CoreConfig, analyzed: tuple[str, ...], external: Mapping
         "dynamic_loaders": list(config.dynamic_loaders),
         "dataclass_decorators": list(config.dataclass_decorators),
         "frozen_dataclass_decorators": list(config.frozen_dataclass_decorators),
+        "registering_decorators": list(config.registering_decorators),
+        "wrapper_decorators": list(config.wrapper_decorators),
         "dataclass_bases": list(config.dataclass_bases),
         "patch_callees": list(config.patch_callees),
         "path_callees": list(config.path_callees),
