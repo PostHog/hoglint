@@ -531,9 +531,18 @@ WAITER = (
 )
 add(
     "r10_ok_wrapper_activity",
-    WAITER + "@_defn\ndef wait(inputs):\n    return _WAITER.wait(inputs)\n\n\nWORKFLOWS = [AFlow, wait]\n",
+    "from temporalio import activity\n"
+    + WAITER
+    + "@activity.defn\ndef wait(inputs):\n    return _WAITER.wait(inputs)\n\n\nWORKFLOWS = [AFlow, wait]\n",
     "watched",
-    "harmless: a module-level wrapper of a bound activity method",
+    "harmless: a module-level wrapper of a bound activity method, under Temporal's own defn (limit 12)",
+)
+add(
+    "r10_wrapper_first_party_defn",
+    WAITER + "@_defn\ndef wait(inputs):\n    return _WAITER.wait(inputs)\n\n\nWORKFLOWS = [AFlow, wait]\n",
+    "unread",
+    "over-fail by rule (limit 12): a first-party decorator on the item, even one that returns its input",
+    overfail=True,
 )
 add(
     "r10_bound_method_activity",
