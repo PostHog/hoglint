@@ -56,6 +56,12 @@ GROUPS_SHOWN = 10
 NOTES_SHOWN = 3
 PAGE = "What the hook checks and what to do: hoglint help hook."
 SHRINK = "run `hoglint ledger shrink`, then stage {ledger}. It removes stale lines and never adds one."
+# A group that loses a level is its owners' call, so `ledger shrink` keeps a level line unless a
+# person passes `--drop-levels`.
+LOSE_LEVEL = (
+    "stop and tell the person. A person decides: fix the code so the group passes the level again, "
+    "or let the group lose the level with `hoglint ledger shrink --drop-levels`, then stage {ledger}."
+)
 WRITE_MOVES = (
     "run `hoglint check --write-ledger`, then stage {ledger}. It records the new places and removes stale lines. "
     "It refuses new debt."
@@ -362,15 +368,32 @@ class CheckReport:
                 Problem(f"{ledger}: {header}.", ("needs a person: stop and tell the person.",))
                 for header in equality.header
             )
-            if equality.stale:
-                stale = [f"stale  {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in equality.stale]
-                rows = self.cut(stale, ROWS_SHOWN)
+            findings = [d for d in equality.stale if not is_level_line(d.key)]
+            if findings:
+                rows = self.cut(
+                    [f"stale  {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in findings], ROWS_SHOWN
+                )
                 why = "why: the ledger must equal the scan, so a fixed finding leaves the ledger."
                 fix = f"{SAFETY_LABELS['safe']}: {SHRINK.format(ledger=ledger)}"
                 out.append(
                     Problem(
-                        f"{ledger} records {plural(len(equality.stale), 'finding')} that the code no longer has.",
+                        f"{ledger} records {plural(len(findings), 'finding')} that the code no longer has.",
                         (*rows, why, fix),
+                    )
+                )
+            lost = [d for d in equality.stale if is_level_line(d.key)]
+            if lost:
+                rows = self.cut([f"stale  {render_key(d.key)}  {d.recorded} -> {d.scanned}" for d in lost], ROWS_SHOWN)
+                why = (
+                    "why: a level line records a group that passes a level. "
+                    "The code no longer passes it, so the group loses the level."
+                )
+                person = f"{SAFETY_LABELS['person']}: {LOSE_LEVEL.format(ledger=ledger)}"
+                verb = "passes" if len(lost) == 1 else "pass"
+                out.append(
+                    Problem(
+                        f"{ledger} records {plural(len(lost), 'group')} that no longer {verb} a level.",
+                        (*rows, why, person),
                     )
                 )
             levels = [d for d in equality.new if is_level_line(d.key)]

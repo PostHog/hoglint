@@ -60,7 +60,16 @@ from hoglint.ledger.envelope import (
     policy_digest,
 )
 from hoglint.ledger.errors import RepoRootError
-from hoglint.ledger.file import ABSENT, LedgerFile, LineChange, LineKey, change_row, grown_lines, shrunk_lines
+from hoglint.ledger.file import (
+    ABSENT,
+    LedgerFile,
+    LineChange,
+    LineKey,
+    change_row,
+    grown_lines,
+    is_level_line,
+    shrunk_lines,
+)
 from hoglint.ledger.growth import AttributionCheck, Renames
 from hoglint.ledger.inputs import InputDigests, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeStatus, check_root, git, records
@@ -350,6 +359,10 @@ def finding_line(finding: Finding) -> str:
 RECORD_GROWTH_WAY_OUT = (
     "new debt needs a person: fix the findings, or stop and tell the person; a person who accepts "
     "the debt, or a policy change that finds more, records it with --write-ledger --record-growth"
+)
+DROP_LEVELS_WAY_OUT = (
+    "a group that loses a level needs a person: fix the code so the group passes the level again, "
+    "or stop and tell the person; a person who lets the group lose the level runs `hoglint ledger shrink --drop-levels`"
 )
 # What a command that could not run at all prints, in one line (D104.3, D111). The hook's command
 # lets the commit through on exit 3; CI runs the full check.
@@ -995,9 +1008,11 @@ class Commands:
             sys.stdout.write(f"  {'moved' if change[0] in moved else 'added'}  {change_row(change)}\n")
         return None
 
-    def shrink_ledger(self) -> int:
+    def shrink_ledger(self, drop_levels: bool = False) -> int:
         """`ledger shrink`: removes the ledger's stale lines and lowers its counts to the scan of
-        the working tree. It never adds or raises a line, so it needs no person."""
+        the working tree. It never adds or raises a line, so it needs no person. A stale level line
+        is the exception: the group loses the level, which a person decides. Without `drop_levels`
+        it keeps those lines, still removes the stale finding lines, and exits 1."""
         config = load_config(self.repo, self.repo / CONFIG_FILE)
         path = self.repo / config.ledger.file
         before = LedgerFile.read(path)
@@ -1005,15 +1020,25 @@ class Commands:
             sys.stdout.write(f"{config.ledger.file} does not exist, so there is nothing to shrink\n")
             return 0
         run = self.runner.run(self.repo, tree=self.worktree_tree(config))
-        after = before.shrunk(run.result.scan)
+        after = before.shrunk(run.result.scan, drop_levels)
         removed = shrunk_lines(before, after)
-        if not removed:
+        held = []
+        if not drop_levels:
+            stale = shrunk_lines(before, before.shrunk(run.result.scan, drop_levels=True))
+            held = [change for change in stale if is_level_line(change[0])]
+        if not removed and not held:
             sys.stdout.write(f"{config.ledger.file} has no stale lines\n")
             return 0
-        after.write(path)
-        sys.stdout.write(f"removed or lowered {len(removed)} lines of {config.ledger.file}\n")
-        sys.stdout.write("".join(f"  {change_row(change)}\n" for change in removed))
-        return 0
+        if removed:
+            after.write(path)
+            sys.stdout.write(f"removed or lowered {len(removed)} lines of {config.ledger.file}\n")
+            sys.stdout.write("".join(f"  {change_row(change)}\n" for change in removed))
+        if not held:
+            return 0
+        sys.stdout.write(f"kept {len(held)} level lines of {config.ledger.file}: the groups no longer pass the level\n")
+        sys.stdout.write("".join(f"  {change_row(change)}\n" for change in held))
+        sys.stdout.write(f"  {DROP_LEVELS_WAY_OUT}\n")
+        return 1
 
     def check(
         self, index: bool, write_ledger: bool, changed: bool, record_growth: bool = False, view: View = HOOK_VIEW
@@ -1524,9 +1549,17 @@ def parser() -> argparse.ArgumentParser:
     )
     page = sub.add_parser("help", help="print a page: hook, what the pre-commit hook checks and what to do")
     page.add_argument("topic", choices=("hook",))
-    ledger = sub.add_parser("ledger", help="shrink: remove stale ledger lines; it never adds a line")
+    ledger = sub.add_parser(
+        "ledger", help="shrink: remove stale ledger lines; it never adds a line, and keeps level lines"
+    )
     ledger.add_argument("action", choices=("shrink",))
-    ledger.set_defaults(handler=lambda commands, args: commands.shrink_ledger())
+    ledger.add_argument(
+        "--drop-levels",
+        action="store_true",
+        help="a person's switch: also remove the level line of a group that no longer passes a level, "
+        "so the group loses the level. Without it, shrink keeps such a line and exits 1",
+    )
+    ledger.set_defaults(handler=lambda commands, args: commands.shrink_ledger(args.drop_levels))
     explain = sub.add_parser(
         "explain",
         help="a rule's page by its name, the labels of a path or module, or why an edge (edge:<id>) was selected",

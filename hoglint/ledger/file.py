@@ -124,10 +124,16 @@ class LedgerFile:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.render())
 
-    def shrunk(self, scan: dict[LineKey, int]) -> LedgerFile:
+    def shrunk(self, scan: dict[LineKey, int], drop_levels: bool) -> LedgerFile:
         """This ledger with every count cut to what `scan` counts, and the lines it no longer
-        counts gone. It never adds or raises a line, and keeps the header."""
-        lines = {key: min(count, scan.get(key, 0)) for key, count in self.lines.items()}
+        counts gone. It never adds or raises a line, and keeps the header. Without `drop_levels`
+        it keeps every level line: a group that loses a level needs a person."""
+        lines = {}
+        for key, count in self.lines.items():
+            if is_level_line(key) and not drop_levels:
+                lines[key] = count
+                continue
+            lines[key] = min(count, scan.get(key, 0))
         kept = {key: count for key, count in lines.items() if count > 0}
         return LedgerFile(self.schema, self.policy, kept, exists=True)
 

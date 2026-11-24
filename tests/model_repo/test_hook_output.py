@@ -1,7 +1,7 @@
 """What the hook (`check --index`) and CI (`compare`) print on the model repository, held to stored
 golden outputs: a clean commit, one new finding, 64 findings in six rules, a failed claim, a new
-unknown, a stale ledger line, an exception without a reason, growth that a complete new exception
-carries to review, and a module with ledgered findings moved inside a product, moved with one new
+unknown, a stale ledger line, a lost level with `ledger shrink`, which keeps its line, an
+exception without a reason, growth that a complete new exception carries to review, and a module with ledgered findings moved inside a product, moved with one new
 use, and moved to another product, each with `check --write-ledger` and the hook after a write.
 The 64-finding hook output stays under a harness's cap, and what a reader must see comes first.
 Rewrite the golden files with `HOGLINT_REFRESH_GENERATED=1` and read the diff."""
@@ -188,6 +188,17 @@ def stale_ledger_line(repo: Path) -> None:
     write(repo, "posthog/api/widget_report.py", "from products.legacy.backend.facade.api import *  # noqa: F403\n")
 
 
+def level_lost(repo: Path) -> None:
+    """depot folds its contracts module into its api, so depot, which claims nothing, no longer
+    passes Isolated (a facade needs a contracts module) and its level line goes stale: a person
+    decides whether depot loses the level."""
+    facade = repo / "products/depot/backend/facade"
+    contracts = (facade / "contracts.py").read_text()
+    (facade / "contracts.py").unlink()
+    api = facade / "api.py"
+    api.write_text(api.read_text().replace("from products.depot.backend.facade.contracts import BinCount\n", contracts))
+
+
 def exception_no_reason(repo: Path) -> None:
     write(repo, *ONE_FINDING)
     write(repo, "hoglint.exceptions.toml", EXCEPTION.format(reason=""))
@@ -229,6 +240,7 @@ SCENARIOS: dict[str, Callable[[Path], None]] = {
     "blocking-incomplete": blocking_incomplete,
     "many-problems": many_problems,
     "stale-ledger-line": stale_ledger_line,
+    "level-lost": level_lost,
     "exception-no-reason": exception_no_reason,
     "exception-complete": exception_complete,
     "move-in-product": move_in_product,
@@ -278,6 +290,8 @@ def outputs(base: Path) -> dict[str, str]:
                 if written.startswith("exit 0"):
                     git(repo, "add", "--", "hoglint.ledger")
                     found[f"{name}.rehook"] = run(repo, base.parent / f"work-{name}-rehook", hook)
+            if name == "level-lost":
+                found[f"{name}.shrink"] = run(repo, base.parent / f"work-{name}-shrink", lambda c: c.shrink_ledger())
             if name in COMPARED:
                 git(repo, "commit", "-qm", name)
                 found[f"{name}.compare"] = run(repo, base.parent / f"work-{name}-ci", compare)

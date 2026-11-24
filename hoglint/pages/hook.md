@@ -31,7 +31,8 @@ A new problem blocks.
 |---|---|---|
 | A new finding | Do the fix that the output gives. `hoglint explain <rule>` gives more. | As the output says. |
 | No fix fits | Stop and tell the person. | Needs a person. |
-| Stale ledger lines | Run `hoglint ledger shrink`, then stage `hoglint.ledger`. The command only removes lines. | Safe. |
+| Stale ledger lines | Run `hoglint ledger shrink`, then stage `hoglint.ledger`. The command only removes lines. It keeps a level line. | Safe. |
+| A group no longer passes a level that the ledger records | The group loses the level. Stop and tell the person. The person fixes the code so that the group passes again, or runs `hoglint ledger shrink --drop-levels`. | Needs a person. |
 | Findings that moved | Run `hoglint check --write-ledger`, then stage `hoglint.ledger`. The command records the new places and refuses new debt. | Safe. |
 | The commit adds ledger lines | Remove them. Fix the findings, or stop and tell the person. | Needs a person. |
 | A problem in `hoglint.exceptions.toml` | Stop and tell the person. A person writes and reviews exceptions. | Needs a person. |
@@ -41,7 +42,7 @@ A new problem blocks.
 
 ## Do not do these things to make the check pass
 
-- Do not edit `hoglint.ledger` by hand. Do not record new lines with `--write-ledger --record-growth`.
+- Do not edit `hoglint.ledger` by hand. Do not record new lines with `--write-ledger --record-growth`. Do not remove level lines with `hoglint ledger shrink --drop-levels`.
 - Do not add an exception.
 - Do not change `hoglint.toml`, the preset or the hoglint version.
 - Do not use `git commit --no-verify`. CI runs the same check, and more.

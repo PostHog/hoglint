@@ -591,3 +591,99 @@ def test_an_advisory_rules_unknowns_stay_in_the_report(
     out = capsys.readouterr().out
     assert "advisory unknowns (1)" in out
     assert "dynamic-imports [advisory, " in out
+
+
+def shrink_graphs() -> tuple[Graph, Graph]:
+    """Before: alerts reaches billing, a crossing the ledger records, and both groups pass
+    Isolated. After: alerts drops the import (a fixed finding) and billing reaches alerts, a new
+    crossing, so neither group passes Isolated."""
+    modules = ("products.billing.logic", "products.alerts.logic")
+    before = GraphBuilder().module(*modules).edge("import", "products.alerts.logic", "products.billing.logic").graph
+    after = GraphBuilder().module(*modules).edge("import", "products.billing.logic", "products.alerts.logic").graph
+    return before, after
+
+
+@pytest.fixture
+def lost_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Commands:
+    """A repo whose ledger was written on the graph before, now read on the graph after."""
+    before, after = shrink_graphs()
+    current = [before]
+
+    def build(self: GraphSource, code_root: Path, config: Config, staged: bool = False, tree: str = "") -> Graph:
+        return native_graph(current[0])
+
+    monkeypatch.setattr(GraphSource, "build", build)
+    write_config(tmp_path / "repo", CONFIG)
+    git_in(tmp_path / "repo", "init", "-q")
+    (tmp_path / "work").mkdir()
+    commands = Commands(tmp_path / "repo", tmp_path / "work")
+    assert commands.check(index=False, write_ledger=True, changed=False, record_growth=True) == 0
+    current[0] = after
+    return commands
+
+
+LEVEL_LINES = ["level:isolated\talerts\t1", "level:isolated\tbilling\t1"]
+FINDING_LINE = "crossings\tproducts.alerts.logic\tproducts.billing.logic\t1"
+
+
+def ledger_lines(commands: Commands) -> list[str]:
+    return [line for line in (commands.repo / "hoglint.ledger").read_text().splitlines() if not line.startswith("#")]
+
+
+def test_the_hook_words_a_lost_level_as_needing_a_person_and_a_fixed_finding_as_safe(
+    lost_level: Commands, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert ledger_lines(lost_level) == [FINDING_LINE, *LEVEL_LINES]
+    capsys.readouterr()
+    assert lost_level.check(index=False, write_ledger=False, changed=False) == 1
+    printed = capsys.readouterr().out
+    findings = printed.split("hoglint.ledger records 1 finding that the code no longer has.\n")[1].split("\n\n")[0]
+    levels = printed.split("hoglint.ledger records 2 groups that no longer pass a level.\n")[1].split("\n\n")[0]
+    assert "fix (safe): run `hoglint ledger shrink`" in findings and "level:" not in findings
+    assert "  stale  level:isolated alerts  1 -> 0\n  stale  level:isolated billing  1 -> 0\n" in levels
+    assert "so the group loses the level." in levels
+    assert "needs a person: stop and tell the person." in levels and "`hoglint ledger shrink --drop-levels`" in levels
+    assert "fix (safe)" not in levels
+
+
+def test_shrink_keeps_lost_level_lines_by_default_and_still_removes_fixed_findings(
+    lost_level: Commands, capsys: pytest.CaptureFixture[str]
+) -> None:
+    capsys.readouterr()
+    assert lost_level.shrink_ledger() == 1
+    printed = capsys.readouterr().out
+    assert ledger_lines(lost_level) == LEVEL_LINES
+    assert "removed or lowered 1 lines of hoglint.ledger\n" in printed
+    assert "kept 2 level lines of hoglint.ledger: the groups no longer pass the level\n" in printed
+    assert "  level:isolated\talerts  1 -> 0\n  level:isolated\tbilling  1 -> 0\n" in printed
+    assert "`hoglint ledger shrink --drop-levels`" in printed
+    # Again: no finding line is left to remove, and the level lines still need the switch.
+    assert lost_level.shrink_ledger() == 1
+    assert "removed or lowered" not in capsys.readouterr().out
+    assert ledger_lines(lost_level) == LEVEL_LINES
+
+
+def test_shrink_with_drop_levels_removes_lost_level_lines(
+    lost_level: Commands, capsys: pytest.CaptureFixture[str]
+) -> None:
+    capsys.readouterr()
+    assert lost_level.shrink_ledger(drop_levels=True) == 0
+    printed = capsys.readouterr().out
+    assert "removed or lowered 3 lines of hoglint.ledger\n" in printed and "kept" not in printed
+    # Only the stale lines go: the new crossing stays out, since shrink never adds a line.
+    assert ledger_lines(lost_level) == []
+
+
+def test_the_ledger_command_passes_drop_levels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[bool] = []
+
+    def shrink(self: Commands, drop_levels: bool = False) -> int:
+        seen.append(drop_levels)
+        return 0
+
+    monkeypatch.setattr(Commands, "shrink_ledger", shrink)
+    write_config(tmp_path / "repo", CONFIG)
+    git_in(tmp_path / "repo", "init", "-q")
+    assert main(["--repo", str(tmp_path / "repo"), "ledger", "shrink"]) == 0
+    assert main(["--repo", str(tmp_path / "repo"), "ledger", "shrink", "--drop-levels"]) == 0
+    assert seen == [False, True]

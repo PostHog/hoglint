@@ -33,7 +33,7 @@ The config can extend the built-in Django pack (`extends = ["hoglint:django"]`) 
 | `hoglint check` | Runs every rule on the working tree. |
 | `hoglint check --index` | Checks the staged snapshot. This is what the pre-commit hook runs. |
 | `hoglint check --write-ledger` | Rewrites the ledger from the scan. It adds new lines only with `--record-growth`. |
-| `hoglint ledger shrink` | Removes stale ledger lines. It never adds a line. |
+| `hoglint ledger shrink` | Removes stale ledger lines. It never adds a line. It keeps the level line of a group that no longer passes the level and exits 1; a person who lets the group lose the level passes `--drop-levels`. |
 | `hoglint compare --base <ref>` | Checks a pull request against the merge base of `<ref>`. |
 | `hoglint explain <rule>` | Prints the page of a rule. It also explains the labels of a path or module. |
 | `hoglint query --by owners` | Lists open findings and accepted debt, grouped by owners, by target or by package (`--by package`, the package label of the module a line comes from). `--json` prints the counts per group, status and rule as one JSON object. A status is `new` (it blocks), `advisory` (its rule never blocks) or `accepted` (in the ledger). |

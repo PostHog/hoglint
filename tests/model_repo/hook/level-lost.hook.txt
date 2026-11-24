@@ -1,0 +1,11 @@
+exit 1
+hoglint: this commit is blocked: 1 other problem.
+Fix each finding, or stop and tell the person. Do not edit hoglint.ledger, hoglint.exceptions.toml, hoglint.toml or a preset to make this check pass.
+
+hoglint.ledger records 1 group that no longer passes a level.
+  stale  level:isolated depot  1 -> 0
+  why: a level line records a group that passes a level. The code no longer passes it, so the group loses the level.
+  needs a person: stop and tell the person. A person decides: fix the code so the group passes the level again, or let the group lose the level with `hoglint ledger shrink --drop-levels`, then stage hoglint.ledger.
+
+Not shown: 25 advisory rows, 13 advisory unknowns, 106 old unknowns, 226 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+What the hook checks and what to do: hoglint help hook.
