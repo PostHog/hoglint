@@ -770,6 +770,22 @@ pub struct RegistryCall {
     pub literal: bool,
 }
 
+/// A site where a written limit of the reading applies (the walker's `%limit-N:WHAT` escape
+/// rows, t30, Nov 24): the reading knowingly does not follow it, and the run lists it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LimitSite {
+    pub path: String,
+    pub line: u32,
+    /// `limit-N`.
+    pub limit: String,
+    /// The enclosing def's qualified name; empty at module level.
+    pub scope: String,
+    /// The normalized operation: the same for every spelling of it.
+    pub operation: String,
+    /// One sentence on what the reading does not follow.
+    pub what: String,
+}
+
 /// Whether a registry's files (`module`, a glob) are the module a loader's name names: the glob
 /// ends with the name written as a path, a module file or a package (`facade.temporal` names
 /// `products/{product}/backend/facade/temporal.py`).
@@ -1354,6 +1370,8 @@ pub struct Producers<'p> {
     pub computed_loads: Vec<(Sid, String)>,
     /// Each call of a registry's loader that names no registry of it (`registry_calls`).
     pub registry_calls: Vec<RegistryCall>,
+    /// Each site where a written limit of the reading applies (`limit_sites`).
+    pub limit_sites: Vec<LimitSite>,
     /// Why a name the reading cannot read is unread, when a binding says it, by (module, key):
     /// "bound" (bound more than once) or "rebound" (bound again by a form it cannot read).
     pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
@@ -1605,6 +1623,7 @@ impl Producers<'_> {
         self.each(Self::strings);
         self.each(Self::dynamic_imports);
         self.each(Self::registry_calls);
+        self.each(Self::limit_sites);
         self.each(Self::unparsed);
         self.core.rec.finish();
     }
@@ -1990,6 +2009,10 @@ impl Producers<'_> {
         for escape in &record.escapes {
             let text = self.core.it.s(escape.name).to_string();
             let scope = escape.scope;
+            if text.starts_with('%') {
+                // A limit site (`limit_sites`): it touches nothing.
+                continue;
+            }
             let (keys, touch): (Vec<Sid>, Touch) = if text == "*" {
                 (out.keys().copied().collect(), Touch::Other)
             } else if text.starts_with('@') || text.starts_with('!') {
@@ -6547,6 +6570,29 @@ impl Producers<'_> {
                 loader,
                 name,
                 literal,
+            });
+        }
+    }
+
+    /// The limit rows of the module's file (`%limit-N:DEF\tOPERATION\tWHAT`, the walker's
+    /// `emit_limit`).
+    fn limit_sites(&mut self, owner: usize) {
+        let facts = self.core.facts.clone();
+        let file = &facts.files[self.scopes[owner].file as usize];
+        for escape in &file.escapes {
+            let text = self.core.it.s(escape.name);
+            let Some((limit, rest)) = text.strip_prefix('%').and_then(|t| t.split_once(':')) else {
+                continue;
+            };
+            let mut parts = rest.splitn(3, '\t');
+            let (scope, operation, what) = (parts.next(), parts.next(), parts.next());
+            self.limit_sites.push(LimitSite {
+                path: file.path.to_string(),
+                line: escape.line,
+                limit: limit.to_string(),
+                scope: scope.unwrap_or_default().to_string(),
+                operation: operation.unwrap_or_default().to_string(),
+                what: what.unwrap_or_default().to_string(),
             });
         }
     }

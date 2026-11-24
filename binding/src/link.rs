@@ -439,6 +439,18 @@ impl Link {
             .collect()
     }
 
+    /// Each site where a written limit of the reading applies (the link's `limit_sites`):
+    /// (path, line, limit, enclosing def, operation, what), sorted, once each.
+    fn limit_sites(&self) -> Vec<(String, u32, String, String, String, String)> {
+        (self.inner.limit_sites.iter())
+            .map(|site| {
+                let (path, limit) = (site.path.clone(), site.limit.clone());
+                let (scope, operation) = (site.scope.clone(), site.operation.clone());
+                (path, site.line, limit, scope, operation, site.what.clone())
+            })
+            .collect()
+    }
+
     /// What each export module hands out by import (`Graph.hand_outs`): (module, handed names,
     /// kept names, whether its `__all__` cannot be read, listed names it binds by nothing the
     /// engine can tell, private names it lists and defines, the assignments of no literal constant

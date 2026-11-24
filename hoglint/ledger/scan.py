@@ -57,7 +57,7 @@ from hoglint.ledger.records import (
     equality_to_json,
     touches,
 )
-from hoglint.model import SCHEMA_VERSION, Edge, FindingStatus, Graph, WitnessRow
+from hoglint.model import SCHEMA_VERSION, Edge, FindingStatus, Graph, LimitSite, WitnessRow
 from hoglint.rules.engine import UNREADABLE, RunResult
 from hoglint.rules.exceptions import ExceptionsFile
 from hoglint.rules.findings import FindingTable
@@ -69,7 +69,7 @@ SUMMARY_SECTIONS: dict[str, tuple[str, ...]] = {
     "incompletes": ("incomplete", "advisory_incomplete"),
     "findings": ("findings", "lines", "labels", "equality", "exceptions", "modules"),
     "couplings": ("triples", "couplings", "witnesses"),
-    "levels": ("levels", "level_failures", "level_claims", "claim_errors"),
+    "levels": ("levels", "level_failures", "level_claims", "claim_errors", "limits"),
 }
 ALL_SECTIONS = frozenset(SUMMARY_SECTIONS)
 Triple = tuple[str, str, str, str]  # (src group, dst group, edge kind, context)
@@ -206,6 +206,7 @@ class ScanSummary:
     # level -> group -> (the file that claims the level, why the group fails it; empty when it passes)
     level_claims: dict[str, dict[str, tuple[str, list[str]]]] = field(default_factory=dict)
     claim_errors: dict[str, str] = field(default_factory=dict)  # level -> why its claims cannot be read
+    limits: list[LimitSite] = field(default_factory=list)  # where a written limit of the reading applies
     equality: EqualityResult | None = None
     exceptions: ExceptionsRecord = field(default_factory=ExceptionsRecord)
     advisory: frozenset[str] = frozenset()
@@ -261,6 +262,7 @@ class ScanSummary:
             }
             if level.claim_error:
                 summary.claim_errors[name] = portable.text(level.claim_error)
+        summary.limits = list(result.limits)
         summary.equality = result.equality
         summary.exceptions = ExceptionsRecord.of(result.exceptions, exceptions)
         summary.advisory = frozenset(rule for rule in config.rules if result.advisory(rule))
@@ -339,6 +341,7 @@ class ScanSummary:
                 for name, claims in self.level_claims.items()
             },
             "claim_errors": self.claim_errors,
+            "limits": [site.to_json() for site in self.limits],
             "equality": equality_to_json(self.equality),
             "exceptions": self.exceptions.to_json(),
             "advisory": sorted(self.advisory),
@@ -385,6 +388,7 @@ class ScanSummary:
                 for name, claims in data.get("level_claims", {}).items()
             },
             claim_errors={name: str(error) for name, error in data.get("claim_errors", {}).items()},
+            limits=[LimitSite.from_json(site) for site in data.get("limits", [])],
             equality=equality_from_json(data.get("equality")),
             exceptions=ExceptionsRecord.from_json(data.get("exceptions", {})),
             advisory=frozenset(data.get("advisory", [])),

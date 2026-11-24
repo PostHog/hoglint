@@ -280,6 +280,40 @@ enum Use<'a> {
 /// import system's (round 11).
 const HOOKS: [&str; 3] = ["meta_path", "path_hooks", "path_importer_cache"];
 
+/// The limit rows (`emit_limit`) the import-system rule writes through its row lists: a row that
+/// starts with `%` is a limit site, not a value row.
+const HANDED_ON: &str =
+    "handed on in a function body: what the recipient does with it is not followed";
+const FRAME_REACHED: &str =
+    "a change made through the frame, module or referrers it returns is not seen";
+const MODULES_REMOVED: &str = "a removal or restoration of a `sys.modules` entry is not read";
+const PATH_CHANGED: &str = "the reading keeps the repository layout whatever `sys.path` holds";
+
+/// The methods that change a list in place (limit 11's `sys.path` sites).
+const PATH_CHANGERS: [&str; 10] = [
+    "append",
+    "extend",
+    "insert",
+    "remove",
+    "pop",
+    "clear",
+    "sort",
+    "reverse",
+    "__setitem__",
+    "__iadd__",
+];
+
+/// Calls that reach a frame, a module or the objects that refer to a value (limit 9): a change
+/// made through what they return is not seen.
+const FRAME_CALLS: [&str; 6] = [
+    "sys._getframe",
+    "inspect.currentframe",
+    "inspect.stack",
+    "inspect.getmodule",
+    "gc.get_referrers",
+    "gc.get_referents",
+];
+
 /// The calls of a member of shared import machinery that change it (ruling A): the mutating
 /// methods, a cache invalidation, a handler registration.
 const MACHINERY_CHANGERS: [&str; 4] = ["invalidate_caches", "register", "__iadd__", "__ior__"];
@@ -3638,7 +3672,16 @@ impl<'a, 'w> Walker<'a, 'w> {
         if !stored && self.is_sys_modules(expr, at.scope) {
             return self.emit_modules_use(at, pos);
         }
-        let import_rows = self.import_system(expr, at);
+        let (limits, import_rows): (Vec<String>, Vec<String>) = (self.import_system(expr, at))
+            .into_iter()
+            .partition(|row| row.starts_with('%'));
+        for row in limits {
+            let name = self.limit_row(at, &row[1..]);
+            self.out.escapes.push(Tag {
+                site: at.site(pos),
+                name,
+            });
+        }
         if !import_rows.is_empty() {
             for row in import_rows {
                 self.emit_value_row(at, pos, row);
@@ -3704,7 +3747,7 @@ impl<'a, 'w> Walker<'a, 'w> {
                 };
                 // Limit 10: `del sys.modules[key]` publishes no value.
                 if subscript.ctx.is_del() {
-                    return;
+                    return self.emit_limit(at, pos, 10, "`del sys.modules[...]`", MODULES_REMOVED);
                 }
                 if !subscript.ctx.is_load() {
                     let row = self.keyed(format!("+{}:*", module.unwrap_or_default()));
@@ -3843,7 +3886,10 @@ impl<'a, 'w> Walker<'a, 'w> {
                     "update" | "__ior__" => self.dict_keys(call, at.scope),
                     "__setitem__" | "setdefault" => vec![key(self)],
                     // Limit 10: a removal publishes no value.
-                    "pop" | "popitem" | "__delitem__" | "clear" => return,
+                    "pop" | "popitem" | "__delitem__" | "clear" => {
+                        let operation = format!("`sys.modules.{method}()`");
+                        return self.emit_limit(at, pos, 10, &operation, MODULES_REMOVED);
+                    }
                     _ => vec![None],
                 }
             }
@@ -3855,9 +3901,12 @@ impl<'a, 'w> Walker<'a, 'w> {
                 if self.pytest_monkeypatch(call, at)
                     && callee_text(call) == "monkeypatch.delitem" =>
             {
-                return;
+                let operation = "`monkeypatch.delitem(sys.modules)`";
+                return self.emit_limit(at, pos, 10, operation, MODULES_REMOVED);
             }
             Some(Frame::Arg(call, 0)) if self.patch_dict(call) => {
+                let operation = "`patch.dict(sys.modules)` teardown";
+                self.emit_limit(at, pos, 10, operation, MODULES_REMOVED);
                 self.patch_dict_keys(call, at.scope)
             }
             Some(Frame::Arg(call, 0)) if self.pytest_monkeypatch(call, at) => {
@@ -3971,6 +4020,18 @@ impl<'a, 'w> Walker<'a, 'w> {
                 if attr == "addaudithook" && self.is_sys(&attribute.value, at.scope) {
                     return vec!["^hooks".to_string()];
                 }
+                // Limit 11: `sys.path` changed in place (`sys.path.insert(0, p)`, `sys.path[0] =
+                // p`); a store or a `+=` of the attribute is `object_rows`'.
+                if attr == "path"
+                    && attribute.ctx.is_load()
+                    && self.is_sys(&attribute.value, at.scope)
+                    && self.changes_in_place()
+                {
+                    let operation = self.in_place_operation("sys.path");
+                    let mut rows = vec![format!("%limit-11\t{operation}\t{PATH_CHANGED}")];
+                    rows.extend(self.protected_rows(expr, at));
+                    return rows;
+                }
                 if attr == "iter_importer_modules" && self.pkgutil(&attribute.value) {
                     let mut rows = vec!["^hooks".to_string()];
                     rows.extend(self.protected_rows(expr, at));
@@ -4083,6 +4144,16 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
+    /// Whether the list being walked is changed in place where it sits: a method of it that
+    /// changes a list (`PATH_CHANGERS`), or an item of it stored or deleted.
+    fn changes_in_place(&self) -> bool {
+        match self.path.last() {
+            Some(Frame::Attr(method)) => PATH_CHANGERS.contains(method),
+            Some(Frame::SubValue(subscript)) => !subscript.ctx.is_load(),
+            _ => false,
+        }
+    }
+
     /// The rows a use of a protected object writes (`protected`, `protected_use`,
     /// `object_rows`); none when the expression is no protected object.
     fn protected_rows(&self, expr: &'a Expr, at: At) -> Vec<String> {
@@ -4112,8 +4183,22 @@ impl<'a, 'w> Walker<'a, 'w> {
         let function = at.scope >= 0 && !self.defs.is_class(at.scope);
         match (object, used) {
             (_, Use::Read | Use::Inner) => Vec::new(),
-            (Object::Sys | Object::Builtins, Use::Handed) if function => Vec::new(),
+            (Object::Sys | Object::Builtins, Use::Handed) if function => {
+                let name = if object == Object::Sys {
+                    "sys"
+                } else {
+                    "builtins"
+                };
+                let operation = self.handoff_operation(name);
+                vec![format!(
+                    "%limit-9\t{operation}\tthe module `{name}` {HANDED_ON}"
+                )]
+            }
             (Object::Machinery, _) => any(),
+            // Limit 11: the reading keeps the repository layout whatever `sys.path` holds.
+            (Object::Sys, Use::Changed(Some("path"))) => {
+                vec![format!("%limit-11\t`sys.path` stored\t{PATH_CHANGED}")]
+            }
             (Object::Sys, Use::Changed(Some(name)))
                 if !HOOKS.contains(&name) && name != "modules" && !is_dunder(name) =>
             {
@@ -5092,7 +5177,12 @@ impl<'a, 'w> Walker<'a, 'w> {
                 let row = changed(&changed_member);
                 self.emit_value_row(at, pos, row);
             }
-            ModuleUse::Handed if function => self.emit_value_row(at, pos, "*".to_string()),
+            ModuleUse::Handed if function => {
+                let operation = self.handoff_operation("a computed module");
+                let what = format!("a module value computed from a name, {HANDED_ON}");
+                self.emit_limit(at, pos, 9, &operation, &what);
+                self.emit_value_row(at, pos, "*".to_string());
+            }
             // A module a literal or a name proves is no computed value: only a change counts.
             ModuleUse::Handed if tracked.module.is_some() => {}
             ModuleUse::Handed => self.emit_value_row(at, pos, "+:*".to_string()),
@@ -5316,6 +5406,89 @@ impl<'a, 'w> Walker<'a, 'w> {
         });
     }
 
+    /// A site where a written limit of the reading applies (t30, Nov 24; the second opinion's
+    /// shape): `%limit-N:DEF\tOPERATION\tWHAT`, DEF the enclosing def's qualified name (empty at
+    /// module level), OPERATION the normalized operation (the same for every spelling of it),
+    /// WHAT one sentence on what is not followed. No rule reads it; the run lists it
+    /// (`limit_sites`). Neither part names the line, so a site that only moves keeps its text.
+    fn emit_limit(&mut self, at: At, pos: (i64, i64), limit: u8, operation: &str, what: &str) {
+        if !self.wants(Kind::Escapes) {
+            return;
+        }
+        let name = self.limit_row(at, &format!("limit-{limit}\t{operation}\t{what}"));
+        self.out.escapes.push(Tag {
+            site: at.site(pos),
+            name,
+        });
+    }
+
+    /// The row of a limit site given as `limit-N\tOPERATION\tWHAT` (`emit_limit`).
+    fn limit_row(&self, at: At, site: &str) -> String {
+        let (limit, rest) = site.split_once('\t').unwrap_or((site, ""));
+        format!("%{limit}:{}\t{rest}", self.scope_name(at.scope))
+    }
+
+    /// The qualified name of a scope (`Cls.method`); empty at module level.
+    fn scope_name(&self, scope: i64) -> String {
+        let mut names = Vec::new();
+        let mut at = scope;
+        while at >= 0 {
+            let entry = &self.defs.entries[at as usize];
+            names.push(match entry.node {
+                DefNode::Func(f) => f.name.as_str(),
+                DefNode::Class(c) => c.name.as_str(),
+            });
+            at = entry.parent;
+        }
+        names.reverse();
+        names.join(".")
+    }
+
+    /// A callee's name for a limit site's operation: through the file's import of its first part
+    /// (`b.getattr` with `import builtins as b` is `builtins.getattr`), else as written.
+    fn call_name(&self, call: &ast::ExprCall) -> String {
+        let text = callee_text(call);
+        let (head, rest) = match text.split_once('.') {
+            Some((head, rest)) => (head, Some(rest)),
+            None => (text.as_str(), None),
+        };
+        match (self.bound.get(head).and_then(|b| b.origin()), rest) {
+            (Some(base), Some(rest)) => format!("{base}.{rest}"),
+            (Some(base), None) => base,
+            (None, _) => text.clone(),
+        }
+    }
+
+    /// The operation of a handoff of `object` where the walk is: to which call and slot, or a
+    /// return (limit 9's sites).
+    fn handoff_operation(&self, object: &str) -> String {
+        match self.path.last() {
+            Some(Frame::Arg(call, index)) => {
+                format!(
+                    "`{object}` to `{}()` argument {index}",
+                    self.call_name(call)
+                )
+            }
+            Some(Frame::Kw(call, name)) => {
+                format!(
+                    "`{object}` to `{}({}=)`",
+                    self.call_name(call),
+                    name.unwrap_or("**")
+                )
+            }
+            Some(Frame::Terminal("return")) => format!("return `{object}`"),
+            _ => format!("`{object}` handed on"),
+        }
+    }
+
+    /// The operation of an in-place change of the list being walked (`changes_in_place`).
+    fn in_place_operation(&self, list: &str) -> String {
+        match self.path.last() {
+            Some(Frame::Attr(method)) => format!("`{list}.{method}()`"),
+            _ => format!("`{list}[...]` stored"),
+        }
+    }
+
     // ---- emitters -------------------------------------------------------------------------
 
     /// A `computed` row for a module named by `value` at `pos`, when it is no string literal and
@@ -5343,6 +5516,21 @@ impl<'a, 'w> Walker<'a, 'w> {
         }
     }
 
+    /// The frame call (`FRAME_CALLS`) a callee names through the file's imports, if any. It reads
+    /// the import binding only, so it relies on no name (`resolve` would).
+    fn frame_call(&self, callee: &str) -> Option<&'static str> {
+        let (head, rest) = match callee.split_once('.') {
+            Some((head, rest)) => (head, Some(rest)),
+            None => (callee, None),
+        };
+        let base = self.bound.get(head)?.origin()?;
+        let full = match rest {
+            Some(rest) => format!("{base}.{rest}"),
+            None => base,
+        };
+        FRAME_CALLS.iter().copied().find(|name| *name == full)
+    }
+
     fn emit_call(&mut self, call: &'a ast::ExprCall, at: At) {
         let (want_callees, want_calls) = (self.wants(Kind::Callees), self.wants(Kind::Calls));
         let want_computed = self.wants(Kind::Computed);
@@ -5355,6 +5543,12 @@ impl<'a, 'w> Walker<'a, 'w> {
         if want_computed || want_escapes {
             self.emit_namespace_call(call, &callee, at, (l, c));
             self.emit_entry_call(call, at, (l, c));
+        }
+        if let Some(full) = self.frame_call(&callee) {
+            self.emit_limit(at, (l, c), 9, &format!("`{full}()`"), FRAME_REACHED);
+        }
+        if callee.contains('.') && callee.ends_with(".syspath_prepend") {
+            self.emit_limit(at, (l, c), 11, "`syspath_prepend()`", PATH_CHANGED);
         }
         if want_callees {
             let key = TextKey {

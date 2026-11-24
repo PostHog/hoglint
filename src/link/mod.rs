@@ -154,8 +154,8 @@ use index::EdgeIndex;
 use intern::{Interner, Sid};
 use paths::{ModuleIndex, ModuleNamer, PathGlobs};
 use produce::{
-    EdgeStore, INHERIT, KIND_NAMES, NO_FILE, PackRow, Producers, Producing, RegistryCall,
-    Sequences, Symbols,
+    EdgeStore, INHERIT, KIND_NAMES, LimitSite, NO_FILE, PackRow, Producers, Producing,
+    RegistryCall, Sequences, Symbols,
 };
 use resolve::Core;
 use rules::glob::ExportPaths;
@@ -308,6 +308,9 @@ pub struct Link {
     /// Each call of a registry's loader that names no registry of it, or names it by a value the
     /// link cannot read, by path and line (produce.rs `registry_calls`).
     pub registry_calls: Vec<RegistryCall>,
+    /// Each site where a written limit of the reading applies, by path and line, once each
+    /// (produce.rs `limit_sites`).
+    pub limit_sites: Vec<LimitSite>,
     /// Why a name the reading cannot read is unread, when a binding says it (produce.rs
     /// `unread_causes`).
     pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
@@ -456,6 +459,7 @@ impl Link {
             path_lists: FxHashSet::default(),
             computed_loads: Vec::new(),
             registry_calls: Vec::new(),
+            limit_sites: Vec::new(),
             unread_causes: FxHashMap::default(),
             rebound_imports: FxHashSet::default(),
             foreign: FxHashMap::default(),
@@ -486,6 +490,9 @@ impl Link {
         let computed_loads = std::mem::take(&mut producers.computed_loads);
         let mut registry_calls = std::mem::take(&mut producers.registry_calls);
         registry_calls.sort();
+        let mut limit_sites = std::mem::take(&mut producers.limit_sites);
+        limit_sites.sort();
+        limit_sites.dedup();
         let unread_causes = std::mem::take(&mut producers.unread_causes);
         let rebound_imports = std::mem::take(&mut producers.rebound_imports);
         let bound = std::mem::take(&mut producers.bound);
@@ -515,6 +522,7 @@ impl Link {
             computed_reads,
             computed_loads,
             registry_calls,
+            limit_sites,
             unread_causes,
             rebound_imports,
             bound,

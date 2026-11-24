@@ -17,6 +17,7 @@ incomplete (exit 2), never a skip. Only a base that predates hoglint skips the g
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,7 +26,7 @@ from hoglint.ledger.file import LedgerFile, LineKey, render_key
 from hoglint.ledger.growth import AttributionCheck, GrowthItem, GrowthKey, GrowthResult, Renames, growth_key
 from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute, rows
 from hoglint.ledger.scan import Obligation, ScanSummary, Triple
-from hoglint.model import IncompleteCause, IncompleteKind
+from hoglint.model import IncompleteCause, IncompleteKind, LimitSite
 
 EXCEPTION_ENTRY = "exception"
 FILE_ENTRY = "file"
@@ -104,6 +105,7 @@ def growth_row(item: GrowthItem) -> str:
     return f"{item.rule} {' '.join(item.key)}: {item.before} -> {item.after}"
 
 
+LIMITS_TITLE = "new or changed limit sites: the reading does not follow them (a person's review; never blocks)"
 UNWATCHED_TITLE = "files that stop being watched (advisory: a change to one no longer runs the full suite)"
 
 
@@ -125,6 +127,9 @@ class CompareReport:
     # Files a group watches at the base and no longer at the head, under the head's policy: the
     # test selection then skips more for them. Advisory (hoglint/watched.py `stopped_watching`).
     unwatched: list[str] = field(default_factory=list)
+    # Sites where a written limit of the watched reading applies at the head and not at the base
+    # (`new_limit_sites`): a person's review, never a failure.
+    new_limits: list[str] = field(default_factory=list)
 
     def incomplete(self, label: Attribution) -> list[Obligation]:
         return [obligation for attribution, obligation in rows(self.labels) if attribution is label]
@@ -189,6 +194,7 @@ class CompareReport:
                 "debt the new scanner, policy or environment no longer sees (review)",
                 [f"{growth_row(g)}  [{'+'.join(self.growth.shrink_causes)}]" for g in self.growth.shrink],
             ),
+            (LIMITS_TITLE, self.new_limits),
         ]
         if any(rows for _, rows in review):
             out.append("Needs a person's review (it passes here; the owners of the files hold the gate):")
@@ -233,6 +239,7 @@ class CompareReport:
         )
         section("policy entries changed", [f"{c.label:8} {c.change:8} {c.entry}  ({c.why})" for c in self.policy])
         section("new group edges (pair, kind, context)", [" ".join(t) for t in self.new_triples])
+        section(LIMITS_TITLE, self.new_limits)
         section(UNWATCHED_TITLE, self.unwatched)
         if self.growth.skipped:
             out.append(f"growth check skipped: {self.growth.skipped}")
@@ -255,6 +262,20 @@ class CompareReport:
         ):
             section(title, [f"{rule}: {reason}" for rule, _, reason in self.incomplete(label)])
         return "\n".join(out) + "\n"
+
+
+def new_limit_sites(base: list[LimitSite], head: list[LimitSite]) -> list[str]:
+    """The head's limit sites the base does not have, as rows: a new site, or one whose operation
+    changed. Sites match by limit, file, enclosing def and operation (`LimitSite.key`), counted, so
+    a site that only moves to another line stays quiet and a second one of the same kind shows."""
+    left = Counter(site.key() for site in base)
+    out = []
+    for site in head:
+        if left[site.key()]:
+            left[site.key()] -= 1
+            continue
+        out.append(site.row())
+    return out
 
 
 def policy_entries(policy: RawPolicy) -> dict[str, str]:

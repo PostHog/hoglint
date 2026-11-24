@@ -73,6 +73,9 @@ class Link:
         raise after it. False when the rows are shared and stay."""
     def edge_count(self) -> int:
         """Every edge, core and pack: ids 0..edge_count()."""
+    def limit_sites(self) -> list[tuple[str, int, str, str, str, str]]:
+        """(path, line, limit, enclosing def, operation, what) of each site where a written limit
+        of the watched reading applies, sorted, once each."""
     def core_count(self) -> int:
         """The core edges: ids below it; pack edges come after them."""
     def add_edges(

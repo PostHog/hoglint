@@ -33,7 +33,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from hoglint.compare import Comparer, CompareReport, RawPolicy, Scans
+from hoglint.compare import Comparer, CompareReport, RawPolicy, Scans, new_limit_sites
 from hoglint.config import CONFIG_FILE, Config, ConfigError, load_config
 from hoglint.config.explain import ConfigExplainer
 from hoglint.config.loader import PACK_PREFIX
@@ -1362,6 +1362,8 @@ class Commands:
             renames,
         ).report()
         report.unwatched = self.unwatched(head, head_tree, base_root, base_tree, base_head)
+        base_scan = scans.base if scans.base is not None else scans.base_head
+        report.new_limits = new_limit_sites(base_scan.limits if base_scan is not None else [], scans.head.limits)
         owners = ReadTimeOwners(head.config, scans.head.modules, head.files_root or head.root)
         today = self.runner.today or datetime.date.today()
         policy = Policy.of(head.config, CONFIG_FILE)

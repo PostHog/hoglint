@@ -315,6 +315,47 @@ class RuleResult:
     incomplete: list[tuple[IncompleteCause, str]] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class LimitSite:
+    """A site where a written limit of the watched reading applies (the link's `limit_sites`):
+    the reading knowingly does not follow it. It never blocks; the watched answer and the stored
+    summary list it, and `compare` shows a new one for a person's review."""
+
+    path: str
+    line: int
+    limit: str  # `limit-N`, as numbered on the design page
+    scope: str  # the enclosing def's qualified name; empty at module level
+    operation: str  # the normalized operation: the same for every spelling of it
+    what: str  # one sentence on what the reading does not follow
+
+    @property
+    def site(self) -> str:
+        return f"{self.path}:{self.line}"
+
+    def key(self) -> tuple[str, str, str, str]:
+        """What `compare` matches a site by: the limit, the file, the enclosing def and the
+        operation. The line is for navigation only, so a site that only moves is not new."""
+        return (self.limit, self.path, self.scope, self.operation)
+
+    def row(self) -> str:
+        where = f"in {self.scope}" if self.scope else "at module level"
+        return f"{self.limit} {self.site} {where}: {self.operation}: {self.what}"
+
+    def to_json(self) -> dict[str, str]:
+        return {
+            "limit": self.limit,
+            "site": self.site,
+            "def": self.scope,
+            "operation": self.operation,
+            "what": self.what,
+        }
+
+    @staticmethod
+    def from_json(data: dict[str, str]) -> LimitSite:
+        path, _, line = data["site"].rpartition(":")
+        return LimitSite(path, int(line), data["limit"], data["def"], data["operation"], data["what"])
+
+
 @dataclass(frozen=True, slots=True)
 class HandOut:
     """What one export module binds by import, split by the hand-out rule (src/link/surface.rs): the

@@ -293,5 +293,6 @@ def watched_answer(
         "complete": not problems,
         "problems": problems,
         "groups": groups,
+        "limits": [site.to_json() for site in result.limits],
     }
     return WatchedAnswer(data)

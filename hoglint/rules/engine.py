@@ -25,6 +25,7 @@ from hoglint.model import (
     Graph,
     IncompleteCause,
     IncompleteKind,
+    LimitSite,
     Outcome,
     RuleResult,
 )
@@ -121,6 +122,15 @@ class StaleNames:
         return IncompleteItem(STALE_NAMES, key, reason, kind=IncompleteKind.STALE_NAME)
 
 
+def limit_sites(graph: Graph) -> list[LimitSite]:
+    """The sites where a written limit of the watched reading applies (`limit_sites` of the native
+    link), sorted by path and line. None without the `escapes` facts: no rule reads the items."""
+    link = getattr(graph, "link", None)
+    if link is None:
+        raise EngineError("rules run in the native evaluator only: link the graph natively first")
+    return [LimitSite(*site) for site in link.limit_sites()]
+
+
 class RegistryCalls:
     """The calls of a registry's loader whose name no `[registries]` entry of that loader declares,
     or that the link cannot read (`registry_calls` of the native link). The link records them while
@@ -197,6 +207,8 @@ class RunResult:
     scan: dict[LineKey, int] = field(default_factory=dict)
     equality: EqualityResult | None = None
     ledger: LedgerFile | None = None
+    # Where a written limit of the watched reading applies: listed, never blocking.
+    limits: list[LimitSite] = field(default_factory=list)
 
     def findings(self) -> list[Finding]:
         return [finding for run in self.runs.values() for finding in run.findings]
@@ -392,6 +404,7 @@ class Engine:
         run writes (its own scan), so the next check over the same code finds that ledger equal."""
         ctx = self.rule_context()
         result = RunResult(self.config, self.labeler, self.run_rules(ctx))
+        result.limits = limit_sites(self.graph)
         if exceptions is not None:
             result.exceptions = apply_exceptions(result.runs, exceptions, self.today)
         result.scan = self.scan_lines(result)
