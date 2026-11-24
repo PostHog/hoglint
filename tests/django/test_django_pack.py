@@ -105,6 +105,54 @@ def test_signal_edges_resolve_senders_place_a_senderless_receiver_at_its_signal(
     assert {e.attr("signal") for e in edges.values()} == {"django.db.models.signals.post_save"}
 
 
+def connect_call(line: int, callee: str, kws: list) -> list:
+    """A module-level `calls` row: `<callee>(on_order, **kws)`."""
+    return [-1, -1, line, 0, 0, callee, ["on_order"], kws]
+
+
+CONNECTS = {
+    "shop/wiring.py": {
+        "imports": [
+            import_from("django.db.models", "signals"),
+            import_from("django.db.models.signals", "post_save", line=2),
+            import_from("shop.models", "Order", line=3),
+        ],
+        "defs": [func_def("on_order", 4)],
+        "calls": [
+            connect_call(6, "post_save.connect", [["sender", "Order"]]),
+            connect_call(7, "?.connect", [["sender", "Order"]]),  # getattr(signals, "post_save").connect
+            connect_call(8, "unbound.connect", []),  # a name nothing binds
+            connect_call(9, "Order.connect", []),  # a name that is no signal
+        ],
+    },
+    "shop/drivers.py": {
+        "imports": [import_from("shop.models", "Order")],
+        "defs": [func_def("on_order", 2)],
+        "calls": [connect_call(3, "?.connect", []), connect_call(4, "unbound.connect", [])],
+    },
+}
+
+
+def test_a_connect_on_what_may_be_a_signal_but_names_none_is_unresolved() -> None:
+    """In a file that imports signals, a `.connect` on an expression or on a name that resolves to
+    nothing may be a signal's: an unresolved edge, so the rules that read it go incomplete. A name
+    that resolves to something else is no signal, and a file that imports no signals connects a
+    driver or a client."""
+    graph = FactRepo(CONNECTS).graph()
+
+    edges = sorted(
+        (e.site.path, e.site.line, e.attr("signal"), e.surface, e.resolution, e.attr("reason"))
+        for e in graph.by_kind("signal")
+    )
+
+    assert edges == [
+        ("shop/wiring.py", 6, "django.db.models.signals.post_save", "Order", Resolution.RESOLVED, ""),
+        ("shop/wiring.py", 7, "?", "<expression>", Resolution.UNRESOLVED, "unknown-signal"),
+        ("shop/wiring.py", 8, "?", "unbound", Resolution.UNRESOLVED, "unknown-signal"),
+    ]
+    assert graph.failed_producers == {}
+
+
 def setting_string(line: int, value: str, up: str) -> list:
     return [-1, -1, line, 0, 0, value, "", up]
 

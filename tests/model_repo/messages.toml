@@ -1705,6 +1705,12 @@ text = "signal 'label' did not resolve"
 
 [[incomplete]]
 rule = "receiver-direction"
+identity = ["products.racks.backend.team_listeners|signal|<expression>"]
+kind = "unresolved"
+text = "signal '<expression>' did not resolve"
+
+[[incomplete]]
+rule = "receiver-direction"
 identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
 kind = "not-modelled"
 text = "signal '<Call>' did not resolve"
@@ -1936,6 +1942,12 @@ rule = "wiring-watched"
 identity = ["products.gatekeeper.backend.apps|label"]
 kind = "not-modelled"
 text = "cannot place 'label' for coverage"
+
+[[incomplete]]
+rule = "wiring-watched"
+identity = ["products.racks.backend.team_listeners|<expression>"]
+kind = "not-modelled"
+text = "cannot place '<expression>' for coverage"
 
 [[incomplete]]
 rule = "wiring-watched"

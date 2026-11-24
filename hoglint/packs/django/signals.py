@@ -35,6 +35,11 @@ CONNECT = "connect"
 UNKNOWN = "?"
 OPAQUE_SEQUENCES = frozenset({"List", "Tuple"})
 PLAIN_ATTRS = re.compile(r"(\.\w+)*")
+# A `.connect` on what names no known signal may still be a signal's in a file that imports one of
+# these: Django's dispatch package or a signals module. `EXPRESSION` names a receiver object that
+# is no name (`getattr(signals, name).connect`).
+SIGNAL_PARTS = frozenset({"signals", "dispatch"})
+EXPRESSION = "<expression>"
 
 
 @dataclass(frozen=True)
@@ -268,13 +273,49 @@ class SignalProducer(SignalValues):
             return str(hit.origin)
         return UNKNOWN
 
+    def imports_signals(self, scope: FileScope) -> bool:
+        """The file imports a module or a name with a `signals` or `dispatch` part: Django's
+        dispatch package, a signals module, or a name from one."""
+        return any(SIGNAL_PARTS & set(name.split(".")) for name in self.reader.imported_modules(scope))
+
+    def unknown_connect(self, scope: FileScope, callee: str, at_scope: int, line: int) -> str | None:
+        """What a `.connect` call is on, when it may be a signal but names none the facts can tell:
+        an expression (`getattr(signals, name)`, a subscript, a call's result) or a name that
+        resolves to nothing. None for any other call."""
+        receiver_chain, _, attr = callee.rpartition(".")
+        if attr != CONNECT or not receiver_chain:
+            return None
+        if receiver_chain.startswith(UNKNOWN):
+            return EXPRESSION
+        if self.lookup(scope, receiver_chain, at_scope, line) is None:
+            return receiver_chain
+        return None
+
+    def unknown_signal(self, scope: FileScope, site: Site, flags: int, connected: str, receiver: str) -> Edge:
+        """A `connect` whose signal cannot be told is unresolved: the rules that read it go
+        incomplete, as for a sender hoglint cannot place."""
+        sender = Sender(connected, (), Resolution.UNRESOLVED, "unknown-signal")
+        return self.edge(scope, site, flags, sender, UNKNOWN, receiver, "connect")
+
     def connect_edges(self, scope: FileScope, calls: list[list], callees: list[list]) -> list[Edge]:
-        """`<signal>.connect(fn, sender=X)`; without argument facts the edge stays unresolved."""
+        """`<signal>.connect(fn, sender=X)`; without argument facts the edge stays unresolved.
+
+        In a file that imports signals, a `.connect` on what names no signal the facts can tell
+        (`unknown_connect`) is an unresolved edge: it may be a signal's. Elsewhere it is taken for
+        another library's `connect` (a database driver, a client), as before."""
         out: list[Edge] = []
         with_args: set[tuple[int, str]] = set()
+        signals_imported = bool(calls or callees) and self.imports_signals(scope)
         for at_scope, _, line, column, flags, callee, args, kws in calls:
             signal = self.connected_signal(scope, callee, at_scope, line)
             if signal is None:
+                connected = self.unknown_connect(scope, callee, at_scope, line) if signals_imported else None
+                if connected is None:
+                    continue
+                with_args.add((at_scope, callee))
+                receiver = self.receiver_name(scope, at_scope, args[0], line) if args else UNKNOWN
+                site = scope.site(at_scope, line, column)
+                out.append(self.unknown_signal(scope, site, flags, connected, receiver))
                 continue
             with_args.add((at_scope, callee))
             receiver = self.receiver_name(scope, at_scope, args[0], line) if args else UNKNOWN
@@ -289,6 +330,10 @@ class SignalProducer(SignalValues):
                 continue
             signal = self.connected_signal(scope, callee, at_scope, line)
             if signal is None:
+                connected = self.unknown_connect(scope, callee, at_scope, line) if signals_imported else None
+                if connected is not None:
+                    site = scope.site(at_scope, line, column)
+                    out.extend([self.unknown_signal(scope, site, 0, connected, UNKNOWN)] * count)
                 continue
             site = scope.site(at_scope, line, column)
             sender = Sender("", (), Resolution.UNRESOLVED, "no-call-facts")

@@ -270,6 +270,27 @@ def test_a_hook_declares_which_arguments_hand_it_a_callable(derived: tuple[dict[
     assert any("register_restock_hook" in reason for reason in unknowns), groups["racks"]["reasons"]
 
 
+def test_a_connect_on_a_computed_signal_is_its_groups_unknown(
+    derived: tuple[dict[str, Any], Path], tmp_path: Path
+) -> None:
+    """RD08: a receiver connected to `getattr(signals, "post_save")` cannot be placed, so `racks`
+    holds an unknown; the same receiver on `post_save.connect` is watched as before. In a copy, the
+    computed form in `depot` makes the group that passed fail, and the answer stays complete."""
+    racks = derived[0]["groups"]["racks"]
+    assert any("<expression>" in reason for reason in racks["reasons"]), racks["reasons"]
+    assert "holds a receiver" in racks["watched"]["products/racks/backend/team_watch.py"]
+    repo = tmp_path / "repo"
+    copy_tree(repo)
+    listeners = repo / "products/racks/backend/team_listeners.py"
+    (repo / DEPOT / "backend/team_listeners.py").write_text(listeners.read_text())
+    lay_derived(repo)
+    answer, _ = watched(repo, tmp_path / "run")
+    assert answer["complete"], answer["problems"]
+    depot = answer["groups"]["depot"]
+    assert not depot["passes"]
+    assert any("<expression>" in reason for reason in depot["reasons"]), depot["reasons"]
+
+
 def test_the_same_tree_gives_the_same_bytes(derived: tuple[dict[str, Any], Path], tmp_path: Path) -> None:
     answer, repo = derived
     again, _ = watched(repo, tmp_path / "again")

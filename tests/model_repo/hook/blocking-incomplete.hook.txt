@@ -9,5 +9,5 @@ dynamic-imports: this place goes through a value that hoglint does not follow (a
   needs a person: If the code must compute the name, stop and tell the person. The config declares such patterns.
   see: hoglint explain dynamic-imports
 
-Not shown: 24 advisory rows, 13 advisory unknowns, 107 old unknowns, 228 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+Not shown: 24 advisory rows, 13 advisory unknowns, 109 old unknowns, 228 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
 What the hook checks and what to do: hoglint help hook.

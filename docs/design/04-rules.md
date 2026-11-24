@@ -183,6 +183,8 @@ A same-named member of an unrelated class is no hook call.
 `@receiver(signal)` or `signal.connect(fn)` with no `sender` is a `signal` edge to the signal itself: the module that defines a signal is what fires it, so `receiver-direction` and `wiring-watched` read the signal's package as the sender's.
 A receiver on Django's or Celery's own signals goes to third-party code and crosses no package; one on a core or another product's custom signal crosses.
 A signal that does not resolve leaves the edge unresolved, as a variable sender does.
+A `.connect` whose signal cannot be told is unresolved too (t30, round 11 item 14): in a file that imports a `signals` or `dispatch` module, a `.connect` on an expression (`getattr(signals, name)`, a subscript, a call's result) or on a name that resolves to nothing may be a signal's, so `receiver-direction` and `wiring-watched` go incomplete and the calling module's group cannot pass.
+In a file that imports neither, such a `.connect` is taken for a driver's or a client's (`psycopg.connect`, `Client(...).connect()`); a name that resolves to anything other than a signal is no signal.
 A `connect` in a hook's own body (a module-level function that hands its parameter on to it) has the attr `hook`; `wiring-watched` does not ask for that module, since the hook's callers are placed as `installs` edges.
 
 **A loop variable bound over a literal sequence takes each of its values** (the architect, Nov 16).

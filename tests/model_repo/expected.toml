@@ -2162,6 +2162,12 @@ verdict = "incomplete"
 identity = ["products.reports.backend.stock_receivers|signal|<Call>"]
 
 [[row]]
+case = "RD08"
+rule = "receiver-direction"
+verdict = "incomplete"
+identity = ["products.racks.backend.team_listeners|signal|<expression>"]
+
+[[row]]
 case = "RD06"
 rule = "receiver-direction"
 verdict = "finding"
@@ -2459,6 +2465,12 @@ case = "RD04"
 rule = "wiring-watched"
 verdict = "incomplete"
 identity = ["products.reports.backend.stock_receivers|<Call>"]
+
+[[row]]
+case = "RD08"
+rule = "wiring-watched"
+verdict = "incomplete"
+identity = ["products.racks.backend.team_listeners|<expression>"]
 
 [[row]]
 case = "RD05"
