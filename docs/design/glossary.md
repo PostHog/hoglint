@@ -98,6 +98,7 @@ Some words have two meanings; the entry names both.
   A file that a loader imports by its path in every package, and the attribute it reads there, such as each product's `routes.py` and its `register_routes`.
   A module reads it as the built-in attributes `registry` and `lifecycle`.
   An edge endpoint also reads `registry_loader`: the registry whose declared loader is the function or method the edge sits in, none in the registry's own files.
+  A call of a declared loader with a name no entry of that loader declares is a `config:undeclared-registry` incomplete item.
 - **Roles: owner, group** (`[roles] owner`, `[roles] group`).
   The field that names who owns a finding, and the field whose value groups modules into packages for cycles and `compare`.
 - **`handout_zones`** (built-in attribute, as in `src.handout_zones`).

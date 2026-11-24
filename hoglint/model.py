@@ -177,6 +177,7 @@ class IncompleteKind(StrEnum):
     PRODUCER_FAILED = "producer-failed"  # a producer or an input reader failed
     UNREADABLE = "unreadable"  # a source file hoglint cannot read
     STALE_NAME = "stale-name"  # the config names a file or symbol the tree does not have
+    UNDECLARED_REGISTRY = "undeclared-registry"  # a registry loader is called with a name no registry declares
 
 
 # The edge attr a producer sets to `none` on an edge whose surface is no literal name: the edge

@@ -8,6 +8,6 @@ policy entries changed (1)
   relax    added    exception {"match": {"dst.symbol": "products.catalog.backend.logic.pricing.price_for", "src.module": "posthog.api.price_badge"}, "owners": ["team-devex"], "reason": "the badge needs the price until the facade has it", "review_by": "2027-03-01", "rule": "public-surface", "scope": "prod"}  (an exceptions addition allows a use)
 debt the new scanner, policy or environment no longer sees (review) (1)
   public-surface products.catalog.backend.logic.pricing.price_for import core: 1 -> 0  [policy]
-counts: findings new 0, resolved 0; ledger lines added 0, removed 0; zero-net swaps 0; rule growth 0; new group edges 0; old unknowns 106. Show every section: hoglint compare --base base --all.
+counts: findings new 0, resolved 0; ledger lines added 0, removed 0; zero-net swaps 0; rule growth 0; new group edges 0; old unknowns 107. Show every section: hoglint compare --base base --all.
 
-hoglint: no new problems (24 advisory rows, 13 advisory unknowns, 106 old unknowns, 228 old findings in the ledger).
+hoglint: no new problems (24 advisory rows, 13 advisory unknowns, 107 old unknowns, 228 old findings in the ledger).

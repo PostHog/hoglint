@@ -147,8 +147,9 @@ class CoreConfig:
       they hand out from other modules.
     - export_surfaces: the files of every export. Core records what each of them hands out by
       import (`Graph.hand_outs`), so every rule reads one notion of what a module exports.
-    - registries: (file glob, attribute) of each `[registries]` entry, in config order. Core reads
-      what the attribute's value registers in each such file, as it reads a module-level list.
+    - registries: (file glob, attribute, loader) of each `[registries]` entry, in config order. Core
+      reads what the attribute's value registers in each such file, as it reads a module-level list,
+      and records each call of a loader that names none of its registries (`config:undeclared-registry`).
     """
 
     source_roots: tuple[str, ...] = (".",)
@@ -167,7 +168,7 @@ class CoreConfig:
     reference_names: tuple[str, ...] = ()
     contract_surfaces: tuple[ExportPaths, ...] = ()
     export_surfaces: tuple[ExportPaths, ...] = ()
-    registries: tuple[tuple[str, str], ...] = ()
+    registries: tuple[tuple[str, str, str], ...] = ()
     include_hidden: bool = False
 
     @classmethod
@@ -177,7 +178,7 @@ class CoreConfig:
         contract_surfaces: tuple[ExportPaths, ...] = (),
         export_surfaces: tuple[ExportPaths, ...] = (),
         path_modules: tuple[str, ...] = (),
-        registries: tuple[tuple[str, str], ...] = (),
+        registries: tuple[tuple[str, str, str], ...] = (),
     ) -> CoreConfig:
         """A config's `[discovery]`, parsed: a bare string is a list of one name, and a key it
         does not set keeps core's default."""
@@ -232,7 +233,9 @@ class CoreConfig:
         return any(surface.covered_root(path) is not None for surface in self.export_surfaces)
 
     def watched_callee_names(self) -> tuple[str, ...]:
-        """Last dotted parts of the dynamic loaders, the path callees and the patch callees; the
-        extractor records calls to these, so the link sees which files hand one a computed name."""
-        names = (*self.dynamic_loaders, *self.path_callees, *self.patch_callees)
+        """Last dotted parts of the dynamic loaders, the path callees, the patch callees and the
+        registry loaders; the extractor records calls to these, so the link sees which files hand
+        one a computed name, and which name each registry loader call hands its loader."""
+        loaders = tuple(loader for _, _, loader in self.registries if loader)
+        names = (*self.dynamic_loaders, *self.path_callees, *self.patch_callees, *loaders)
         return tuple(sorted({name.rpartition(".")[2] for name in names}))

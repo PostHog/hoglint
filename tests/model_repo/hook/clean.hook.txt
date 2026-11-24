@@ -1,2 +1,2 @@
 exit 0
-hoglint: no new problems (24 advisory rows, 13 advisory unknowns, 106 old unknowns, 228 old findings in the ledger).
+hoglint: no new problems (24 advisory rows, 13 advisory unknowns, 107 old unknowns, 228 old findings in the ledger).

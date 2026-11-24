@@ -2278,3 +2278,9 @@ rule = "config:stale-name"
 identity = ["posthog.models.scoping_compat.unscoped"]
 kind = "stale-name"
 text = "posthog.models.scoping_compat.unscoped is named by [discovery] reference_names but is a re-export of posthog.models.scoping.unscoped, which its uses resolve to"
+
+[[incomplete]]
+rule = "config:undeclared-registry"
+identity = ["posthog/activity_log.py|posthog.products.load_product_modules|activity_log_config"]
+kind = "undeclared-registry"
+text = "posthog/activity_log.py:6 calls posthog.products.load_product_modules('activity_log_config'), and no [registries.<name>] entry of that loader declares its module: the modules it loads are unknown until a [registries.<name>] entry names them"

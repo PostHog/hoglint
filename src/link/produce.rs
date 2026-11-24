@@ -353,6 +353,11 @@ pub struct Producing {
     pub export_surfaces: Vec<ExportPaths>,
     /// Each registry's files and the attribute its loader reads there, in config order.
     pub registries: Vec<(Glob, Sid)>,
+    /// Each registry's loader and its files as the config writes them, in config order: a call of
+    /// the loader names one of its registries (`registry_calls`).
+    pub registry_loaders: Vec<(String, String)>,
+    /// The last names of the registry loaders: the walk records a call of each.
+    pub registry_loader_last_names: Vec<String>,
     k: Keys,
 }
 
@@ -455,6 +460,14 @@ impl Producing {
             .collect();
         last_names.sort();
         last_names.dedup();
+        let mut registry_last_names: Vec<String> = config
+            .registries
+            .iter()
+            .filter(|registry| !registry.loader.is_empty())
+            .map(|registry| registry.loader.rsplit('.').next().unwrap_or("").to_string())
+            .collect();
+        registry_last_names.sort();
+        registry_last_names.dedup();
         let k = Keys {
             binds: it.intern("binds"),
             listed: it.intern("listed"),
@@ -561,6 +574,13 @@ impl Producing {
                     Some((glob, it.intern(&registry.attribute)))
                 })
                 .collect(),
+            registry_loaders: config
+                .registries
+                .iter()
+                .filter(|registry| !registry.loader.is_empty())
+                .map(|registry| (registry.loader.clone(), registry.module.clone()))
+                .collect(),
+            registry_loader_last_names: registry_last_names,
             k,
         }
     }
@@ -735,6 +755,31 @@ fn names_callee(callee: &str, names: &[String]) -> bool {
             name == last
         }
     })
+}
+
+/// A call of a registry's loader that names no registry of it, or names its registry by a value
+/// the link cannot read: the modules the call loads are unknown.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RegistryCall {
+    pub path: String,
+    pub line: u32,
+    pub loader: String,
+    /// The text of a literal name, else how the call writes it (`name:X`, `expr:JoinedStr`,
+    /// `missing`).
+    pub name: String,
+    pub literal: bool,
+}
+
+/// Whether a registry's files (`module`, a glob) are the module a loader's name names: the glob
+/// ends with the name written as a path, a module file or a package (`facade.temporal` names
+/// `products/{product}/backend/facade/temporal.py`).
+pub fn names_registry_file(module: &str, name: &str) -> bool {
+    let parts: Vec<&str> = name.split('.').collect();
+    if parts.iter().any(|part| part.is_empty()) {
+        return false;
+    }
+    let path = parts.join("/");
+    module.ends_with(&format!("/{path}.py")) || module.ends_with(&format!("/{path}/__init__.py"))
 }
 
 /// Where a string stands in a call that takes a dotted path.
@@ -1307,6 +1352,8 @@ pub struct Producers<'p> {
     /// Each place a module names a module by a value the link cannot read exactly, by module, in
     /// words (`computed_loads`).
     pub computed_loads: Vec<(Sid, String)>,
+    /// Each call of a registry's loader that names no registry of it (`registry_calls`).
+    pub registry_calls: Vec<RegistryCall>,
     /// Why a name the reading cannot read is unread, when a binding says it, by (module, key):
     /// "bound" (bound more than once) or "rebound" (bound again by a form it cannot read).
     pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
@@ -1557,6 +1604,7 @@ impl Producers<'_> {
         self.each(Self::declarations);
         self.each(Self::strings);
         self.each(Self::dynamic_imports);
+        self.each(Self::registry_calls);
         self.each(Self::unparsed);
         self.core.rec.finish();
     }
@@ -6448,6 +6496,129 @@ impl Producers<'_> {
             self.note_computed_load(owner, words, sequence);
         }
         self.loader_uses(owner, &sites);
+    }
+
+    /// Each call of a registry's declared loader whose name matches no registry of that loader
+    /// (`names_registry_file`), or is no literal the link can read: the link does not know which
+    /// modules it loads, so it records the call (`registry_calls`). A call with no name matches a
+    /// loader of one registry, which loads its one file name. A callee that resolves to no
+    /// declared loader is not read.
+    fn registry_calls(&mut self, owner: usize) {
+        if self.settings.registry_loaders.is_empty() {
+            return;
+        }
+        let facts = self.core.facts.clone();
+        let file = self.scopes[owner].file as usize;
+        let path = &facts.files[file].path;
+        for row in &facts.files[file].calls {
+            if row.callee.starts_with('?')
+                || !names_callee(&row.callee, &self.settings.registry_loader_last_names)
+            {
+                continue;
+            }
+            let Some(loader) = self.registry_loader_of(owner, row) else {
+                continue;
+            };
+            let modules: Vec<&str> = (self.settings.registry_loaders.iter())
+                .filter(|(declared, _)| *declared == loader)
+                .map(|(_, module)| module.as_str())
+                .collect();
+            let (name, literal) = match &row.argument {
+                Argument::Literal(text) => (text.to_string(), true),
+                Argument::Name(chain) => match self.constant_text(owner, row, chain) {
+                    Some(text) => (text, true),
+                    None => (format!("name:{chain}"), false),
+                },
+                Argument::Missing => ("missing".to_string(), false),
+                Argument::Opaque(what) => (format!("expr:{what}"), false),
+                Argument::Expr => ("expr".to_string(), false),
+            };
+            let declared = if literal {
+                (modules.iter()).any(|module| names_registry_file(module, &name))
+            } else {
+                matches!(row.argument, Argument::Missing) && modules.len() == 1
+            };
+            if declared {
+                continue;
+            }
+            self.registry_calls.push(RegistryCall {
+                path: path.to_string(),
+                line: row.line,
+                loader,
+                name,
+                literal,
+            });
+        }
+    }
+
+    /// The declared registry loader a call row's callee resolves to, by its origin or, when it
+    /// does not resolve whole, by the name the code wrote.
+    fn registry_loader_of(&mut self, owner: usize, row: &CallRow) -> Option<String> {
+        let core = &mut *self.core;
+        let callee = core.it.intern(&row.callee);
+        let names = &self.settings.names;
+        let (found, rest) =
+            core.chain_lookup(names, &mut self.scopes[owner], callee, row.scope, row.line);
+        let written = core.it.join_all(found.surface, &rest);
+        let origin = match found.hit {
+            Some(hit) if rest.is_empty() => {
+                let origin = core.origin(hit);
+                core.ent_sid(origin)
+            }
+            _ => EMPTY,
+        };
+        let loaders = &self.settings.registry_loaders;
+        [origin, written]
+            .into_iter()
+            .filter(|sid| *sid != EMPTY)
+            .map(|sid| core.it.s(sid))
+            .find(|text| loaders.iter().any(|(loader, _)| loader == text))
+            .map(str::to_string)
+    }
+
+    /// The text of the first-party module-level name a call hands its loader, when one module-level
+    /// assignment binds it, unconditionally, to a string literal and nothing else binds it.
+    fn constant_text(&mut self, owner: usize, row: &CallRow, chain: &str) -> Option<String> {
+        let core = &mut *self.core;
+        let chain = core.it.intern(chain);
+        let names = &self.settings.names;
+        let (found, rest) =
+            core.chain_lookup(names, &mut self.scopes[owner], chain, row.scope, row.line);
+        let hit = found.hit.filter(|_| rest.is_empty() && !found.local)?;
+        if core.kind(hit) != HitKind::Variable {
+            return None;
+        }
+        let origin = core.origin(hit);
+        if origin.s == EMPTY || core.is_external(origin.m) {
+            return None;
+        }
+        core.rec.read(Kind::Alias, origin.m, origin.s);
+        let table = core.table(origin.m)?;
+        let table = core.table_at(table);
+        if (table.bindings.get(&origin.s)).is_none_or(|found| found.len() != 1) {
+            return None;
+        }
+        let record = table.record?;
+        let facts = core.facts.clone();
+        let mut rows = facts.files[record as usize]
+            .assigns
+            .iter()
+            .filter(|assign| {
+                assign.s == -1
+                    && (assign.targets.iter())
+                        .any(|target| matches!(target, V::Chain(bound) if *bound == origin.s))
+            });
+        let assign = rows.next()?;
+        if rows.next().is_some()
+            || assign.f != 0
+            || !matches!(assign.op, Op::Assign | Op::Annotated)
+        {
+            return None;
+        }
+        match assign.value.as_ref()? {
+            V::Str(text, None) => Some(core.it.s(*text).to_string()),
+            _ => None,
+        }
     }
 
     /// The `dynamic-import` edge of a loader call.

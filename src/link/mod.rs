@@ -154,7 +154,8 @@ use index::EdgeIndex;
 use intern::{Interner, Sid};
 use paths::{ModuleIndex, ModuleNamer, PathGlobs};
 use produce::{
-    EdgeStore, INHERIT, KIND_NAMES, NO_FILE, PackRow, Producers, Producing, Sequences, Symbols,
+    EdgeStore, INHERIT, KIND_NAMES, NO_FILE, PackRow, Producers, Producing, RegistryCall,
+    Sequences, Symbols,
 };
 use resolve::Core;
 use rules::glob::ExportPaths;
@@ -228,6 +229,9 @@ pub struct LinkConfig {
 pub struct RegistryConfig {
     pub module: String,
     pub attribute: String,
+    /// The callable that loads the files (`posthog.products.load_product_modules`).
+    #[serde(default)]
+    pub loader: String,
 }
 
 /// One contract surface: an export's `within` and `paths` (hoglint/globs.py `ExportPaths`).
@@ -301,6 +305,9 @@ pub struct Link {
     /// words (produce.rs `computed_loads`): in a registration point, the `: items` cover cannot
     /// tell which module it registers.
     pub computed_loads: Vec<(Sid, String)>,
+    /// Each call of a registry's loader that names no registry of it, or names it by a value the
+    /// link cannot read, by path and line (produce.rs `registry_calls`).
+    pub registry_calls: Vec<RegistryCall>,
     /// Why a name the reading cannot read is unread, when a binding says it (produce.rs
     /// `unread_causes`).
     pub unread_causes: FxHashMap<(Sid, Sid), &'static str>,
@@ -448,6 +455,7 @@ impl Link {
             defined: FxHashSet::default(),
             path_lists: FxHashSet::default(),
             computed_loads: Vec::new(),
+            registry_calls: Vec::new(),
             unread_causes: FxHashMap::default(),
             rebound_imports: FxHashSet::default(),
             foreign: FxHashMap::default(),
@@ -476,6 +484,8 @@ impl Link {
         let sequences = std::mem::take(&mut producers.sequences);
         let computed_reads = std::mem::take(&mut producers.computed_reads);
         let computed_loads = std::mem::take(&mut producers.computed_loads);
+        let mut registry_calls = std::mem::take(&mut producers.registry_calls);
+        registry_calls.sort();
         let unread_causes = std::mem::take(&mut producers.unread_causes);
         let rebound_imports = std::mem::take(&mut producers.rebound_imports);
         let bound = std::mem::take(&mut producers.bound);
@@ -504,6 +514,7 @@ impl Link {
             sequences,
             computed_reads,
             computed_loads,
+            registry_calls,
             unread_causes,
             rebound_imports,
             bound,

@@ -266,6 +266,9 @@ Its limits, in plain words:
 1. An import inside a function that `ready()` defines or hands on, or inside any other function of the AppConfig module, is not followed: a callback runs later, if ever, and hook callbacks and receivers are watched at their entry module (Nov 9).
 2. A registry the preset does not declare is not known, so a new loader call needs a registry entry.
    The old lint found every `load_product_modules` call by itself.
+   Since Nov 24 such a call is never silent: a call of a declared registry loader whose name matches no `[registries]` entry of that loader, or whose name the link cannot read, is a `config:undeclared-registry` incomplete item, and the run exits 2 (model repository `RL01`, `RL02`).
+   A name matches an entry whose `module` ends with the name written as a path (`facade.temporal` matches `products/{product}/backend/facade/temporal.py`); a name that is only the end of a declared path (`temporal` there) reads as declared, a written limit.
+   A module-level constant bound once to a string literal is read as that literal; a call with no name matches a loader of one registry.
 3. The model surface is the two zones; a model class defined elsewhere in a product is not asked for.
 4. A location run by name is watched through any one file in it, so a change to another file in it does not reach the check.
 5. What an admin module's own imports import is not asked for: entry modules only, as for the AppConfig module (Nov 9). An admin module's import of another product's module is lint only.

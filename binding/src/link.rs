@@ -426,6 +426,19 @@ impl Link {
         self.inner.reference_definitions.clone()
     }
 
+    /// Each call of a registry's loader that names no registry of it, or names it by a value the
+    /// link cannot read (the link's `registry_calls`): (path, line, loader, name, whether the name
+    /// is a literal), sorted.
+    fn registry_calls(&self) -> Vec<(String, u32, String, String, bool)> {
+        (self.inner.registry_calls.iter())
+            .map(|call| {
+                let (path, loader, name) =
+                    (call.path.clone(), call.loader.clone(), call.name.clone());
+                (path, call.line, loader, name, call.literal)
+            })
+            .collect()
+    }
+
     /// What each export module hands out by import (`Graph.hand_outs`): (module, handed names,
     /// kept names, whether its `__all__` cannot be read, listed names it binds by nothing the
     /// engine can tell, private names it lists and defines, the assignments of no literal constant

@@ -1,4 +1,4 @@
 exit 0
 wrote 228 lines to hoglint.ledger: 1 added or raised, 1 removed or lowered
   moved  public-surface	products.shelf.backend.logic.count.shelf_count	products.reports.backend.logic.shelf_totals	import  0 -> 1
-hoglint: no new problems (24 advisory rows, 13 advisory unknowns, 106 old unknowns, 228 old findings in the ledger).
+hoglint: no new problems (24 advisory rows, 13 advisory unknowns, 107 old unknowns, 228 old findings in the ledger).

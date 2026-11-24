@@ -8,5 +8,5 @@ hoglint.ledger records 2 findings that the code no longer has.
   why: the ledger must equal the scan, so a fixed finding leaves the ledger.
   fix (safe): run `hoglint ledger shrink`, then stage hoglint.ledger. It removes stale lines and never adds one.
 
-Not shown: 24 advisory rows, 13 advisory unknowns, 106 old unknowns, 226 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
+Not shown: 24 advisory rows, 13 advisory unknowns, 107 old unknowns, 226 old findings in the ledger. Show every row: hoglint check --index --all. Show one rule: hoglint check --index --rule <rule>.
 What the hook checks and what to do: hoglint help hook.

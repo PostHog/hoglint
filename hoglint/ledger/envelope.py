@@ -366,8 +366,9 @@ class ConfigInputs:
         exports = config.exports.values()
         self.contract_surfaces = tuple(spec.files for spec in exports if config.shapes[spec.shape].signatures)
         self.export_surfaces = tuple(spec.files for spec in exports)
-        # The link reads what each registry's attribute registers in the registry's files.
-        self.registries = tuple((spec.module, spec.attribute) for spec in config.registries.values())
+        # The link reads what each registry's attribute registers in the registry's files, and
+        # each call of a registry's loader.
+        self.registries = tuple((spec.module, spec.attribute, spec.loader) for spec in config.registries.values())
 
     @staticmethod
     def of(config: Config) -> ConfigInputs:

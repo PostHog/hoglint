@@ -287,6 +287,14 @@ rule = "config:stale-name"
 verdict = "incomplete"
 identity = ["posthog/api/view_base.py"]
 
+# config:undeclared-registry
+
+[[row]]
+case = "RL01"
+rule = "config:undeclared-registry"
+verdict = "incomplete"
+identity = ["posthog/activity_log.py|posthog.products.load_product_modules|activity_log_config"]
+
 # contracts-no-django
 
 [[row]]

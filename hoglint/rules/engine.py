@@ -48,6 +48,11 @@ READ_ERROR = ("status", "read_error")
 STALE_NAMES = "config:stale-name"
 GLOB_CHARACTERS = frozenset("*?[{")
 
+# Every call of a registry's loader that names no `[registries]` entry of that loader, or names it
+# by a value the link cannot read, is an incomplete item of this rule: which modules it loads is
+# unknown, so no registry label reaches them.
+UNDECLARED_REGISTRIES = "config:undeclared-registry"
+
 
 def provider_rule(name: str) -> str:
     """The rule of a provider that failed: one incomplete item of it says why."""
@@ -57,7 +62,12 @@ def provider_rule(name: str) -> str:
 def run_level_rules(config: Config) -> tuple[str, ...]:
     """The rules every run makes from the config and the whole tree, not from one file: their
     items belong to no file, so every run makes them again."""
-    return (STALE_NAMES, UNREADABLE, *(provider_rule(name) for name in sorted(config.providers)))
+    return (
+        STALE_NAMES,
+        UNDECLARED_REGISTRIES,
+        UNREADABLE,
+        *(provider_rule(name) for name in sorted(config.providers)),
+    )
 
 
 class StaleNames:
@@ -109,6 +119,40 @@ class StaleNames:
     @staticmethod
     def item(key: str, reason: str) -> IncompleteItem:
         return IncompleteItem(STALE_NAMES, key, reason, kind=IncompleteKind.STALE_NAME)
+
+
+class RegistryCalls:
+    """The calls of a registry's loader whose name no `[registries]` entry of that loader declares,
+    or that the link cannot read (`registry_calls` of the native link). The link records them while
+    it still has the fact rows; one item per call site, loader and name."""
+
+    def __init__(self, labeler: Labeler) -> None:
+        self.graph = labeler.graph
+
+    def items(self) -> list[IncompleteItem]:
+        link = getattr(self.graph, "link", None)
+        if link is None:
+            raise EngineError("rules run in the native evaluator only: link the graph natively first")
+        out: dict[str, IncompleteItem] = {}
+        for path, line, loader, name, literal in link.registry_calls():
+            key = f"{path}|{loader}|{name}"
+            if key not in out:
+                out[key] = self.item(key, path, line, loader, name, literal)
+        return list(out.values())
+
+    @staticmethod
+    def item(key: str, path: str, line: int, loader: str, name: str, literal: bool) -> IncompleteItem:
+        if literal:
+            reason = (
+                f"{path}:{line} calls {loader}({name!r}), and no [registries.<name>] entry of that loader "
+                f"declares its module: the modules it loads are unknown until a [registries.<name>] entry names them"
+            )
+            return IncompleteItem(UNDECLARED_REGISTRIES, key, reason, kind=IncompleteKind.UNDECLARED_REGISTRY)
+        reason = (
+            f"{path}:{line} calls {loader} with a name hoglint cannot read ({name}): the modules it loads are "
+            f"unknown; the call needs a literal name, and the name a [registries.<name>] entry"
+        )
+        return IncompleteItem(UNDECLARED_REGISTRIES, key, reason, kind=IncompleteKind.NOT_MODELLED)
 
 
 # Every rule type, one per mode, in the order the test generator draws them.
@@ -321,6 +365,9 @@ class Engine:
         stale = StaleNames(self.config, self.labeler).items()
         if stale:
             self.add_incomplete_run(ctx, STALE_NAMES, stale)
+        registry_calls = RegistryCalls(self.labeler).items()
+        if registry_calls:
+            self.add_incomplete_run(ctx, UNDECLARED_REGISTRIES, registry_calls)
         unread = sorted({edge.site.path for edge in self.graph.by_kind("unparsed") if READ_ERROR in edge.attrs})
         if unread:
             items: list[IncompleteItem] = []

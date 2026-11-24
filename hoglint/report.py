@@ -105,6 +105,13 @@ KIND_WORDS: dict[IncompleteKind, tuple[str, list[tuple[str, str]]]] = {
         "is named by the config, and the tree no longer has it",
         [("person", "Stop and tell the person. The config must change with the code that moved or removed the name.")],
     ),
+    IncompleteKind.UNDECLARED_REGISTRY: (
+        "calls a registry loader with a name that no registry of the config declares",
+        [
+            ("safe", "If the name is wrong, correct it."),
+            ("person", "If the name is right, stop and tell the person. The config needs a [registries.<name>] entry."),
+        ],
+    ),
 }
 
 
