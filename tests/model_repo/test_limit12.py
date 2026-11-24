@@ -186,3 +186,16 @@ def test_a_stack_outside_the_limit_fails_the_level(loud: dict[str, Any], p: str)
     group = loud["groups"][p]
     assert not group["passes"], CASES[p]["note"]
     assert any(CASES[p]["reason"] in text for text in group["reasons"]), group["reasons"]
+
+
+FAMILY_7 = ("l12_decorated_def_item_f", "l12_decorated_class_item_f", "l12_activity_fake_defn_item")
+
+
+@pytest.mark.parametrize("p", FAMILY_7)
+def test_each_family_7_row_alone_blocks_the_skip(tmp_path_factory: pytest.TempPathFactory, p: str) -> None:
+    """Each row alone, so no other row's change can be what fails it: the substituted file (BFlow's)
+    is watched by nothing else, and the level fails for the list."""
+    found = answer_of(tmp_path_factory, {p: CASES[p]})
+    group = found["groups"][p]
+    assert not group["passes"], CASES[p]["note"]
+    assert any(CASES[p]["reason"] in text for text in group["reasons"]), group["reasons"]
