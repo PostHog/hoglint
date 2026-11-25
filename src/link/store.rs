@@ -379,6 +379,15 @@ impl<'b> Dec<'b, '_> {
     fn i32(&mut self) -> Result<i32, String> {
         Ok(self.u32()? as i32)
     }
+    /// A count of items. Every item takes at least one byte, so a count above the bytes left is
+    /// damage, and sizing a vector by it could abort the run.
+    fn count(&mut self) -> Result<usize, String> {
+        let n = self.u32()? as usize;
+        if n > self.b.len() - self.p {
+            return Err("a cache entry counts more items than it holds".to_string());
+        }
+        Ok(n)
+    }
     fn sid(&mut self) -> Result<Sid, String> {
         let i = self.u32()? as usize;
         self.map
@@ -413,7 +422,7 @@ impl<'b> Dec<'b, '_> {
         })
     }
     fn values(&mut self) -> Result<Vec<V>, String> {
-        let n = self.u32()? as usize;
+        let n = self.count()?;
         // Sized up front: collecting results grows the vector by doubling.
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
@@ -422,7 +431,7 @@ impl<'b> Dec<'b, '_> {
         Ok(out)
     }
     fn counts(&mut self) -> Result<Vec<CountRow>, String> {
-        let n = self.u32()? as usize;
+        let n = self.count()?;
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
             out.push(CountRow {
@@ -468,7 +477,7 @@ impl<'b> Dec<'b, '_> {
             7 => V::List(self.values()?),
             8 => V::Set(self.values()?),
             9 => {
-                let n = self.u32()? as usize;
+                let n = self.count()?;
                 let mut pairs = Vec::with_capacity(n);
                 for _ in 0..n {
                     let key = self.ov()?;
@@ -507,7 +516,7 @@ pub fn facts_strings(it: &mut Interner, blob: &[u8]) -> Result<(Vec<Sid>, usize)
         p: MAGIC.len(),
         map: &[],
     };
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut map = Vec::with_capacity(n);
     for _ in 0..n {
         map.push(it.intern(d.str()?));
@@ -526,7 +535,7 @@ pub fn decode_body(
     path: &str,
 ) -> Result<FileFacts, String> {
     let mut d = Dec { b: body, p: 0, map };
-    let nkeys = d.u32()? as usize;
+    let nkeys = d.count()?;
     let mut keys = Vec::with_capacity(nkeys);
     for _ in 0..nkeys {
         let key = d.text()?;
@@ -535,7 +544,7 @@ pub fn decode_body(
         keys.push((key, start..end));
     }
     let status = d.text()?;
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut imports = Vec::with_capacity(n);
     for _ in 0..n {
         imports.push(Import {
@@ -549,7 +558,7 @@ pub fn decode_body(
             asname: d.osid()?,
         });
     }
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut defs = Vec::with_capacity(n);
     for _ in 0..n {
         let s = d.i32()?;
@@ -565,7 +574,7 @@ pub fn decode_body(
         let bases = d.values()?;
         let keywords = d.u8()? == 1;
         let dec = d.values()?;
-        let np = d.u32()? as usize;
+        let np = d.count()?;
         let mut params = Vec::with_capacity(np);
         for _ in 0..np {
             let pname = d.sid()?;
@@ -578,7 +587,7 @@ pub fn decode_body(
         }
         let ret = d.ov()?;
         let stub = d.u8()? == 1;
-        let na = d.u32()? as usize;
+        let na = d.count()?;
         let mut attrs = Vec::with_capacity(na);
         for _ in 0..na {
             attrs.push(SelfAttr {
@@ -588,7 +597,7 @@ pub fn decode_body(
                 ann: d.ov()?,
             });
         }
-        let nt = d.u32()? as usize;
+        let nt = d.count()?;
         let mut type_params = Vec::with_capacity(nt);
         for _ in 0..nt {
             type_params.push((d.sid()?, d.ov()?));
@@ -610,7 +619,7 @@ pub fn decode_body(
             type_params,
         });
     }
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut assigns = Vec::with_capacity(n);
     for _ in 0..n {
         let s = d.i32()?;
@@ -641,7 +650,7 @@ pub fn decode_body(
             ann,
         });
     }
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut refs = Vec::with_capacity(n);
     for _ in 0..n {
         refs.push(RefRow {
@@ -655,7 +664,7 @@ pub fn decode_body(
             up: d.text()?,
         });
     }
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut strs = Vec::with_capacity(n);
     for _ in 0..n {
         let scope = d.i32()?;
@@ -665,7 +674,7 @@ pub fn decode_body(
         let value = d.otext()?;
         let up = d.text()?;
         let parts = if d.u8()? == 1 {
-            let k = d.u32()? as usize;
+            let k = d.count()?;
             Some((0..k).map(|_| d.otext()).collect::<Result<Vec<_>, _>>()?)
         } else {
             None
@@ -680,7 +689,7 @@ pub fn decode_body(
             parts,
         });
     }
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut calls = Vec::with_capacity(n);
     for _ in 0..n {
         let scope = d.i32()?;
@@ -704,7 +713,7 @@ pub fn decode_body(
             argument,
         });
     }
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut uses = Vec::with_capacity(n);
     for _ in 0..n {
         uses.push(UseRow {
@@ -719,7 +728,7 @@ pub fn decode_body(
     }
     let callees = d.counts()?;
     let names = d.counts()?;
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut tags = Vec::with_capacity(n);
     for _ in 0..n {
         tags.push(TagRow {
@@ -731,12 +740,12 @@ pub fn decode_body(
             name: d.sid()?,
         });
     }
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut listed = Vec::with_capacity(n);
     for _ in 0..n {
         listed.push(d.sid()?);
     }
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut escapes = Vec::with_capacity(n);
     for _ in 0..n {
         escapes.push(TagRow {
@@ -748,7 +757,7 @@ pub fn decode_body(
             name: d.sid()?,
         });
     }
-    let n = d.u32()? as usize;
+    let n = d.count()?;
     let mut computed = Vec::with_capacity(n);
     for _ in 0..n {
         computed.push(ComputedRow {
