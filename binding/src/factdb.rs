@@ -3,11 +3,15 @@
 //!
 //! - `keys`: (extract config id, blob oid) to the entry id, the day a run last read it
 //!   (`used`), the length of its JSON text (a run checks it against the body's key ranges,
-//!   `blobs.rs`) and the bytes it holds.
+//!   `blobs.rs`), the bytes it holds, and the checksum of its body (`checksum`).
 //! - `facts`: the binary facts the link reads (`hoglint_facts::link::store`).
-//! - `records`: the record JSON text that packs read, compressed in frames (`pack`): a pack
-//!   that reads one key decompresses that key alone. Apart from the facts, so a run that never
-//!   reads it never touches its pages.
+//! - `records`: the record JSON text that packs read, compressed in frames (`pack`), each with
+//!   its own checksum: a pack that reads one key decompresses and checks that key alone. Apart
+//!   from the facts, so a run that never reads it never touches its pages.
+//!
+//! A checksum covers the entry's key with its bytes, so bytes damaged in place and bytes that
+//! belong to another key both fail it. It finds damage, not a forged entry: whoever can write the
+//! file can write a matching checksum.
 //!
 //! WAL mode lets runs read while another run writes. A write replaces an entry already stored
 //! under its key (a run stores only what it could not read) and runs in short transactions, so
@@ -22,6 +26,7 @@
 //! log and run past (`blobs.rs`).
 
 use rusqlite::{Connection, ErrorCode, MAIN_DB, OptionalExtension, params};
+use sha2::{Digest, Sha256};
 use std::ops::Range;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -29,7 +34,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The table layout. It is part of the database file name (`hoglint/native/factdb.py`), so two
 /// builds with different layouts never share a file; a file with another `user_version` is
 /// emptied and set up again.
-pub const LAYOUT: i64 = 5;
+pub const LAYOUT: i64 = 6;
 /// Entries per write transaction.
 const ROWS_PER_WRITE: usize = 256;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -80,11 +85,28 @@ fn today() -> i64 {
     (seconds / 86_400) as i64
 }
 
-/// A stored entry: the day a run last read it, and the length of its JSON text.
+/// The checksum of the bytes of the entry of (config, oid): the first 8 bytes of the sha256 of
+/// the config id, NUL, the oid, NUL and the bytes, as a little-endian i64 (an SQLite integer).
+pub fn checksum(config: &str, oid: &str, bytes: &[u8]) -> i64 {
+    let digest = Sha256::new()
+        .chain_update(config.as_bytes())
+        .chain_update([0])
+        .chain_update(oid.as_bytes())
+        .chain_update([0])
+        .chain_update(bytes)
+        .finalize();
+    let mut first = [0u8; 8];
+    first.copy_from_slice(&digest[..8]);
+    i64::from_le_bytes(first)
+}
+
+/// A stored entry: the day a run last read it, the length of its JSON text, and the checksum of
+/// its body.
 #[derive(Clone, Copy)]
 pub struct Row {
     pub used: i64,
     pub json_len: usize,
+    pub checksum: i64,
 }
 
 /// An entry to store.
@@ -93,6 +115,8 @@ pub struct NewEntry<'a> {
     pub oid: &'a str,
     /// The binary facts.
     pub body: Vec<u8>,
+    /// The checksum of the binary facts (`checksum`).
+    pub checksum: i64,
     /// The record's JSON text, compressed (`pack`).
     pub record: Vec<u8>,
     /// The length of the JSON text.
@@ -114,10 +138,12 @@ fn expands_to(packed: usize) -> usize {
 /// A record's JSON text, compressed for the `records` table in frames: one from the start of
 /// each key's value (`values`, ranges of the text) to the start of the next, and one for the
 /// text before the first, so the frames hold the text whole and a key's value sits in one.
+/// `config` and `oid` are the entry's key, which each frame's checksum covers.
 ///
 /// Layout: the length of the index (u32), the index (per frame in text order, the length of its
-/// text and of its compressed bytes, each a LEB128 number), then the compressed frames.
-pub fn pack(json: &[u8], values: &[Range<usize>]) -> Vec<u8> {
+/// text and of its compressed bytes, each a LEB128 number, then the checksum of its text, an
+/// i64 in 8 little-endian bytes), then the compressed frames.
+pub fn pack(config: &str, oid: &str, json: &[u8], values: &[Range<usize>]) -> Vec<u8> {
     let mut cuts = vec![0, json.len()];
     cuts.extend(values.iter().map(|range| range.start.min(json.len())));
     cuts.sort_unstable();
@@ -125,9 +151,11 @@ pub fn pack(json: &[u8], values: &[Range<usize>]) -> Vec<u8> {
     let mut index = Vec::new();
     let mut frames = Vec::new();
     for cut in cuts.windows(2) {
-        let packed = lz4_flex::block::compress(&json[cut[0]..cut[1]]);
-        put_varint(&mut index, cut[1] - cut[0]);
+        let text = &json[cut[0]..cut[1]];
+        let packed = lz4_flex::block::compress(text);
+        put_varint(&mut index, text.len());
         put_varint(&mut index, packed.len());
+        index.extend_from_slice(&checksum(config, oid, text).to_le_bytes());
         frames.extend_from_slice(&packed);
     }
     let mut out = Vec::with_capacity(4 + index.len() + frames.len());
@@ -159,11 +187,20 @@ fn varint(bytes: &[u8], at: &mut usize) -> Option<usize> {
     None
 }
 
-/// One compressed frame of a record: where its text starts and how long it is, and where the
-/// frame sits in the stored blob and how long it is.
+/// The i64 in the 8 little-endian bytes at `bytes[*at..]`, moving `at` past it; None when it
+/// runs off the end.
+fn fixed_i64(bytes: &[u8], at: &mut usize) -> Option<i64> {
+    let raw: [u8; 8] = bytes.get(*at..)?.get(..8)?.try_into().ok()?;
+    *at += 8;
+    Some(i64::from_le_bytes(raw))
+}
+
+/// One compressed frame of a record: where its text starts and how long it is, where the frame
+/// sits in the stored blob and how long it is, and the checksum of its text.
 struct Frame {
     text: Range<usize>,
     packed: Range<usize>,
+    checksum: i64,
 }
 
 /// The frames of a record's `index`, in a blob of `blob_len` bytes; None when they do not
@@ -176,6 +213,7 @@ fn frames(index: &[u8], json_len: usize, blob_len: usize) -> Option<Vec<Frame>> 
     while read < index.len() {
         let len = varint(index, &mut read)?;
         let packed = varint(index, &mut read)?;
+        let checksum = fixed_i64(index, &mut read)?;
         let (Some(text_end), Some(packed_end)) = (text.checked_add(len), at.checked_add(packed))
         else {
             return None;
@@ -186,6 +224,7 @@ fn frames(index: &[u8], json_len: usize, blob_len: usize) -> Option<Vec<Frame>> 
         out.push(Frame {
             text: text..text_end,
             packed: at..packed_end,
+            checksum,
         });
         text = text_end;
         at = packed_end;
@@ -193,9 +232,15 @@ fn frames(index: &[u8], json_len: usize, blob_len: usize) -> Option<Vec<Frame>> 
     (text == json_len).then_some(out)
 }
 
-/// The text of `frames`, back to back, from `bytes`, which hold the blob from offset `base`
-/// on; None when a frame does not decompress to its length.
-fn unpack(bytes: &[u8], base: usize, frames: &[Frame]) -> Option<Vec<u8>> {
+/// The text of `frames` of the record of (config, oid), back to back, from `bytes`, which hold
+/// the blob from offset `base` on; None when a frame does not decompress to its length or its
+/// text does not match its checksum.
+fn unpack(
+    (config, oid): (&str, &str),
+    bytes: &[u8],
+    base: usize,
+    frames: &[Frame],
+) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     for frame in frames {
         let packed = bytes.get(frame.packed.start - base..frame.packed.end - base)?;
@@ -203,7 +248,7 @@ fn unpack(bytes: &[u8], base: usize, frames: &[Frame]) -> Option<Vec<u8>> {
             return None;
         }
         let text = lz4_flex::block::decompress(packed, frame.text.len()).ok()?;
-        if text.len() != frame.text.len() {
+        if text.len() != frame.text.len() || checksum(config, oid, &text) != frame.checksum {
             return None;
         }
         out.extend_from_slice(&text);
@@ -263,6 +308,7 @@ impl FactDb {
                      used INTEGER NOT NULL,
                      json_len INTEGER NOT NULL,
                      bytes INTEGER NOT NULL,
+                     checksum INTEGER NOT NULL,
                      PRIMARY KEY (config, oid)
                  ) WITHOUT ROWID;
                  CREATE TABLE facts (id INTEGER PRIMARY KEY AUTOINCREMENT, body BLOB NOT NULL);
@@ -285,7 +331,7 @@ impl FactDb {
     /// those of a record: a damaged row is a miss.
     pub fn find(&self, config: &str, oid: &str) -> Result<Option<Row>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT used, json_len, bytes FROM keys WHERE config = ?1 AND oid = ?2",
+            "SELECT used, json_len, bytes, checksum FROM keys WHERE config = ?1 AND oid = ?2",
         )?;
         let found = stmt
             .query_row(params![config, oid], |r| {
@@ -293,10 +339,11 @@ impl FactDb {
                     r.get::<_, i64>(0)?,
                     r.get::<_, i64>(1)?,
                     r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
                 ))
             })
             .optional()?;
-        let Some((used, json_len, bytes)) = found else {
+        let Some((used, json_len, bytes, checksum)) = found else {
             return Ok(None);
         };
         let (Ok(json_len), Ok(bytes)) = (usize::try_from(json_len), usize::try_from(bytes)) else {
@@ -305,7 +352,11 @@ impl FactDb {
         if json_len > expands_to(bytes) || json_len > u32::MAX as usize {
             return Ok(None);
         }
-        Ok(Some(Row { used, json_len }))
+        Ok(Some(Row {
+            used,
+            json_len,
+            checksum,
+        }))
     }
 
     /// The binary facts of an entry, or None when it is gone.
@@ -393,10 +444,12 @@ impl FactDb {
         let mut bytes = vec![0; last.packed.end - base];
         blob.read_at_exact(&mut bytes, base)?;
         let offset = first.text.start;
-        Ok(unpack(&bytes, base, &wanted).and_then(|text| {
-            text.get(range.start - offset..range.end - offset)
-                .map(<[u8]>::to_vec)
-        }))
+        Ok(
+            unpack((config, oid), &bytes, base, &wanted).and_then(|text| {
+                text.get(range.start - offset..range.end - offset)
+                    .map(<[u8]>::to_vec)
+            }),
+        )
     }
 
     /// Stores new entries. An entry met before in `entries` is stored once; an entry already
@@ -414,7 +467,7 @@ impl FactDb {
                 let mut facts = conn.prepare_cached("INSERT INTO facts (body) VALUES (?1)")?;
                 let mut records = conn.prepare_cached("INSERT INTO records (id, json) VALUES (?1, ?2)")?;
                 let mut keys = conn.prepare_cached(
-                    "INSERT INTO keys (config, oid, id, used, json_len, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT INTO keys (config, oid, id, used, json_len, bytes, checksum) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 )?;
                 let mut new: Vec<&NewEntry> = Vec::new();
                 for entry in chunk {
@@ -444,7 +497,7 @@ impl FactDb {
                 for (entry, id) in new.iter().zip(&ids) {
                     let bytes = (entry.body.len() + entry.record.len()) as i64;
                     let json_len = entry.json_len as i64;
-                    keys.execute(params![entry.config, entry.oid, id, self.today, json_len, bytes])?;
+                    keys.execute(params![entry.config, entry.oid, id, self.today, json_len, bytes, entry.checksum])?;
                 }
                 Ok(())
             })?;

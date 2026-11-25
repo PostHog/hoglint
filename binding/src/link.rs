@@ -908,8 +908,7 @@ pub(crate) fn link_blobs(
         .detach(move || {
             pool.install(|| -> Result<Loaded, String> {
                 let started = std::time::Instant::now();
-                let mut it = Interner::new();
-                let (facts, stats) = load(&request, &mut it)?;
+                let (it, facts, stats) = load(&request)?;
                 let read = started.elapsed().as_secs_f64();
                 let mut link = CoreLink::build(&config, it, facts)?;
                 link.timings.stages.insert(0, ("facts", read));

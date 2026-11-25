@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import hashlib
 import sqlite3
 import datetime
 import subprocess
@@ -23,6 +24,8 @@ from native.require import native_module
 
 TODAY = datetime.date(2026, 11, 9)
 DAY = 86_400
+# The checksum after each frame's lengths in a stored record's index.
+FRAME_CHECKSUM_BYTES = 8
 
 
 def make_repo(root: Path) -> Path:
@@ -104,7 +107,46 @@ def reuse_the_id(conn: sqlite3.Connection, oid: str) -> None:
     body = conn.execute("SELECT body FROM facts LIMIT 1").fetchone()[0]
     reused = conn.execute("INSERT INTO facts (body) VALUES (?)", (body,)).lastrowid
     conn.execute("INSERT INTO records (id, json) VALUES (?, ?)", (reused, record))
-    conn.execute("INSERT INTO keys VALUES ('config', 'another', ?, 0, ?, 1)", (reused, length))
+    conn.execute("INSERT INTO keys VALUES ('config', 'another', ?, 0, ?, 1, 0)", (reused, length))
+
+
+def varint(data: bytes, at: int) -> tuple[int, int]:
+    """The LEB128 number at `data[at:]`, and where it ends."""
+    value, shift = 0, 0
+    while True:
+        byte = data[at]
+        at += 1
+        value |= (byte & 0x7F) << shift
+        shift += 7
+        if byte < 0x80:
+            return value, at
+
+
+def frames_of(packed: bytes) -> tuple[int, list[tuple[int, int]]]:
+    """Where a stored record's frames start, and the (text length, packed length) of each one."""
+    index_end = 4 + int.from_bytes(packed[:4], "little")
+    frames, at = [], 4
+    while at < index_end:
+        text, at = varint(packed, at)
+        size, at = varint(packed, at)
+        frames.append((text, size))
+        at += FRAME_CHECKSUM_BYTES
+    return index_end, frames
+
+
+def flip_a_value_character(conn: sqlite3.Connection, oid: str) -> None:
+    """Changes the first character of a key's value in a frame lz4 stored as a token and plain
+    literals, so the frame still decompresses to its length."""
+    packed = stored_record(conn, oid)
+    at, frames = frames_of(packed)
+    at += frames[0][1]
+    for text, size in frames[1:]:
+        if size == text + 1:
+            break
+        at += size
+    damaged = bytearray(packed)
+    damaged[at + 1] ^= 0x01
+    replace_record(conn, oid, bytes(damaged))
 
 
 def drop_the_record(conn: sqlite3.Connection, oid: str) -> None:
@@ -121,7 +163,9 @@ def garble_the_frames(conn: sqlite3.Connection, oid: str) -> None:
     replace_record(conn, oid, packed[:index_end] + b"\xff" * (len(packed) - index_end))
 
 
-@pytest.mark.parametrize("damage", [reuse_the_id, drop_the_record, garble_the_record, garble_the_frames])
+@pytest.mark.parametrize(
+    "damage", [reuse_the_id, drop_the_record, garble_the_record, garble_the_frames, flip_a_value_character]
+)
 def test_a_record_the_database_cannot_give_is_extracted_again(
     tmp_path: Path, damage: Callable[[sqlite3.Connection, str], None]
 ) -> None:
@@ -142,6 +186,61 @@ def test_a_record_the_database_cannot_give_is_extracted_again(
     link(native, BlobSnapshot.index(repo), clean)
     with sqlite3.connect(database.path) as ours, sqlite3.connect(clean.path) as theirs:
         assert stored_record(ours, oid) == stored_record(theirs, oid)
+
+
+def views_oid(repo: Path) -> str:
+    found = subprocess.run(["git", "-C", str(repo), "rev-parse", ":app/views.py"], check=True, capture_output=True)
+    return found.stdout.decode().strip()
+
+
+def stored_body(conn: sqlite3.Connection, oid: str) -> bytes:
+    query = "SELECT f.body FROM facts f JOIN keys k ON k.id = f.id WHERE k.oid = ?"
+    return bytes(conn.execute(query, (oid,)).fetchone()[0])
+
+
+def replace_body(conn: sqlite3.Connection, oid: str, body: bytes) -> None:
+    conn.execute("UPDATE facts SET body = ? WHERE id = (SELECT id FROM keys WHERE oid = ?)", (body, oid))
+
+
+def rename_a_string(conn: sqlite3.Connection, oid: str) -> None:
+    replace_body(conn, oid, stored_body(conn, oid).replace(b"Thing", b"Thang", 1))
+
+
+def break_a_string(conn: sqlite3.Connection, oid: str) -> None:
+    body = stored_body(conn, oid)
+    at = body.index(b"Thing")
+    replace_body(conn, oid, body[:at] + b"\xff" + body[at + 1 :])
+
+
+def cut_the_body(conn: sqlite3.Connection, oid: str) -> None:
+    replace_body(conn, oid, stored_body(conn, oid)[:-8])
+
+
+def cut_the_body_and_its_checksum(conn: sqlite3.Connection, oid: str) -> None:
+    """A cut body under a checksum that matches it, as a store with a bug would write it."""
+    cut_the_body(conn, oid)
+    (config,) = conn.execute("SELECT config FROM keys WHERE oid = ?", (oid,)).fetchone()
+    digest = hashlib.sha256(f"{config}\0{oid}\0".encode() + stored_body(conn, oid)).digest()
+    checksum = int.from_bytes(digest[:8], "little", signed=True)
+    conn.execute("UPDATE keys SET checksum = ? WHERE oid = ?", (checksum, oid))
+
+
+@pytest.mark.parametrize("damage", [rename_a_string, break_a_string, cut_the_body, cut_the_body_and_its_checksum])
+def test_a_damaged_body_is_a_miss_and_the_run_gives_what_a_fresh_one_does(
+    tmp_path: Path, damage: Callable[[sqlite3.Connection, str], None]
+) -> None:
+    native = native_module()
+    repo = make_repo(tmp_path)
+    database = fact_database(native, tmp_path)
+    link(native, BlobSnapshot.index(repo), database)
+    with sqlite3.connect(database.path) as conn:
+        damage(conn, views_oid(repo))
+    run, counts = link(native, BlobSnapshot.index(repo), database)
+    fresh, _ = link(native, BlobSnapshot.index(repo), None)
+    assert counts == (2, 1)
+    assert (imports(run), records(run)) == (imports(fresh), records(fresh))
+    # The run stored the entry anew, so the next run reads every record from the cache.
+    assert link(native, BlobSnapshot.index(repo), database)[1] == (3, 0)
 
 
 @pytest.mark.parametrize("json_len", ["-1", str(1 << 62), "json_len + 1", "json_len - 1", "json_len / 2"])

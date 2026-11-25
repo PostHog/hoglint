@@ -12,12 +12,14 @@
 //! - an entry is stored only under the id of the bytes it was extracted from. A working tree
 //!   file whose bytes no longer hash to the snapshot's oid changed during the run: the run
 //!   uses what it read, stores nothing for it, and reports it as drifted;
-//! - an entry that went away is a miss, and the file is extracted again;
+//! - an entry that went away is a miss, and the file is extracted again. So is an entry whose
+//!   body fails its checksum or does not decode: damage, logged once, never a failed run and
+//!   never facts of other bytes;
 //! - an error opening or reading the database, or a write that finds it damaged, is logged once
 //!   and the run goes on without it; a damaged database is moved aside;
 //! - no read transaction is held while files are extracted.
 
-use crate::factdb::{DbError, FactDb, NewEntry, Row, move_aside, pack};
+use crate::factdb::{DbError, FactDb, NewEntry, Row, checksum, move_aside, pack};
 use hoglint_facts::link::facts::{FactSet, FileFacts, RecordText, decode_record};
 use hoglint_facts::link::intern::{Interner, Sid};
 use hoglint_facts::link::store::{MAGIC, decode_body, encode_facts, facts_strings};
@@ -115,6 +117,7 @@ fn git_blob_id(bytes: &[u8], like: &str) -> String {
 
 static WARNED: AtomicBool = AtomicBool::new(false);
 static REPAIRED: AtomicBool = AtomicBool::new(false);
+static DAMAGED: AtomicBool = AtomicBool::new(false);
 
 /// Logs a fact cache error, once per process: the run goes on without the cache.
 fn warn(error: &DbError) {
@@ -358,16 +361,51 @@ fn read_found(
     db.end_read()
 }
 
-/// Extracts every slot without stored facts; returns how many, and the working tree files that
-/// changed during the run.
+/// Makes the found entries of `damaged` misses, so their files are extracted again and stored
+/// anew. Logged once per process.
+fn forget(slots: &mut [Slot], damaged: &[usize]) {
+    for &i in damaged {
+        slots[i].found = None;
+        slots[i].stored = None;
+    }
+    if let Some(&first) = damaged.first()
+        && !DAMAGED.swap(true, Ordering::Relaxed)
+    {
+        eprintln!(
+            "hoglint: the fact cache held a damaged entry for {}, so it was extracted again",
+            slots[first].path
+        );
+    }
+}
+
+/// Makes every found entry whose body fails its checksum a miss, before any of its strings is
+/// interned.
+fn drop_damaged(slots: &mut [Slot], bodies: &[u8], profiles: (&Profile, &Profile)) {
+    let damaged: Vec<usize> = slots
+        .par_iter()
+        .enumerate()
+        .filter_map(|(i, slot)| {
+            let (Some(row), Some(range), Some(key)) = (slot.found, &slot.stored, &slot.key) else {
+                return None;
+            };
+            let profile = if slot.lite { profiles.1 } else { profiles.0 };
+            let body = &bodies[range.clone()];
+            (checksum(&profile.id, key, body) != row.checksum).then_some(i)
+        })
+        .collect();
+    forget(slots, &damaged);
+}
+
+/// Extracts every slot with neither stored facts nor a record from this run; returns how many,
+/// and the working tree files that changed during the run.
 fn extract_missing(
     request: &BlobRequest,
     profiles: (&Profile, &Profile),
     slots: &mut [Slot],
-    mut external: Vec<Option<Vec<u8>>>,
+    external: &mut [Option<Vec<u8>>],
 ) -> Result<(usize, Vec<String>), String> {
     let missing: Vec<usize> = (0..slots.len())
-        .filter(|&i| slots[i].stored.is_none())
+        .filter(|&i| slots[i].stored.is_none() && slots[i].fresh.is_none())
         .collect();
     let from_git: Vec<(usize, String)> = missing
         .iter()
@@ -554,7 +592,12 @@ impl StoredRecords {
         let Some(db) = db.as_ref() else {
             return;
         };
-        let record = pack(json.as_bytes(), &value_ranges(json));
+        let record = pack(
+            &stored.config,
+            &stored.oid,
+            json.as_bytes(),
+            &value_ranges(json),
+        );
         let repaired = db.repair_record(&stored.config, &stored.oid, &record, json.len());
         if repaired.is_ok() && !REPAIRED.swap(true, Ordering::Relaxed) {
             eprintln!(
@@ -624,48 +667,41 @@ fn read_cache(
     }
 }
 
-/// The fact set of a snapshot: its blobs, then its third-party files. Interning runs in fact
-/// order, so string ids do not depend on threads. New entries are stored on the way out. The
-/// JSON text is read only when something asks for it (`FactSet::text`).
-pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobStats), String> {
-    let clock = std::time::Instant::now();
-    let mut marks: Vec<(&'static str, f64)> = Vec::new();
-    let mut mark = |name: &'static str| marks.push((name, clock.elapsed().as_secs_f64()));
-    let full = Profile::new(&request.full);
-    let lite = Profile::new(&request.lite);
-    let mut db = request.db.as_deref().and_then(open_cache);
-    let (mut slots, external) = slots(request);
-    let mut bodies: Vec<u8> = Vec::new();
-    read_cache(
-        &mut db,
-        request.db.as_deref(),
-        &mut slots,
-        (&full, &lite),
-        &mut bodies,
-    );
-    mark("facts.read");
-    let (extracted, drifted) = extract_missing(request, (&full, &lite), &mut slots, external)?;
-    mark("facts.extract");
+/// The facts of every slot, or the slots whose stored entry does not decode.
+enum Decoded {
+    Facts(Interner, Vec<FileFacts>),
+    Damaged(Vec<usize>),
+}
+
+/// Decodes the facts of every slot with a new interner. Interning runs in fact order, so string
+/// ids do not depend on threads. A fresh record that does not decode is an error. A stored entry
+/// that does not decode is damage: the caller extracts those files and decodes again, with a new
+/// interner, so the damage leaves no string behind.
+fn decode(slots: &[Slot], bodies: &[u8]) -> Result<Decoded, String> {
+    let mut it = Interner::new();
     let mut start = 0;
     let mut files: Vec<Option<FileFacts>> = Vec::with_capacity(slots.len());
     let mut pending: Vec<Pending> = Vec::new();
+    let mut damaged: Vec<usize> = Vec::new();
     for (file, slot) in slots.iter().enumerate() {
         match (&slot.fresh, &slot.stored, slot.found) {
             (Some(json), _, _) => {
-                let facts = decode_record(it, json.as_bytes(), start, slot.path)
+                let facts = decode_record(&mut it, json.as_bytes(), start, slot.path)
                     .map_err(|e| e.to_string())?;
                 files.push(Some(facts));
                 start += json.len();
             }
             (None, Some(range), Some(row)) => {
-                let (map, at) = facts_strings(it, &bodies[range.clone()])?;
-                pending.push(Pending {
-                    file,
-                    map,
-                    at,
-                    start,
-                    json_len: row.json_len,
-                });
+                match facts_strings(&mut it, &bodies[range.clone()]) {
+                    Ok((map, at)) => pending.push(Pending {
+                        file,
+                        map,
+                        at,
+                        start,
+                        json_len: row.json_len,
+                    }),
+                    Err(_) => damaged.push(file),
+                }
                 files.push(None);
                 start += row.json_len;
             }
@@ -686,18 +722,64 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
         })
         .collect();
     for (file, facts) in decoded {
-        files[file] = Some(facts?);
+        match facts {
+            Ok(facts) => files[file] = Some(facts),
+            Err(_) => damaged.push(file),
+        }
     }
-    // The binary facts are decoded: free them before the link allocates its tables.
-    drop(bodies);
-    let files: Vec<FileFacts> = files
+    if !damaged.is_empty() {
+        damaged.sort_unstable();
+        return Ok(Decoded::Damaged(damaged));
+    }
+    let files = files
         .into_iter()
         .map(|f| f.expect("every file has facts"))
         .collect();
+    Ok(Decoded::Facts(it, files))
+}
+
+/// The fact set of a snapshot, its blobs then its third-party files, with the interner of its
+/// strings. New entries are stored on the way out. The JSON text is read only when something
+/// asks for it (`FactSet::text`).
+pub fn load(request: &BlobRequest) -> Result<(Interner, FactSet, BlobStats), String> {
+    let clock = std::time::Instant::now();
+    let mut marks: Vec<(&'static str, f64)> = Vec::new();
+    let mut mark = |name: &'static str| marks.push((name, clock.elapsed().as_secs_f64()));
+    let full = Profile::new(&request.full);
+    let lite = Profile::new(&request.lite);
+    let mut db = request.db.as_deref().and_then(open_cache);
+    let (mut slots, mut external) = slots(request);
+    let mut bodies: Vec<u8> = Vec::new();
+    read_cache(
+        &mut db,
+        request.db.as_deref(),
+        &mut slots,
+        (&full, &lite),
+        &mut bodies,
+    );
+    drop_damaged(&mut slots, &bodies, (&full, &lite));
+    mark("facts.read");
+    let (mut extracted, mut drifted) =
+        extract_missing(request, (&full, &lite), &mut slots, &mut external)?;
+    mark("facts.extract");
+    let (it, files) = loop {
+        match decode(&slots, &bodies)? {
+            Decoded::Facts(it, files) => break (it, files),
+            Decoded::Damaged(damaged) => {
+                forget(&mut slots, &damaged);
+                let (more, changed) =
+                    extract_missing(request, (&full, &lite), &mut slots, &mut external)?;
+                extracted += more;
+                drifted.extend(changed);
+            }
+        }
+    };
+    // The binary facts are decoded: free them before the link allocates its tables.
+    drop(bodies);
     mark("facts.decode");
     let saved = match (db.take(), request.db.as_deref()) {
         (Some(found), Some(path)) => {
-            let saved = save(&found, it, &slots, &files, (&full, &lite));
+            let saved = save(&found, &it, &slots, &files, (&full, &lite));
             // Closed first: a connection that closes after the move could delete the new `-wal`.
             drop(found);
             match saved {
@@ -754,7 +836,7 @@ pub fn load(request: &BlobRequest, it: &mut Interner) -> Result<(FactSet, BlobSt
         keys: slots.iter().map(|slot| slot.key.clone()).collect(),
         drifted,
     };
-    Ok((FactSet::deferred(files, text), stats))
+    Ok((it, FactSet::deferred(files, text), stats))
 }
 
 /// Where each top-level key's value sits in a record's JSON text, as `key_ranges` gives them.
@@ -805,11 +887,14 @@ fn save(
         .filter_map(|(slot, facts)| {
             let json = slot.fresh.as_ref()?;
             let key = slot.key.as_deref()?;
+            let config = profile_id(slot);
+            let body = encode_facts(it, facts, facts.line.start);
             Some(NewEntry {
-                config: profile_id(slot),
+                config,
                 oid: key,
-                body: encode_facts(it, facts, facts.line.start),
-                record: pack(json.as_bytes(), &key_ranges(facts)),
+                checksum: checksum(config, key, &body),
+                body,
+                record: pack(config, key, json.as_bytes(), &key_ranges(facts)),
                 json_len: json.len(),
             })
         })
