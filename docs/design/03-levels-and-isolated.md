@@ -223,6 +223,14 @@ Rules that feed the skip block, and unknowns count against the product.
 - an inherited gap may merge with the full required test suite, and stays visible;
 - violations and completeness are reported apart.
 
+**`compare` names exposed gaps apart.**
+`compare` labels a gap by base code under the base engine and policy.
+A gap that base code also has under the head's engine and policy is `exposed`: a change to the engine or the policy made the reading reach old code.
+`compare` scans base code under the head's engine and policy when either differs from the base's, an engine bump alone too.
+`compare` lists exposed gaps in their own section, with the change that exposes them (scanner, policy or environment).
+An exposed gap blocks like a gap the PR introduced.
+Whether it should merge as an inherited gap of the product's owners instead is the owner's call; nothing builds that.
+
 **Levels are evaluated from rules, never from a baseline** (architect, Nov 4).
 The rung of the time was read from a baseline file, which is circular.
 - `level` rules run after the rules they read.

@@ -30,14 +30,18 @@ from hoglint.selectors import State
 BLOCKING_CAUSES = frozenset({IncompleteCause.INTRODUCED, IncompleteCause.EXTRACTOR})
 # The causes `blocking_unknowns` gives when a baseline labels the unknowns; without one it gives
 # `BLOCKING_CAUSES`.
-BLOCKING_LABELS = frozenset(
-    {Attribution.INTRODUCED.value, Attribution.AMBIGUOUS.value, IncompleteCause.EXTRACTOR.value}
-)
+BLOCKING_LABELS = frozenset({label.value for label in BLOCKING} | {IncompleteCause.EXTRACTOR.value})
+# The labels the tally of attributed unknowns names also at zero: those every baseline can give.
+TALLIED_AT_ZERO = frozenset({Attribution.INTRODUCED, Attribution.AMBIGUOUS})
 # Why a blocking unknown blocks, by each cause `blocking_unknowns` can give. The unattributed
 # `IncompleteCause.INTRODUCED` has the same value as `Attribution.INTRODUCED`.
 CAUSE_WHY = {
     Attribution.INTRODUCED.value: "This commit adds code that hoglint cannot judge, so the commit cannot pass.",
     Attribution.AMBIGUOUS.value: "hoglint cannot tell if this commit added this unknown, so the commit cannot pass.",
+    Attribution.EXPOSED.value: (
+        "The base commit has this unknown too under this commit's hoglint and policy: the change to hoglint or"
+        " the policy exposes it, so the commit cannot pass."
+    ),
     IncompleteCause.EXTRACTOR.value: (
         "A part of hoglint failed on this code, so hoglint cannot judge it. The fault is in hoglint, not in the code."
     ),
@@ -638,7 +642,7 @@ class CheckReport:
             tally = ", ".join(
                 f"{counts[label.value]} {label.value}"
                 for label in Attribution
-                if counts[label.value] or label in BLOCKING
+                if counts[label.value] or label in TALLIED_AT_ZERO
             )
             out.append(f"unknowns attributed against {self.attributed.against}: {tally}")
         summary = self.summary

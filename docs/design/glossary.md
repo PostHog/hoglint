@@ -209,6 +209,13 @@ Some words have two meanings; the entry names both.
 - **Attribution, move admission** (`hoglint/ledger/growth.py`).
   Attribution runs the base engine and policy on head code to tell growth from code from growth from a rule change.
   Move admission lets a move pass only when the same couplings existed before, with the same counts.
+- **Introduced, ambiguous, inherited, exposed** (`hoglint/ledger/obligations.py` `Attribution`).
+  The labels of an unknown against a baseline, by obligation and fingerprint.
+  Introduced: the change added it.
+  Ambiguous: an old unknown was replaced or edited, and nothing tells which.
+  Inherited: the baseline has it.
+  Exposed, in `compare` only: base code has it too under the head's engine and policy, so a change to the engine or the policy made the reading reach it.
+  Introduced, ambiguous and exposed block.
 - **Level** (`[levels.<name>]`, keys `group_by`, `select`, `requires`, `strict`, `within_group`, `claimed_by`; `hoglint/rules/levels.py`).
   A named set of rules that each group, such as a product, passes or fails.
   A group passes when every required rule ran for it and none of its findings is new.

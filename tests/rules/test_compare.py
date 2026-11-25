@@ -503,6 +503,76 @@ def test_compare_runs_a_changed_base_engine_as_the_engine_it_was_asked_for(tmp_p
     assert "base scan failed" not in compared.stdout
 
 
+LOADER = {
+    "core/loader.py": "def load(name):\n    return name\n",
+    "core/boot.py": "from core.loader import load\n\nload('jobs')\nload('tasks')\n",
+}
+REGISTRY = (
+    '\n[registries.jobs]\nloader = "core.loader.load"\nmodule = "products/{product}/jobs.py"\nattribute = "JOBS"\n'
+)
+TASKS_CALL = "config:undeclared-registry: core/boot.py:4 calls core.loader.load('tasks')"
+SIGNALS_CALL = "config:undeclared-registry: core/more.py:3 calls core.loader.load('signals')"
+
+
+@needs_extractor
+@pytest.mark.parametrize(
+    "change, says",
+    [
+        # a registry the policy declares makes the reading check old calls of its loader; a call
+        # the change adds stays introduced
+        (
+            "policy",
+            [
+                "the change cannot be decided: 1 new unknowns; 1 old unknowns the policy change exposes.",
+                f"incomplete, introduced (blocks) (1)\n  {SIGNALS_CALL}",
+                f"incomplete, exposed by the policy change in code the base already had (blocks) (1)\n  {TASKS_CALL}",
+            ],
+        ),
+        # an engine that starts to read registry calls, under the same policy
+        (
+            "engine",
+            [
+                "the change cannot be decided: 1 old unknowns the scanner change exposes.",
+                f"incomplete, exposed by the scanner change in code the base already had (blocks) (1)\n  {TASKS_CALL}",
+            ],
+        ),
+    ],
+)
+def test_compare_tells_unknowns_a_policy_or_engine_change_exposes_in_base_code(
+    tmp_path: Path, change: str, says: list[str]
+) -> None:
+    repo = tmp_path / "repo"
+    config = CONFIG
+    head_engine = repo / "tools/hoglint"
+    engine = head_engine / "hoglint/rules/engine.py"
+    reads = ""
+    if change == "engine":
+        crate = Path(__file__).resolve().parents[2]
+        shutil.copytree(crate, head_engine, ignore=shutil.ignore_patterns("__pycache__", "target", ".*"))
+        config = CONFIG.replace("[fields]", 'exclude = ["tools/**"]\n\n[fields]') + REGISTRY
+        reads = engine.read_text()
+        engine.write_text(reads.replace("        if registry_calls:\n", "        if registry_calls and False:\n"))
+    write_files(repo, {**FILES, **LOADER, "hoglint.toml": config})
+    git_in(repo, "init", "-q")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "base")
+    git_in(repo, "branch", "base")
+    if change == "engine":
+        engine.write_text(reads)
+    else:
+        (repo / "hoglint.toml").write_text(config + REGISTRY)
+        (repo / "core/more.py").write_text("from core.loader import load\n\nload('signals')\n")
+    git_in(repo, "add", "-A")
+    git_in(repo, "commit", "-qm", "head")
+    if change == "engine":
+        compared = hoglint(repo, "--engine", "native", "compare", "--base", "base", package_root=head_engine)
+    else:
+        compared = hoglint(repo, "compare", "--base", "base")
+    assert compared.returncode == 2, compared.stdout + compared.stderr
+    for text in says:
+        assert text in compared.stdout, compared.stdout
+
+
 @pytest.mark.parametrize(
     "lock, error",
     [

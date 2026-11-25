@@ -9,7 +9,7 @@ It lists apart:
   snapshots (anything hoglint cannot classify counts as relax),
 - new (package pair, edge kind, context) triples,
 - growth by attribution, debt the new engine, policy or environment no longer sees, and
-  incomplete results split into introduced, ambiguous and inherited.
+  incomplete results split into introduced, ambiguous, exposed and inherited.
 
 A base that has hoglint but whose engine cannot run, or fails a producer that the head runs, is
 incomplete (exit 2), never a skip. Only a base that predates hoglint skips the growth check.
@@ -24,7 +24,7 @@ from typing import Any
 from hoglint.config.schema import canonical
 from hoglint.ledger.file import LedgerFile, LineKey, render_key
 from hoglint.ledger.growth import AttributionCheck, GrowthItem, GrowthKey, GrowthResult, Renames, growth_key
-from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute, rows
+from hoglint.ledger.obligations import BLOCKING, Attribution, Labels, attribute, expose, rows
 from hoglint.ledger.scan import Obligation, ScanSummary, Triple
 from hoglint.model import IncompleteCause, IncompleteKind, LimitSite
 
@@ -73,7 +73,7 @@ def producer_failures(summary: ScanSummary) -> list[str]:
 
 @dataclass(frozen=False, slots=True)
 class Scans:
-    """head: head code, head policy. base_head: base code, head policy (same engine).
+    """head: head code, head policy. base_head: base code, head policy (same engine as head).
     base and head_base use the base engine and base policy; None when the base has no hoglint or
     its engine could not run fully (`base_failure` says which)."""
 
@@ -124,6 +124,9 @@ class CompareReport:
     new_triples: list[Triple] = field(default_factory=list)
     growth: GrowthResult = field(default_factory=GrowthResult)
     labels: Labels = field(default_factory=dict)
+    # What differs between the base scan and base code under the head's engine and policy, in the
+    # words of `Envelope.causes`: the change that exposes old unknowns.
+    exposed_causes: list[str] = field(default_factory=list)
     # Files a group watches at the base and no longer at the head, under the head's policy: the
     # test selection then skips more for them. Advisory (hoglint/watched.py `stopped_watching`).
     unwatched: list[str] = field(default_factory=list)
@@ -133,6 +136,20 @@ class CompareReport:
 
     def incomplete(self, label: Attribution) -> list[Obligation]:
         return [obligation for attribution, obligation in rows(self.labels) if attribution is label]
+
+    def exposing_change(self) -> str:
+        return " and ".join(self.exposed_causes) or "scanner or policy"
+
+    def unknown_sections(self) -> list[tuple[Attribution, str]]:
+        """The blocking labels of the unknowns, each with its section title."""
+        return [
+            (Attribution.INTRODUCED, "incomplete, introduced (blocks)"),
+            (Attribution.AMBIGUOUS, "incomplete, ambiguous replacement (blocks)"),
+            (
+                Attribution.EXPOSED,
+                f"incomplete, exposed by the {self.exposing_change()} change in code the base already had (blocks)",
+            ),
+        ]
 
     @property
     def blocking(self) -> bool:
@@ -153,6 +170,9 @@ class CompareReport:
         unknowns = len(self.incomplete(Attribution.INTRODUCED)) + len(self.incomplete(Attribution.AMBIGUOUS))
         if unknowns:
             fails.append(f"{unknowns} new unknowns")
+        exposed = len(self.incomplete(Attribution.EXPOSED))
+        if exposed:
+            fails.append(f"{exposed} old unknowns the {self.exposing_change()} change exposes")
         if code and not fails:
             fails.append("the head check below fails")
         verdict = {0: "passes", 1: "fails", 2: "cannot be decided"}[code]
@@ -178,10 +198,7 @@ class CompareReport:
                 out.append(f"  and {len(rows) - SHOWN_ROWS} more: {rerun} --all")
 
         section("code growth (fails)", [growth_row(g) for g in self.growth.code_growth])
-        for label, title in (
-            (Attribution.INTRODUCED, "incomplete, introduced (blocks)"),
-            (Attribution.AMBIGUOUS, "incomplete, ambiguous replacement (blocks)"),
-        ):
+        for label, title in self.unknown_sections():
             section(title, [f"{rule}: {reason}" for rule, _, reason in self.incomplete(label)])
         review = [
             ("admitted moves (review)", [growth_row(g) for g in self.growth.admitted_moves]),
@@ -255,11 +272,7 @@ class CompareReport:
             "debt the new scanner, policy or environment no longer sees (review)",
             [f"{growth_row(g)}  [{causes}]" for g in self.growth.shrink],
         )
-        for label, title in (
-            (Attribution.INTRODUCED, "incomplete, introduced (blocks)"),
-            (Attribution.AMBIGUOUS, "incomplete, ambiguous replacement (blocks)"),
-            (Attribution.INHERITED, "incomplete, inherited (reported)"),
-        ):
+        for label, title in [*self.unknown_sections(), (Attribution.INHERITED, "incomplete, inherited (reported)")]:
             section(title, [f"{rule}: {reason}" for rule, _, reason in self.incomplete(label)])
         return "\n".join(out) + "\n"
 
@@ -487,4 +500,11 @@ class Comparer:
 
     def incomplete(self, report: CompareReport) -> None:
         reference = self.reference()
-        report.labels = attribute(self.scans.head.obligations(), reference.obligations() if reference else {})
+        labels = attribute(self.scans.head.obligations(), reference.obligations() if reference else {})
+        base, base_head = self.scans.base, self.scans.base_head
+        if base is not None and base_head is not None:
+            # A blocking unknown that base code has under the head's engine and policy is old code
+            # the change to the engine or policy now reads. It still blocks.
+            labels = expose(labels, base_head.obligations())
+            report.exposed_causes = base.envelope.causes(base_head.envelope)
+        report.labels = labels

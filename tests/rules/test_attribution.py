@@ -37,7 +37,7 @@ from hoglint.ledger.envelope import (
 from hoglint.ledger.file import LedgerFile
 from hoglint.ledger.inputs import SOURCE_INPUTS, InputDigests, InputPatterns, RunInputs, TreeFiles
 from hoglint.ledger.listing import TreeListing, WorktreeListing, WorktreeStatus, read_blobs
-from hoglint.ledger.obligations import Attribution, attribute, rows
+from hoglint.ledger.obligations import Attribution, attribute, expose, rows
 from hoglint.ledger.records import IncompleteRecord, ShownRecord, StoredFindings
 from hoglint.ledger.scan import ProtocolError, ScanSummary
 from hoglint.ledger.store import CacheRoot, SummaryStore
@@ -55,6 +55,7 @@ from rules.test_compare import CONFIG, FILES, git_in, has_extractor, hoglint, ne
 DYNAMIC = ("dynamic-imports", "app.loader|dynamic-import|", "dynamic-import '' did not resolve")
 OTHER_REASON = ("dynamic-imports", "app.loader|dynamic-import|", "selection reads an unknown value")
 INTRODUCED, AMBIGUOUS, INHERITED = Attribution.INTRODUCED, Attribution.AMBIGUOUS, Attribution.INHERITED
+EXPOSED = Attribution.EXPOSED
 
 
 def records(obligations: dict[tuple[str, str, str], list[str]]) -> list[IncompleteRecord]:
@@ -85,6 +86,27 @@ def test_incomplete_items_are_attributed_by_count_and_fingerprint_through_serial
 ) -> None:
     stored = ScanSummary.from_json(json.loads(json.dumps(ScanSummary(incomplete=records(base)).to_json())))
     assert [label for label, _ in rows(attribute(head, stored.obligations()))] == labels
+
+
+@pytest.mark.parametrize(
+    "base, base_head, head, labels",
+    [
+        # the head's engine and policy read an old unknown the base's did not: exposed
+        ({}, {DYNAMIC: ["f1"]}, {DYNAMIC: ["f1"]}, [EXPOSED]),
+        # an old unknown the head's reading words anew is exposed, not an ambiguous replacement
+        ({DYNAMIC: ["f1"]}, {DYNAMIC: ["f2"]}, {DYNAMIC: ["f2"]}, [EXPOSED]),
+        # a copy the change adds next to an exposed one stays introduced
+        ({}, {DYNAMIC: ["f1"]}, {DYNAMIC: ["f1", "f1"]}, [EXPOSED, INTRODUCED]),
+        # an inherited item uses up its match, so the copy the change adds stays introduced
+        ({DYNAMIC: ["f1"]}, {DYNAMIC: ["f1"]}, {DYNAMIC: ["f1", "f1"]}, [INHERITED, INTRODUCED]),
+        # another fingerprint in base code is no match
+        ({}, {DYNAMIC: ["f2"]}, {DYNAMIC: ["f1"]}, [INTRODUCED]),
+    ],
+)
+def test_a_blocking_unknown_that_base_code_has_under_the_head_reading_is_exposed(
+    base: dict, base_head: dict, head: dict, labels: list[Attribution]
+) -> None:
+    assert [label for label, _ in rows(expose(attribute(head, base), base_head))] == labels
 
 
 STORED = Envelope("tree1", "python-e1", "p1", "f1")

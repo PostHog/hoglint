@@ -1343,9 +1343,10 @@ class Commands:
                 scans.base_failure = str(error)
             scans.drop_incomplete_base()
         base_head: RunResult | None = None
-        if scans.base is None or not same_policy:
-            # Head policy on base code: the reference when no base scan exists, and the evidence
-            # that labels each policy change.
+        same_engine = scans.base is not None and scans.base.envelope.engine == scans.head.envelope.engine
+        if not same_engine or not same_policy:
+            # Head engine and policy on base code: the reference when no base scan exists, the
+            # evidence that labels each policy change, and what tells exposed unknowns apart.
             base_graph, base_head = self.runner.evaluate(head.config, base_root, self.repo)
             envelope = Envelope("", self.engine.id, scans.head.envelope.policy, scans.head.envelope.framework)
             scans.base_head = ScanSummary.from_run(base_head, base_graph, envelope, roots=(self.repo, base_root))
